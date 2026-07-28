@@ -19,7 +19,8 @@ public static class GenerationStateMachine
             [GenerationStatus.RenderingClips] = Set(GenerationStatus.ComposingVideo, GenerationStatus.Failed, GenerationStatus.Cancelling),
             [GenerationStatus.ComposingVideo] = Set(GenerationStatus.VerifyingOutput, GenerationStatus.Failed, GenerationStatus.Cancelling),
             [GenerationStatus.VerifyingOutput] = Set(GenerationStatus.Completed, GenerationStatus.CompletedWithWarnings, GenerationStatus.Failed),
-            [GenerationStatus.Cancelling] = Set(GenerationStatus.Cancelled)
+            [GenerationStatus.Cancelling] = Set(GenerationStatus.Cancelled),
+            [GenerationStatus.Failed] = Set(GenerationStatus.QueuedForGeneration)
         };
 
     public static void Transition(Generation generation, GenerationStatus next, DateTimeOffset now)

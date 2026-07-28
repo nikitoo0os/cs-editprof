@@ -55,6 +55,7 @@ public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
         string normalizedDirectory = Path.Combine(outputDirectory, ".normalized");
         Directory.CreateDirectory(normalizedDirectory);
         List<string> normalized = [];
+        List<string> probeErrors = [];
         int skipped = 0;
         for (int index = 0; index < request.ClipPaths.Count; index++)
         {
@@ -65,6 +66,12 @@ public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
                 continue;
             }
             MediaMetadata metadata = await ProbeAsync(input, cancellationToken);
+            if (metadata.Error is not null)
+            {
+                probeErrors.Add($"{Path.GetFileName(input)}: {metadata.Error}");
+                skipped++;
+                continue;
+            }
             if (!metadata.HasVideo || metadata.DurationSeconds <= 0)
             {
                 skipped++;
@@ -98,7 +105,13 @@ public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
             normalized.Add(target);
         }
         if (normalized.Count == 0)
-            return Failure("NO_CLIPS_RENDERED", request.ClipPaths.Count, skipped, watch.ElapsedMilliseconds);
+            return Failure(
+                probeErrors.Count > 0
+                    ? $"CLIP_PROBE_FAILED: {string.Join(" | ", probeErrors)}"
+                    : "NO_CLIPS_RENDERED",
+                request.ClipPaths.Count,
+                skipped,
+                watch.ElapsedMilliseconds);
 
         string concatFile = Path.Combine(normalizedDirectory, "concat.txt");
         string concat = string.Join(
@@ -146,7 +159,13 @@ public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
              "format=duration:stream=codec_type,codec_name,width,height,sample_rate",
              "-of", "json", path],
             cancellationToken);
-        if (result.ExitCode != 0) return new MediaMetadata();
+        if (result.ExitCode != 0)
+            return new MediaMetadata
+            {
+                Error = string.IsNullOrWhiteSpace(result.Error)
+                    ? $"FFprobe exited with code {result.ExitCode}."
+                    : result.Error.Trim()
+            };
         using JsonDocument document = JsonDocument.Parse(result.Output);
         JsonElement[] streams = document.RootElement.GetProperty("streams").EnumerateArray().ToArray();
         JsonElement? video = streams.Cast<JsonElement?>().FirstOrDefault(value =>
@@ -237,5 +256,6 @@ public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
         public string? VideoCodec { get; init; }
         public string? AudioCodec { get; init; }
         public int? AudioSampleRate { get; init; }
+        public string? Error { get; init; }
     }
 }

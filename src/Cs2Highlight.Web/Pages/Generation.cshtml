@@ -18,6 +18,11 @@
     <p><a class="button" href="/generations/@Model.Generation.PublicId/video?download=true">Скачать MP4</a></p>
   }
   @if (Model.Generation.ErrorCode is not null) { <p class="error">@Model.Generation.ErrorCode: @Model.Generation.ErrorMessage</p> }
+  @if (Model.CanRetry) {
+    <form method="post" asp-page-handler="Retry" asp-antiforgery="true">
+      <button type="submit">Повторить генерацию</button>
+    </form>
+  }
   @if (Model.Generation.Status is not (GenerationStatus.Completed or GenerationStatus.CompletedWithWarnings or GenerationStatus.Cancelled or GenerationStatus.Failed or GenerationStatus.Expired)) {
     <form method="post" asp-page-handler="Cancel" asp-antiforgery="true"><button type="submit">Отменить</button></form>
   }

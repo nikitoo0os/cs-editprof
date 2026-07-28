@@ -35,6 +35,21 @@ public sealed class DomainTests
     }
 
     [Fact]
+    public void PaidFailedGenerationCanBeQueuedForRetry()
+    {
+        Generation generation = new()
+        {
+            Status = GenerationStatus.Failed,
+            PaymentStatus = PaymentStatus.Succeeded
+        };
+
+        GenerationStateMachine.Transition(
+            generation, GenerationStatus.QueuedForGeneration, DateTimeOffset.UtcNow);
+
+        Assert.Equal(GenerationStatus.QueuedForGeneration, generation.Status);
+    }
+
+    [Fact]
     public void GlobalSelectionUsesStableTopNThenRequestedOutputOrder()
     {
         GlobalHighlightSelector selector = new();

@@ -10,12 +10,17 @@ namespace Cs2Highlight.Web.Pages;
 public sealed class GenerationModel(
     IDbContextFactory<GenerationDbContext> dbFactory,
     GenerationCancellationRegistry cancellations,
+    GenerationWakeSignal queue,
     TimeProvider timeProvider) : PageModel
 {
     public Generation Generation { get; private set; } = null!;
     public int DemoCount { get; private set; }
     public int PlayerCount { get; private set; }
     public int HighlightCount { get; private set; }
+    public bool CanRetry =>
+        Generation.Status == GenerationStatus.Failed &&
+        Generation.PaymentStatus == PaymentStatus.Succeeded &&
+        Generation.SelectedSteamId is not null;
 
     public async Task<IActionResult> OnGetAsync(string publicId, CancellationToken cancellationToken)
     {
@@ -57,6 +62,28 @@ public sealed class GenerationModel(
             generation.UpdatedAt = timeProvider.GetUtcNow();
             await db.SaveChangesAsync(cancellationToken);
         }
+        return RedirectToPage(new { publicId });
+    }
+
+    public async Task<IActionResult> OnPostRetryAsync(
+        string publicId,
+        CancellationToken cancellationToken)
+    {
+        await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        Generation? generation = await db.Generations.SingleOrDefaultAsync(
+            value => value.PublicId == publicId, cancellationToken);
+        if (generation is null) return NotFound();
+        if (generation.Status != GenerationStatus.Failed ||
+            generation.PaymentStatus != PaymentStatus.Succeeded ||
+            generation.SelectedSteamId is null)
+            return StatusCode(StatusCodes.Status409Conflict);
+        GenerationStateMachine.Transition(
+            generation, GenerationStatus.QueuedForGeneration, timeProvider.GetUtcNow());
+        generation.ErrorCode = null;
+        generation.ErrorMessage = null;
+        generation.CurrentStage = "Queued for retry";
+        await db.SaveChangesAsync(cancellationToken);
+        queue.Wake();
         return RedirectToPage(new { publicId });
     }
 }
