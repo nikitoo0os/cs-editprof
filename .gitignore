@@ -15,3 +15,5 @@ output/
 *.log
 render-state.json
 render-result.json
+__pycache__/
+*.py[cod]
