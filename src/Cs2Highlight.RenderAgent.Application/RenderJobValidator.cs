@@ -31,11 +31,6 @@ public static partial class RenderJobValidator
         {
             errors.Add("player.steamId must be a valid individual SteamID64 for deterministic CS2 POV selection.");
         }
-        if (string.IsNullOrWhiteSpace(job.Player?.Name))
-        {
-            errors.Add("player.name is required as the CS2 POV selector; SteamID64 is used to verify the result.");
-        }
-
         if (job.Player?.SteamId is { Length: > 32 } || job.Player?.Name is { Length: > 128 })
         {
             errors.Add("Player identifiers exceed the allowed length.");

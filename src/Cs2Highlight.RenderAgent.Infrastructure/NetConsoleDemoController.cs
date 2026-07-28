@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.RegularExpressions;
 using Cs2Highlight.RenderAgent.Application;
 
 namespace Cs2Highlight.RenderAgent.Infrastructure;
@@ -58,9 +59,17 @@ public sealed class NetConsoleDemoController(
         await connection.SendAsync("mirv_cvar_unhide_all", cancellationToken);
         await connection.SendAsync("spec_lock_to_accountid 0", cancellationToken);
         await connection.SendAsync("spec_mode 1", cancellationToken);
-        await connection.SendAsync(
-            $"spec_player \"{EscapeCommandArgument(job.Player.Name ?? string.Empty)}\"",
-            cancellationToken);
+        int playerSlot;
+        try
+        {
+            playerSlot = await ResolvePlayerSlotAsync(connection, steamId64, cancellationToken);
+        }
+        catch
+        {
+            await connection.SendAsync("quit", cancellationToken);
+            throw;
+        }
+        await connection.SendAsync($"spec_player {playerSlot}", cancellationToken);
         await connection.SendAsync("spec_lock_to_current_player", cancellationToken);
         await VerifySelectedPlayerAsync(connection, steamId64, cancellationToken);
         await connection.SendAsync(
@@ -115,6 +124,59 @@ public sealed class NetConsoleDemoController(
         return steamId64;
     }
 
+    public static int ResolvePlayerSlot(IReadOnlyList<string> statusOutput, ulong steamId64)
+    {
+        const ulong individualSteamId64Base = 76561197960265728UL;
+        uint accountId = checked((uint)(steamId64 - individualSteamId64Base));
+        string steamId64Text = steamId64.ToString(CultureInfo.InvariantCulture);
+        string steam3Text = $"[U:1:{accountId.ToString(CultureInfo.InvariantCulture)}]";
+        string steam2Suffix = string.Create(
+            CultureInfo.InvariantCulture,
+            $"{accountId % 2}:{accountId / 2}");
+
+        foreach (string line in statusOutput)
+        {
+            bool isTarget =
+                Regex.IsMatch(
+                    line,
+                    $@"(?<!\d){Regex.Escape(steamId64Text)}(?!\d)",
+                    RegexOptions.CultureInvariant) ||
+                line.Contains(steam3Text, StringComparison.OrdinalIgnoreCase) ||
+                line.Contains($"STEAM_0:{steam2Suffix}", StringComparison.OrdinalIgnoreCase) ||
+                line.Contains($"STEAM_1:{steam2Suffix}", StringComparison.OrdinalIgnoreCase);
+            if (!isTarget)
+            {
+                continue;
+            }
+
+            Match prefix = Regex.Match(
+                line,
+                @"^\s*#?\s*(?<userId>\d+)(?:\s+(?<slot>\d+))?\s+""",
+                RegexOptions.CultureInvariant);
+            if (!prefix.Success)
+            {
+                throw new InvalidOperationException(
+                    $"Found SteamID64 {steamId64Text} in CS2 status, but could not parse its player slot: {line}");
+            }
+
+            int userId = int.Parse(prefix.Groups["userId"].Value, CultureInfo.InvariantCulture);
+            int slot = prefix.Groups["slot"].Success
+                ? int.Parse(prefix.Groups["slot"].Value, CultureInfo.InvariantCulture)
+                : checked(userId + 1);
+            if (slot is < 1 or > 64)
+            {
+                throw new InvalidOperationException(
+                    $"CS2 returned invalid player slot {slot} for SteamID64 {steamId64Text}: {line}");
+            }
+
+            return slot;
+        }
+
+        throw new InvalidOperationException(
+            $"SteamID64 {steamId64Text} was not found in CS2 demo status. " +
+            $"Status output: {string.Join(" | ", statusOutput)}");
+    }
+
     public static string EscapeCommandArgument(string value)
     {
         if (value.Any(character => character is '\r' or '\n' or ';' or '\0'))
@@ -123,6 +185,27 @@ public sealed class NetConsoleDemoController(
         }
         return value.Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("\"", "\\\"", StringComparison.Ordinal);
+    }
+
+    private static async Task<int> ResolvePlayerSlotAsync(
+        NetConsoleConnection connection,
+        ulong steamId64,
+        CancellationToken cancellationToken)
+    {
+        const string startMarker = "AFX_RENDER_PLAYER_STATUS_START";
+        const string endMarker = "AFX_RENDER_PLAYER_STATUS_END";
+        await connection.SendAsync($"echo {startMarker}", cancellationToken);
+        await connection.SendAsync("status", cancellationToken);
+        await connection.SendAsync($"echo {endMarker}", cancellationToken);
+        await connection.ReadThroughAsync(
+            startMarker,
+            TimeSpan.FromSeconds(5),
+            cancellationToken);
+        IReadOnlyList<string> statusOutput = await connection.ReadThroughAsync(
+            endMarker,
+            TimeSpan.FromSeconds(5),
+            cancellationToken);
+        return ResolvePlayerSlot(statusOutput, steamId64);
     }
 
     private static async Task VerifySelectedPlayerAsync(

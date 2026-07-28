@@ -31,6 +31,29 @@ public sealed class NetConsoleDemoControllerTests
             NetConsoleDemoController.EscapeCommandArgument("Player;quit"));
     }
 
+    [Theory]
+    [InlineData("# 2 7 \"Player One\" 76561199031052443 00:10 10 0 active", 7)]
+    [InlineData("# 2 7 \"Player One\" [U:1:1070786715] 00:10 10 0 active", 7)]
+    [InlineData("# 2 7 \"Player One\" STEAM_1:1:535393357 00:10 10 0 active", 7)]
+    [InlineData("# 6 \"Player One\" [U:1:1070786715] 00:10 10 0 active", 7)]
+    public void ResolvesPlayerSlotFromStatus(string statusLine, int expectedSlot)
+    {
+        int slot = NetConsoleDemoController.ResolvePlayerSlot(
+            [statusLine],
+            76561199031052443UL);
+
+        Assert.Equal(expectedSlot, slot);
+    }
+
+    [Fact]
+    public void DoesNotResolveDifferentSteamId()
+    {
+        Assert.Throws<InvalidOperationException>(() =>
+            NetConsoleDemoController.ResolvePlayerSlot(
+                ["# 2 7 \"Other\" [U:1:1516903402] 00:10 10 0 active"],
+                76561199031052443UL));
+    }
+
     [Fact]
     public void ResolvesFfprobeBesideFfmpegByDefault()
     {

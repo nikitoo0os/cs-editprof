@@ -56,7 +56,8 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         Assert.Contains("mirv_cvar_unhide_all", commands);
         Assert.Contains("spec_lock_to_accountid 0", commands);
         Assert.Contains("spec_mode 1", commands);
-        Assert.Contains("spec_player \"Player One\"", commands);
+        Assert.Contains("status", commands);
+        Assert.Contains("spec_player 3", commands);
         Assert.Contains("spec_lock_to_current_player", commands);
         Assert.Contains("mirv_streams record start", commands);
         Assert.Contains("demo_resume", commands);
@@ -88,6 +89,19 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             if (command.StartsWith("demo_gototick ", StringComparison.Ordinal))
             {
                 await writer.WriteLineAsync("[Demo] Demo Skipping finished at tick 100");
+            }
+            if (command == "echo AFX_RENDER_PLAYER_STATUS_START")
+            {
+                await writer.WriteLineAsync("AFX_RENDER_PLAYER_STATUS_START");
+            }
+            if (command == "status")
+            {
+                await writer.WriteLineAsync("# userid name steamid connected ping loss state rate");
+                await writer.WriteLineAsync("# 2 3 \"Player One\" 76561198000000001 00:10 10 0 active 786432");
+            }
+            if (command == "echo AFX_RENDER_PLAYER_STATUS_END")
+            {
+                await writer.WriteLineAsync("AFX_RENDER_PLAYER_STATUS_END");
             }
             if (command == "spec_lock_to_accountid")
             {

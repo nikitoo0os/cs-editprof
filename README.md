@@ -31,8 +31,10 @@ The launcher always forces `-insecure`, uses an isolated `USRLOCALCSGO`, and inj
 
 The launcher also enables local NetCon with `-afxFixNetCon`. The agent waits
 for actual demo initialization before sending `demo_gototick`, switches to
-first-person mode before selecting `player.name`, and verifies the resulting
-`spec_lock_to_accountid` against `player.steamId` before recording. It then
+first-person mode, resolves the demo player slot from CS2 `status` using
+`player.steamId`, selects that numeric slot, and verifies the resulting
+`spec_lock_to_accountid` before recording. `player.name` is informational and
+is not used for POV selection. It then
 schedules the stop command at `endTick` and
 gracefully quits the isolated CS2 process. The application refuses to run when
 `AutomationVerified=false`.

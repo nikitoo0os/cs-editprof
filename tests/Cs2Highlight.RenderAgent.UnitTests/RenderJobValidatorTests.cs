@@ -63,7 +63,7 @@ public sealed class RenderJobValidatorTests : IDisposable
     }
 
     [Fact]
-    public void MissingPlayerNameIsReported()
+    public void MissingPlayerNameIsAllowed()
     {
         RenderJob job = ValidJob() with
         {
@@ -72,7 +72,7 @@ public sealed class RenderJobValidatorTests : IDisposable
 
         ValidationReport result = RenderJobValidator.Validate(job, new RenderEnvironmentOptions());
 
-        Assert.Contains(result.Errors, error => error.Contains("player.name", StringComparison.Ordinal));
+        Assert.True(result.IsValid, string.Join(", ", result.Errors));
     }
 
     private RenderJob ValidJob() => new(
