@@ -1,0 +1,17 @@
+bin/
+obj/
+.vs/
+TestResults/
+artifacts/
+appsettings.local.json
+*.user
+*.suo
+work/
+output/
+*.dem
+*.mp4
+*.avi
+*.mov
+*.log
+render-state.json
+render-result.json

@@ -1,0 +1,8 @@
+// AfxHookSource2 base template.
+// Confirm every command in the installed HLAE console before setting AutomationVerified=true.
+mirv_cmd clear
+mirv_fov {{FOV}}
+mirv_streams record screen enabled 1
+mirv_streams record fps {{FPS}}
+mirv_streams record name "{{OUTPUT_PATH}}"
+mirv_streams settings edit afxDefault settings afxFfmpeg

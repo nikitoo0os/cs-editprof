@@ -1,0 +1,16 @@
+{
+  "jobId": "render-test-001",
+  "success": false,
+  "finalState": "Failed",
+  "durationMilliseconds": 42,
+  "startedAt": "2026-07-28T10:15:00+00:00",
+  "completedAt": "2026-07-28T10:15:00.042+00:00",
+  "processes": {},
+  "warnings": [],
+  "error": {
+    "code": "HLAE_AUTOMATION_UNCONFIRMED",
+    "message": "Validate HLAE arguments and generated CFG against installed versions.",
+    "stage": "EnvironmentChecking",
+    "retryable": false
+  }
+}

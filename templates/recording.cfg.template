@@ -1,0 +1,6 @@
+// The HLAE commands below are documented for AfxHookSource2.
+mirv_cmd addAtTick {{START_TICK}} "spec_player {{PLAYER}}; mirv_streams record start"
+mirv_cmd addAtTick {{END_TICK}} "mirv_streams record end; demo_pause"
+// playdemo, demo_gototick and spec_player require validation against the installed CS2 build.
+playdemo "{{DEMO_PATH}}"
+demo_gototick {{START_TICK}}
