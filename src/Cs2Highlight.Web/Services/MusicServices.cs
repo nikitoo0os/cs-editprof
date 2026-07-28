@@ -245,9 +245,13 @@ public sealed class ProcessMusicAnalyzerClient(PipelineOptions pipeline) : IMusi
         string logPath,
         CancellationToken cancellationToken)
     {
+        string executable = PipelinePathResolver.Resolve(
+            pipeline.MusicAnalyzerPath) ??
+            throw new InvalidOperationException(
+                $"MUSIC_ANALYZER_NOT_FOUND: {pipeline.MusicAnalyzerPath}");
         ProcessStartInfo start = new()
         {
-            FileName = Path.GetFullPath(pipeline.MusicAnalyzerPath),
+            FileName = executable,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,

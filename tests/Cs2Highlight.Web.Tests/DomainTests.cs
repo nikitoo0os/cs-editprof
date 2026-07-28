@@ -69,6 +69,42 @@ public sealed class DomainTests
     }
 
     [Fact]
+    public void FailedMusicAnalysisCanBeRetriedBeforePayment()
+    {
+        Generation generation = new()
+        {
+            Status = GenerationStatus.Failed,
+            PaymentStatus = PaymentStatus.NotCreated,
+            ErrorCode = "MUSIC_ANALYZER_NOT_FOUND"
+        };
+
+        GenerationStateMachine.Transition(
+            generation,
+            GenerationStatus.AnalyzingMusic,
+            DateTimeOffset.UtcNow);
+
+        Assert.Equal(GenerationStatus.AnalyzingMusic, generation.Status);
+    }
+
+    [Fact]
+    public void PipelinePathResolverFindsExecutableBesideApplication()
+    {
+        string name = $"resolver-{Guid.NewGuid():N}.exe";
+        string path = Path.Combine(AppContext.BaseDirectory, name);
+        File.WriteAllText(path, string.Empty);
+        try
+        {
+            Assert.Equal(
+                Path.GetFullPath(path),
+                PipelinePathResolver.Resolve(name));
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public void GlobalSelectionUsesStableTopNThenRequestedOutputOrder()
     {
         GlobalHighlightSelector selector = new();

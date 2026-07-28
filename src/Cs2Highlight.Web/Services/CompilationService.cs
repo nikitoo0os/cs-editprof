@@ -544,9 +544,15 @@ public sealed class FfmpegHighlightCompilationService(
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
     {
+        string? resolved = PipelinePathResolver.Resolve(executable);
+        if (resolved is null)
+            return new ProcessResult(
+                -1,
+                string.Empty,
+                $"Executable was not found: {executable}");
         ProcessStartInfo start = new()
         {
-            FileName = ResolveExecutable(executable),
+            FileName = resolved,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -594,19 +600,6 @@ public sealed class FfmpegHighlightCompilationService(
             $"stderr:{Environment.NewLine}{result.Error}",
             Utf8WithoutBom,
             cancellationToken);
-
-    private static string ResolveExecutable(string configured)
-    {
-        string full = Path.GetFullPath(configured);
-        if (File.Exists(full)) return full;
-        foreach (string directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-                     .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            string candidate = Path.Combine(directory.Trim(), configured);
-            if (File.Exists(candidate)) return candidate;
-        }
-        return full;
-    }
 
     private static CompilationResult Failure(string error, int total, int skipped, long duration) =>
         new("1.1", false, null, 0, Math.Max(skipped, total), duration, 0, null, null, error);

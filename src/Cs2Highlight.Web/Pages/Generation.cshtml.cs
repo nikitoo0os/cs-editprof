@@ -19,8 +19,9 @@ public sealed class GenerationModel(
     public int HighlightCount { get; private set; }
     public bool CanRetry =>
         Generation.Status == GenerationStatus.Failed &&
-        Generation.PaymentStatus == PaymentStatus.Succeeded &&
-        Generation.SelectedSteamId is not null;
+        Generation.SelectedSteamId is not null &&
+        (Generation.PaymentStatus == PaymentStatus.Succeeded ||
+         Generation.ErrorCode?.StartsWith("MUSIC_", StringComparison.Ordinal) == true);
 
     public async Task<IActionResult> OnGetAsync(string publicId, CancellationToken cancellationToken)
     {
@@ -78,15 +79,26 @@ public sealed class GenerationModel(
         Generation? generation = await db.Generations.SingleOrDefaultAsync(
             value => value.PublicId == publicId, cancellationToken);
         if (generation is null) return NotFound();
+        bool musicAnalysisRetry =
+            generation.ErrorCode?.StartsWith(
+                "MUSIC_",
+                StringComparison.Ordinal) == true;
         if (generation.Status != GenerationStatus.Failed ||
-            generation.PaymentStatus != PaymentStatus.Succeeded ||
-            generation.SelectedSteamId is null)
+            generation.SelectedSteamId is null ||
+            (!musicAnalysisRetry &&
+             generation.PaymentStatus != PaymentStatus.Succeeded))
             return StatusCode(StatusCodes.Status409Conflict);
         GenerationStateMachine.Transition(
-            generation, GenerationStatus.QueuedForGeneration, timeProvider.GetUtcNow());
+            generation,
+            musicAnalysisRetry
+                ? GenerationStatus.AnalyzingMusic
+                : GenerationStatus.QueuedForGeneration,
+            timeProvider.GetUtcNow());
         generation.ErrorCode = null;
         generation.ErrorMessage = null;
-        generation.CurrentStage = "Queued for retry";
+        generation.CurrentStage = musicAnalysisRetry
+            ? "Music analysis queued for retry"
+            : "Queued for retry";
         await db.SaveChangesAsync(cancellationToken);
         queue.Wake();
         return RedirectToPage(new { publicId });

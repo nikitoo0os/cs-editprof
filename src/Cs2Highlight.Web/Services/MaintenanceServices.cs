@@ -32,11 +32,11 @@ public sealed class GenerationReadinessHealthCheck(
                 ["freeDiskSpaceBytes"] = drive.AvailableFreeSpace,
                 ["minimumFreeDiskSpaceBytes"] = uploadOptions.MinimumFreeDiskSpaceBytes,
                 ["freeDiskSpace"] = drive.AvailableFreeSpace >= uploadOptions.MinimumFreeDiskSpaceBytes,
-                ["demoParser"] = ResolveExecutable(pipeline.DemoParserPath) is not null,
-                ["musicAnalyzer"] = ResolveExecutable(pipeline.MusicAnalyzerPath) is not null,
-                ["renderAgent"] = ResolveExecutable(pipeline.RenderAgentPath) is not null,
-                ["ffmpeg"] = ResolveExecutable(pipeline.FfmpegPath) is not null,
-                ["ffprobe"] = ResolveExecutable(pipeline.FfprobePath) is not null
+                ["demoParser"] = PipelinePathResolver.Resolve(pipeline.DemoParserPath) is not null,
+                ["musicAnalyzer"] = PipelinePathResolver.Resolve(pipeline.MusicAnalyzerPath) is not null,
+                ["renderAgent"] = PipelinePathResolver.Resolve(pipeline.RenderAgentPath) is not null,
+                ["ffmpeg"] = PipelinePathResolver.Resolve(pipeline.FfmpegPath) is not null,
+                ["ffprobe"] = PipelinePathResolver.Resolve(pipeline.FfprobePath) is not null
             };
             bool ready = data.Values.OfType<bool>().All(value => value);
             return ready
@@ -50,19 +50,6 @@ public sealed class GenerationReadinessHealthCheck(
         }
     }
 
-    private static string? ResolveExecutable(string configured)
-    {
-        if (string.IsNullOrWhiteSpace(configured)) return null;
-        string full = Path.GetFullPath(configured);
-        if (File.Exists(full)) return full;
-        foreach (string directory in (Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
-                     .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
-        {
-            string candidate = Path.Combine(directory.Trim(), configured);
-            if (File.Exists(candidate)) return candidate;
-        }
-        return null;
-    }
 }
 
 public sealed class GenerationCleanupService(

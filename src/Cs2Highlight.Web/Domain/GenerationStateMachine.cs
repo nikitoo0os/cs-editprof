@@ -33,7 +33,9 @@ public static class GenerationStateMachine
             [GenerationStatus.ApplyingColorGrade] = Set(GenerationStatus.VerifyingOutput, GenerationStatus.Failed, GenerationStatus.Cancelling),
             [GenerationStatus.VerifyingOutput] = Set(GenerationStatus.Completed, GenerationStatus.CompletedWithWarnings, GenerationStatus.Failed),
             [GenerationStatus.Cancelling] = Set(GenerationStatus.Cancelled),
-            [GenerationStatus.Failed] = Set(GenerationStatus.QueuedForGeneration)
+            [GenerationStatus.Failed] = Set(
+                GenerationStatus.AnalyzingMusic,
+                GenerationStatus.QueuedForGeneration)
         };
 
     public static void Transition(Generation generation, GenerationStatus next, DateTimeOffset now)

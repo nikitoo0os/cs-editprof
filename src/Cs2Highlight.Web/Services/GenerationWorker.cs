@@ -270,7 +270,11 @@ public sealed class GenerationWorker(
             try
             {
                 AnalysisPipeline analysisPipeline = new(
-                    new GoCliDemoParser(Path.GetFullPath(pipelineOptions.DemoParserPath), TimeSpan.FromMinutes(10)),
+                    new GoCliDemoParser(
+                        PipelinePathResolver.Resolve(pipelineOptions.DemoParserPath) ??
+                            throw new InvalidOperationException(
+                                $"DEMO_PARSER_NOT_FOUND: {pipelineOptions.DemoParserPath}"),
+                        TimeSpan.FromMinutes(10)),
                     new RuleBasedHighlightDetector(),
                     new BestHighlightSelector(),
                     new RenderJobBuilder(),
@@ -537,7 +541,10 @@ public sealed class GenerationWorker(
                 }
             }
             BatchExecutionResult result = await new BatchRenderOrchestrator(
-                new ProcessRenderAgentClient(Path.GetFullPath(pipelineOptions.RenderAgentPath)),
+                new ProcessRenderAgentClient(
+                    PipelinePathResolver.Resolve(pipelineOptions.RenderAgentPath) ??
+                        throw new InvalidOperationException(
+                            $"RENDER_AGENT_NOT_FOUND: {pipelineOptions.RenderAgentPath}")),
                 store,
                 timeProvider).RunAsync(plan, batchRoot, state, cancellationToken);
             foreach ((BatchRenderItem item, BatchRenderReportItem reportItem) in

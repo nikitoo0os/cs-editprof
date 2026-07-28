@@ -36,6 +36,49 @@ public sealed class PipelineOptions
     public DemoFailurePolicy DemoFailurePolicy { get; set; } = DemoFailurePolicy.SkipInvalidDemo;
 }
 
+public static class PipelinePathResolver
+{
+    public static string? Resolve(string configured)
+    {
+        if (string.IsNullOrWhiteSpace(configured))
+            return null;
+        if (Path.IsPathRooted(configured))
+        {
+            string rooted = Path.GetFullPath(configured);
+            return File.Exists(rooted) ? rooted : null;
+        }
+        if (string.IsNullOrEmpty(Path.GetDirectoryName(configured)))
+        {
+            foreach (string directory in (
+                Environment.GetEnvironmentVariable("PATH") ?? string.Empty)
+                .Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+            {
+                string pathCandidate = Path.Combine(directory.Trim(), configured);
+                if (File.Exists(pathCandidate))
+                    return Path.GetFullPath(pathCandidate);
+            }
+        }
+        HashSet<string> visited = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string start in new[]
+        {
+            Environment.CurrentDirectory,
+            AppContext.BaseDirectory
+        })
+        {
+            DirectoryInfo? directory = new(Path.GetFullPath(start));
+            while (directory is not null && visited.Add(directory.FullName))
+            {
+                string candidate = Path.GetFullPath(
+                    Path.Combine(directory.FullName, configured));
+                if (File.Exists(candidate))
+                    return candidate;
+                directory = directory.Parent;
+            }
+        }
+        return null;
+    }
+}
+
 public sealed class RetentionOptions
 {
     public int DraftGenerationHours { get; set; } = 24;
