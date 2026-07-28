@@ -56,10 +56,13 @@ public sealed class NetConsoleDemoController(
             $"Seek completed; locking POV to SteamID64 {steamId64}.",
             cancellationToken);
         await connection.SendAsync("mirv_cvar_unhide_all", cancellationToken);
+        await connection.SendAsync("spec_lock_to_accountid 0", cancellationToken);
+        await connection.SendAsync("spec_mode 1", cancellationToken);
         await connection.SendAsync(
-            string.Create(CultureInfo.InvariantCulture, $"spec_lock_to_accountid {steamId64}"),
+            $"spec_player \"{EscapeCommandArgument(job.Player.Name ?? string.Empty)}\"",
             cancellationToken);
-        await connection.SendAsync("spec_mode 4", cancellationToken);
+        await connection.SendAsync("spec_lock_to_current_player", cancellationToken);
+        await VerifySelectedPlayerAsync(connection, steamId64, cancellationToken);
         await connection.SendAsync(
             string.Create(
                 CultureInfo.InvariantCulture,
@@ -120,6 +123,31 @@ public sealed class NetConsoleDemoController(
         }
         return value.Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("\"", "\\\"", StringComparison.Ordinal);
+    }
+
+    private static async Task VerifySelectedPlayerAsync(
+        NetConsoleConnection connection,
+        ulong expectedSteamId64,
+        CancellationToken cancellationToken)
+    {
+        const string endMarker = "AFX_RENDER_POV_VERIFY_END";
+        uint accountId = checked((uint)(expectedSteamId64 - 76561197960265728UL));
+        await connection.SendAsync("spec_lock_to_accountid", cancellationToken);
+        await connection.SendAsync($"echo {endMarker}", cancellationToken);
+        IReadOnlyList<string> output = await connection.ReadThroughAsync(
+            endMarker,
+            TimeSpan.FromSeconds(5),
+            cancellationToken);
+        string steamIdText = expectedSteamId64.ToString(CultureInfo.InvariantCulture);
+        string accountIdText = accountId.ToString(CultureInfo.InvariantCulture);
+        if (!output.Any(line =>
+                line.Contains(steamIdText, StringComparison.Ordinal) ||
+                line.Contains(accountIdText, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                $"CS2 selected a different POV. Expected SteamID64 {steamIdText}; " +
+                $"spec_lock_to_accountid output: {string.Join(" | ", output)}");
+        }
     }
 
     private async Task<NetConsoleConnection> ConnectAsync(
@@ -202,6 +230,15 @@ public sealed class NetConsoleDemoController(
             TimeSpan timeout,
             CancellationToken cancellationToken)
         {
+            await ReadThroughAsync(marker, timeout, cancellationToken);
+        }
+
+        public async Task<IReadOnlyList<string>> ReadThroughAsync(
+            string marker,
+            TimeSpan timeout,
+            CancellationToken cancellationToken)
+        {
+            List<string> lines = [];
             using CancellationTokenSource timeoutSource = new(timeout);
             using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(
                 cancellationToken,
@@ -217,6 +254,7 @@ public sealed class NetConsoleDemoController(
                     }
 
                     line = line.Replace("\0", string.Empty, StringComparison.Ordinal);
+                    lines.Add(line);
                     if (log is not null)
                     {
                         await log.WriteLineAsync(line.AsMemory(), cancellationToken);
@@ -227,7 +265,7 @@ public sealed class NetConsoleDemoController(
                     }
                     if (line.Contains(marker, StringComparison.Ordinal))
                     {
-                        return;
+                        return lines;
                     }
                 }
             }

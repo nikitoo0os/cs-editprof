@@ -54,7 +54,10 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
 
         Assert.Contains("demo_gototick 100", commands);
         Assert.Contains("mirv_cvar_unhide_all", commands);
-        Assert.Contains("spec_lock_to_accountid 76561198000000001", commands);
+        Assert.Contains("spec_lock_to_accountid 0", commands);
+        Assert.Contains("spec_mode 1", commands);
+        Assert.Contains("spec_player \"Player One\"", commands);
+        Assert.Contains("spec_lock_to_current_player", commands);
         Assert.Contains("mirv_streams record start", commands);
         Assert.Contains("demo_resume", commands);
         Assert.Contains(commands, command =>
@@ -85,6 +88,14 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             if (command.StartsWith("demo_gototick ", StringComparison.Ordinal))
             {
                 await writer.WriteLineAsync("[Demo] Demo Skipping finished at tick 100");
+            }
+            if (command == "spec_lock_to_accountid")
+            {
+                await writer.WriteLineAsync("\"spec_lock_to_accountid\" = \"76561198000000001\"");
+            }
+            if (command == "echo AFX_RENDER_POV_VERIFY_END")
+            {
+                await writer.WriteLineAsync("AFX_RENDER_POV_VERIFY_END");
             }
             if (command == "demo_resume")
             {

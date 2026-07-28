@@ -62,6 +62,19 @@ public sealed class RenderJobValidatorTests : IDisposable
         Assert.Contains(result.Errors, error => error.Contains("valid individual SteamID64", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void MissingPlayerNameIsReported()
+    {
+        RenderJob job = ValidJob() with
+        {
+            Player = new PlayerSelector("76561198000000001", null)
+        };
+
+        ValidationReport result = RenderJobValidator.Validate(job, new RenderEnvironmentOptions());
+
+        Assert.Contains(result.Errors, error => error.Contains("player.name", StringComparison.Ordinal));
+    }
+
     private RenderJob ValidJob() => new(
         "job-1", demo, new PlayerSelector("76561198000000001", "Player"),
         new RenderSegment(10, 20), new VideoSettings(1920, 1080, 60, 90),
