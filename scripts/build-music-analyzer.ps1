@@ -73,8 +73,53 @@ try {
     & $python -m PyInstaller --noconfirm --clean --onefile `
         --name music-analyzer `
         --distpath $output `
+        --collect-all scipy `
+        --collect-all librosa `
+        --collect-all numba `
+        --collect-all llvmlite `
+        --collect-all sklearn `
         .\music_analyzer.py
     if ($LASTEXITCODE -ne 0) { throw "Music analyzer packaging failed." }
+
+    $executable = Join-Path $output "music-analyzer.exe"
+    $ffmpeg = Get-Command "ffmpeg.exe" -ErrorAction SilentlyContinue
+    if ($null -eq $ffmpeg) {
+        throw "FFmpeg is required for the packaged analyzer smoke test."
+    }
+    $smokeInput = Join-Path $output ".music-analyzer-smoke.wav"
+    $smokeOutput = Join-Path $output ".music-analyzer-smoke.json"
+    $smokeSucceeded = $false
+    try {
+        & $ffmpeg.Source -y -hide_banner -loglevel error `
+            -f lavfi -i "sine=frequency=440:sample_rate=48000" `
+            -t 5 $smokeInput
+        if ($LASTEXITCODE -ne 0) {
+            throw "Music analyzer smoke fixture generation failed."
+        }
+        & $executable analyze --input $smokeInput --output $smokeOutput
+        if ($LASTEXITCODE -ne 0 -or
+            -not (Test-Path -LiteralPath $smokeOutput -PathType Leaf)) {
+            throw "Packaged music analyzer smoke test failed."
+        }
+        $smoke = Get-Content -LiteralPath $smokeOutput -Raw | ConvertFrom-Json
+        if ($smoke.schemaVersion -ne "1.0" -or
+            $smoke.analyzer.version -ne "0.1.1") {
+            throw "Packaged music analyzer returned an unexpected contract."
+        }
+        $smokeSucceeded = $true
+    }
+    finally {
+        if (Test-Path -LiteralPath $smokeInput) {
+            Remove-Item -LiteralPath $smokeInput -Force
+        }
+        if (Test-Path -LiteralPath $smokeOutput) {
+            Remove-Item -LiteralPath $smokeOutput -Force
+        }
+        if (-not $smokeSucceeded -and
+            (Test-Path -LiteralPath $executable -PathType Leaf)) {
+            Remove-Item -LiteralPath $executable -Force
+        }
+    }
 }
 finally {
     Pop-Location

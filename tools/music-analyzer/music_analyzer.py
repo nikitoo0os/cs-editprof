@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 NAME = "cs2-music-analyzer"
-VERSION = "0.1.0"
+VERSION = "0.1.1"
 SCHEMA = "1.0"
 SUPPORTED = {".mp3", ".wav", ".flac", ".m4a", ".aac"}
 
