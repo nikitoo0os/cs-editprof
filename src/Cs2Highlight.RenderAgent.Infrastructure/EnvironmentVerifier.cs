@@ -15,6 +15,7 @@ public sealed class EnvironmentVerifier(RenderEnvironmentOptions options) : IEnv
             FileCheck("AfxHookSource2", GetHookPath(options.HlaeExecutablePath)),
             FileCheck("CS2", options.Cs2ExecutablePath),
             FileCheck("Steam", options.SteamExecutablePath),
+            FileCheck("DemoCompatibilityRepair", DemoCompatibilityRepairer.ResolveExecutablePath(options)),
             Check("AutomationVerified", options.AutomationVerified,
                 options.AutomationVerified
                     ? "The operator marked this exact HLAE/CS2 command set as manually verified."

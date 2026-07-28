@@ -2,6 +2,10 @@
 
 Windows CLI proof of concept for validating and orchestrating a single CS2 demo-render job. It creates an isolated workspace, generates version-isolated CFG, supervises external processes without shell argument concatenation, records state transitions, verifies a stable output artifact, and writes a structured result.
 
+Before playback, the agent automatically checks its isolated demo copy for the
+CS2 July 2026 legacy entity-message-138 regression. Affected demos are repaired
+into a separate `_safe138.dem` workspace file; the source demo is never changed.
+
 This repository does **not** claim a completed real HLAE/CS2 E2E. HLAE, CS2, and a compatible demo were not available during development. Execution is intentionally blocked until the exact command set is manually verified and `AutomationVerified` is enabled.
 
 ## Confirmed HLAE surface
@@ -31,6 +35,7 @@ The CS2 commands `playdemo`, `demo_gototick`, and `spec_player` remain operator-
 - Steam and CS2
 - current HLAE with AfxHookSource2
 - FFmpeg supplied with HLAE when an FFmpeg preset is used
+- bundled `cs2-demo-playback-fix` compatibility helper (copied by the build)
 - at least 1 GiB free on the working drive (real high-quality renders need much more)
 
 Do not connect an HLAE-launched CS2 instance to VAC-protected servers.
@@ -71,6 +76,10 @@ input/  config/  raw/  output/  logs/  state/
 
 `state/render-state.json` contains the latest transition, `render-state.jsonl` contains history, and `render-result.json` contains the final structured result. On success, media is copied as `raw-highlight.<ext>` to the requested output directory.
 
+`logs/demo-compatibility-repair.log` reports either `REPAIRED` with removal
+statistics or `CLEAN`. The bundled helper is Apache-2.0 licensed; provenance,
+license, and notices are stored in `third_party/cs2-demo-playback-fix`.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -82,7 +91,7 @@ input/  config/  raw/  output/  logs/  state/
 | 30 | HLAE launch failed |
 | 31 | CS2 launch timeout |
 | 32 | CS2 exited unexpectedly |
-| 40 | demo control failed |
+| 40 | demo compatibility repair or control failed |
 | 50 | recording failed |
 | 60 | output verification failed |
 | 70 | cancelled |
@@ -100,6 +109,9 @@ Use `scripts/kill-render-processes.ps1 -StateDirectory <job-state-path> -WhatIf`
 - Inspect `logs/hlae.stdout.log`, `logs/hlae.stderr.log`, and `state/render-state.jsonl`.
 - If automation is rejected, follow `docs/MANUAL_E2E.md`; do not bypass the guard without testing the installed builds.
 - If output is missing, use HLAE console help for `mirv_streams` and verify its FFmpeg installation.
+- If CS2 reports `Unknown message type 138` or `Failed to parse message`, inspect
+  `logs/demo-compatibility-repair.log` and confirm the generated CFG uses the
+  `_safe138.dem` workspace copy.
 - See `docs/KNOWN_ISSUES.md` for current research gaps.
 
 ## Known working environment

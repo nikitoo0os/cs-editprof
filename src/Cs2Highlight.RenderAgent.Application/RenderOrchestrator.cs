@@ -7,6 +7,7 @@ public sealed class RenderOrchestrator(
     RenderEnvironmentOptions environment,
     IEnvironmentVerifier environmentVerifier,
     IWorkspaceManager workspaceManager,
+    IDemoCompatibilityRepairer demoCompatibilityRepairer,
     IRenderScriptGenerator scriptGenerator,
     IHlaeLauncher hlaeLauncher,
     IRenderOutputWatcher outputWatcher,
@@ -54,6 +55,35 @@ public sealed class RenderOrchestrator(
 
             workspace = await workspaceManager.PrepareAsync(job, cancellationToken);
             await stateJournal.WriteAsync(workspace, RenderState.PreparingWorkspace, "Workspace prepared.", cancellationToken);
+            DemoCompatibilityResult compatibility;
+            try
+            {
+                compatibility = await demoCompatibilityRepairer.RepairAsync(workspace, cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException)
+            {
+                return await PersistFailureAsync(
+                    job,
+                    workspace,
+                    startedAt,
+                    stopwatch,
+                    RenderState.RepairingDemo,
+                    "DEMO_COMPATIBILITY_REPAIR_FAILED",
+                    exception.Message,
+                    false,
+                    processes,
+                    warnings);
+            }
+            workspace = workspace with { PreparedDemoPath = compatibility.DemoPath };
+            if (compatibility.Repaired)
+            {
+                warnings.Add("A repaired playback copy was created for the CS2 legacy message 138 compatibility regression.");
+            }
+            await stateJournal.WriteAsync(
+                workspace,
+                RenderState.RepairingDemo,
+                compatibility.Message,
+                cancellationToken);
             GeneratedRenderScript script = await scriptGenerator.GenerateAsync(job, workspace, cancellationToken);
             warnings.AddRange(script.Warnings);
             await stateJournal.WriteAsync(workspace, RenderState.GeneratingScripts, $"Generated {script.Path}.", cancellationToken);

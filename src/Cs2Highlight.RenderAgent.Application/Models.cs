@@ -21,6 +21,7 @@ public sealed class RenderEnvironmentOptions
     public string Cs2ExecutablePath { get; set; } = string.Empty;
     public string SteamExecutablePath { get; set; } = string.Empty;
     public string? FfmpegExecutablePath { get; set; }
+    public string DemoRepairExecutablePath { get; set; } = string.Empty;
     public string WorkingRoot { get; set; } = string.Empty;
     public string HlaeArguments { get; set; } = string.Empty;
     public bool AutomationVerified { get; set; }
@@ -37,6 +38,7 @@ public enum RenderState
     Validating,
     EnvironmentChecking,
     PreparingWorkspace,
+    RepairingDemo,
     GeneratingScripts,
     StartingHlae,
     WaitingForCs2,
@@ -95,6 +97,8 @@ public sealed record RenderWorkspace(
     string State,
     string PreparedDemoPath);
 
+public sealed record DemoCompatibilityResult(string DemoPath, bool Repaired, string Message);
+
 public sealed record GeneratedRenderScript(string Path, int Width, int Height, IReadOnlyList<string> Warnings);
 
 public sealed record ProcessRequest(
@@ -134,7 +138,7 @@ public static class ExitCodes
         "HLAE_LAUNCH_FAILED" => HlaeLaunchFailed,
         "CS2_START_TIMEOUT" => Cs2LaunchTimeout,
         "CS2_EXITED" => Cs2ExitedUnexpectedly,
-        "DEMO_CONTROL_FAILED" => DemoControlFailed,
+        "DEMO_CONTROL_FAILED" or "DEMO_COMPATIBILITY_REPAIR_FAILED" => DemoControlFailed,
         "RECORDING_FAILED" => RecordingFailed,
         "OUTPUT_INVALID" => OutputVerificationFailed,
         "CANCELLED" => Cancelled,

@@ -16,6 +16,18 @@
     <None Update="appsettings.local.json">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
+    <None Include="..\..\third_party\cs2-demo-playback-fix\cs2-demo-playback-fix.exe"
+          Link="tools\cs2-demo-playback-fix.exe"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\cs2-demo-playback-fix\LICENSE"
+          Link="tools\cs2-demo-playback-fix.LICENSE"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\cs2-demo-playback-fix\NOTICE"
+          Link="tools\cs2-demo-playback-fix.NOTICE"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\third_party\cs2-demo-playback-fix\THIRD_PARTY_NOTICES.md"
+          Link="tools\cs2-demo-playback-fix.THIRD_PARTY_NOTICES.md"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <PropertyGroup>

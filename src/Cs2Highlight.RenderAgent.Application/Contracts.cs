@@ -10,6 +10,11 @@ public interface IWorkspaceManager
     Task<RenderWorkspace> PrepareAsync(RenderJob job, CancellationToken cancellationToken);
 }
 
+public interface IDemoCompatibilityRepairer
+{
+    Task<DemoCompatibilityResult> RepairAsync(RenderWorkspace workspace, CancellationToken cancellationToken);
+}
+
 public interface IRenderScriptGenerator
 {
     Task<GeneratedRenderScript> GenerateAsync(RenderJob job, RenderWorkspace workspace, CancellationToken cancellationToken);

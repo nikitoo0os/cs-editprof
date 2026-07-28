@@ -10,4 +10,16 @@ public sealed class ExitCodesTests
         RenderError error = new("OUTPUT_INVALID", "missing", RenderState.VerifyingOutput, true);
         Assert.Equal(ExitCodes.OutputVerificationFailed, ExitCodes.FromError(error));
     }
+
+    [Fact]
+    public void MapsDemoCompatibilityRepairFailure()
+    {
+        RenderError error = new(
+            "DEMO_COMPATIBILITY_REPAIR_FAILED",
+            "repair failed",
+            RenderState.RepairingDemo,
+            false);
+
+        Assert.Equal(ExitCodes.DemoControlFailed, ExitCodes.FromError(error));
+    }
 }

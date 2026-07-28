@@ -74,6 +74,7 @@ internal static class Program
         builder.Services.AddSingleton(TimeProvider.System);
         builder.Services.AddSingleton<IEnvironmentVerifier, EnvironmentVerifier>();
         builder.Services.AddSingleton<IWorkspaceManager, WorkspaceManager>();
+        builder.Services.AddSingleton<IDemoCompatibilityRepairer, DemoCompatibilityRepairer>();
         builder.Services.AddSingleton<IRenderScriptGenerator, Source2ScriptGenerator>();
         builder.Services.AddSingleton<IProcessSupervisor, ProcessSupervisor>();
         builder.Services.AddSingleton<IHlaeLauncher, HlaeLauncher>();
