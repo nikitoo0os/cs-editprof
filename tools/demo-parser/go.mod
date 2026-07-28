@@ -16,3 +16,14 @@ require (
 	golang.org/x/exp v0.0.0-20230817173708-d852ddb80c63 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
+
+// Direct GitHub mirrors avoid TLS-blocked Go vanity domains on render machines.
+replace golang.org/x/exp => github.com/golang/exp v0.0.0-20230817173708-d852ddb80c63
+
+replace golang.org/x/text => github.com/golang/text v0.34.0
+
+replace google.golang.org/protobuf => github.com/protocolbuffers/protobuf-go v1.36.11
+
+replace gopkg.in/check.v1 => github.com/go-check/check v0.0.0-20161208181325-20d25e280405
+
+replace gopkg.in/yaml.v3 => github.com/go-yaml/yaml v0.0.0-20220527083530-f6f7691b1fde
