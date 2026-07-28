@@ -1,13 +1,30 @@
 @page "/generations/{publicId}/checkout"
 @model CheckoutModel
-@{ ViewData["Title"] = "Оплата"; }
+@{
+  ViewData["Title"] = "Оплата";
+  TimeSpan duration = TimeSpan.FromMilliseconds(
+    Model.Generation.EstimatedDurationMilliseconds);
+}
 <section class="card">
-<h1>Проверка заказа</h1>
-<div class="grid">
- <p>Игрок: <strong>@Model.Generation.SelectedPlayerName</strong><br /><span class="muted">@Model.Generation.SelectedSteamId</span></p>
- <p>Лучших моментов: @Model.Generation.MaximumHighlights</p>
- <p>Формат: @Model.Generation.Width×@Model.Generation.Height, @Model.Generation.Fps FPS</p>
- <p>Итого: <strong>$1.00 USD</strong></p>
-</div>
-<form method="post" asp-antiforgery="true"><button type="submit">Оплатить $1</button></form>
+  <h1>Проверка заказа</h1>
+  <div class="grid">
+    <p>
+      Игрок: <strong>@Model.Generation.SelectedPlayerName</strong><br />
+      <span class="muted">@Model.Generation.SelectedSteamId</span>
+    </p>
+    <p>Загружено демок: @Model.DemoCount</p>
+    <p>Выбрано моментов: @Model.SelectedCount</p>
+    <p>Категории: @string.Join(", ", Model.Categories)</p>
+    <p>Примерная длительность: ≈ @duration.Minutes:@duration.Seconds.ToString("00")</p>
+    <p>
+      Формат: @Model.Generation.Width×@Model.Generation.Height,
+      @Model.Generation.Fps FPS
+    </p>
+    <p>Эффекты: @Model.Generation.EffectPreset</p>
+    <p>Итого: <strong>$1.00 USD</strong></p>
+  </div>
+  <p class="muted">Длительность приблизительная и уточняется после рендера.</p>
+  <form method="post" asp-antiforgery="true">
+    <button type="submit">Оплатить $1</button>
+  </form>
 </section>

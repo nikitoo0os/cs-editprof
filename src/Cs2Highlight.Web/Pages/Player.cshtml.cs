@@ -1,5 +1,6 @@
 using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
+using Cs2Highlight.Web.Services;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
@@ -8,6 +9,7 @@ namespace Cs2Highlight.Web.Pages;
 
 public sealed class PlayerModel(
     IDbContextFactory<GenerationDbContext> dbFactory,
+    HighlightSelectionService selections,
     TimeProvider timeProvider) : PageModel
 {
     public IReadOnlyList<GenerationPlayer> Players { get; private set; } = [];
@@ -59,9 +61,10 @@ public sealed class PlayerModel(
         generation.Height = AspectRatio == "16:9" ? 1080 : 1920;
         generation.Fps = 60;
         GenerationStateMachine.Transition(
-            generation, GenerationStatus.AwaitingPayment, timeProvider.GetUtcNow());
-        generation.ProgressPercent = 30;
+            generation, GenerationStatus.AwaitingHighlightSelection, timeProvider.GetUtcNow());
+        generation.ProgressPercent = 28;
         await db.SaveChangesAsync(cancellationToken);
-        return RedirectToPage("/Checkout", new { publicId });
+        await selections.PrepareRecommendationsAsync(publicId, SteamId, cancellationToken);
+        return RedirectToPage("/Highlights", new { publicId });
     }
 }

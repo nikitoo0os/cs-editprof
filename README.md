@@ -59,6 +59,44 @@ dotnet build -c Release
 dotnet test -c Release --no-build
 ```
 
+## Stage 5: highlight catalog, clean capture and effects
+
+Stage 5 extends the persisted Web flow without replacing Stages 1–4:
+
+```text
+multi-demo analysis -> player -> highlight catalog -> $1 test payment
+-> immutable selection -> clean Gameplay capture -> effects -> final MP4
+```
+
+The analyzer now emits schema `1.1` candidates for `SoloKill`, `DoubleKill`,
+`TripleKill`, `QuadKill` and `Ace`. Solo candidates are filtered by an
+explainable `BeautyScore`; wallbang, one-tap, no-scope, smoke, low-HP,
+distance, round ending and weapon swaps are preserved when the parser can
+observe them. `lastEnemyKill` and reaction time are not reliably available
+from the pinned parser surface, remain unset and receive no score.
+
+Before payment, the catalog supports category/demo filters, score/round/time
+sorting, deterministic recommendations, Top 3/5/10, visible-category
+selection, trusted local weapon icons and explicit swap markers. Only stable
+highlight IDs are posted; the server reloads ticks, scores and weapon data from
+SQLite. Selection becomes immutable when it enters checkout.
+
+`CaptureUiProfile.Gameplay` uses the versioned `capture-clean.v1` adapter before
+demo load, after load, after seek and immediately before recording. It keeps
+the gameplay HUD and killfeed while requesting CS2 to close automation UI.
+Those commands still require visual verification against the installed
+CS2/HLAE build; deterministic dispatch is not proof of clean captured pixels.
+
+Effect plans are persisted separately from FFmpeg. `None` is the diagnostic
+baseline, `Clean` applies restrained color/audio normalization and fades, and
+`Dynamic` additionally schedules bounded SmoothZoom, HeadshotFlash and
+VignettePulse events from demo ticks. SignalR updates status immediately and a
+three-second persisted-state poll remains active as fallback. Neither path
+reloads the page; the video element appears automatically on completion.
+
+See [Stage 5 real E2E](docs/STAGE5_E2E.md). Stage 5 is not fully closed until
+that checklist passes on the Windows render machine with real demos.
+
 ## Stage 4: Web multi-demo generation
 
 `Cs2Highlight.Web` adds a persisted Razor Pages workflow:
@@ -94,8 +132,8 @@ dotnet run --project .\src\Cs2Highlight.Web -c Release --no-build
 See [Stage 4 Web acceptance](docs/STAGE4_WEB_E2E.md) for the real two-demo,
 restart, Range, browser playback, download and evidence checklist. Stage 4 is
 not considered closed until that real HLAE/CS2/FFmpeg run succeeds on the
-installed render machine. The current compositor uses normalized cuts; the
-persisted `Fade` option is not yet applied.
+installed render machine. Stage 5 adds persisted effect plans and applies the
+selected `None`, `Clean` or `Dynamic` preset during normalization/composition.
 
 ## Configure
 
@@ -130,7 +168,7 @@ in .NET. The analysis command does not start HLAE or CS2.
 
 ### Requirements and build
 
-- Go 1.24 or newer (development used Go 1.26.5);
+- Go 1.25 or newer (Stage 5 parser tests also pass with Go 1.25.0);
 - .NET 8 SDK;
 - `demoinfocs-golang/v5` v5.2.0, pinned by `go.mod`.
 
@@ -186,7 +224,8 @@ logs/demo-parser.log
 logs/highlight-detector.log
 ```
 
-The contracts are versioned as `1.0` and documented under `contracts/`.
+The current analysis contracts are versioned as `1.1`; schema `1.0` inputs
+remain readable.
 Steam IDs are JSON strings. Ticks remain integer server ticks from the demo.
 The generated `render-job.json` uses the existing Stage 1 model without renamed
 or parallel fields and can be passed directly to:
@@ -232,7 +271,7 @@ Supported controls include:
 
 ```text
 --min-score <double>
---types <DoubleKill,TripleKill,QuadKill,Ace,HeadshotStreak>
+--types <SoloKill,DoubleKill,TripleKill,QuadKill,Ace>
 --max-clips <int>
 --sort-by <score|tick|round>
 --order <asc|desc>

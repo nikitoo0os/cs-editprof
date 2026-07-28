@@ -15,6 +15,7 @@ public sealed class GenerationWorker(
     GenerationStorage storage,
     PipelineOptions pipelineOptions,
     GlobalHighlightSelector globalSelector,
+    IEffectPlanner effectPlanner,
     IHighlightCompilationService compilationService,
     IHubContext<GenerationHub> hub,
     TimeProvider timeProvider,
@@ -69,8 +70,10 @@ public sealed class GenerationWorker(
                 value.Status == GenerationStatus.QueuedForAnalysis ||
                 value.Status == GenerationStatus.Analyzing ||
                 value.Status == GenerationStatus.QueuedForGeneration ||
+                value.Status == GenerationStatus.PreparingRenderPlan ||
                 value.Status == GenerationStatus.SelectingHighlights ||
                 value.Status == GenerationStatus.RenderingClips ||
+                value.Status == GenerationStatus.ApplyingEffects ||
                 value.Status == GenerationStatus.ComposingVideo ||
                 value.Status == GenerationStatus.VerifyingOutput ||
                 value.Status == GenerationStatus.Cancelling)
@@ -181,6 +184,9 @@ public sealed class GenerationWorker(
             await FailAsync(publicId, "ALL_DEMOS_INVALID", "No demo was analyzed successfully.", cancellationToken);
             return;
         }
+        await SetStatusAsync(
+            publicId, GenerationStatus.BuildingHighlightCatalog, 24,
+            "Building highlight catalog", cancellationToken);
         await AggregatePlayersAsync(publicId, cancellationToken);
         await SetStatusAsync(
             publicId, GenerationStatus.AwaitingPlayerSelection, 25,
@@ -210,8 +216,11 @@ public sealed class GenerationWorker(
                 {
                     GenerationId = demo.GenerationId,
                     GenerationDemoId = demoId,
-                    HighlightId = item.Id,
+                    HighlightId = $"demo-{demo.UploadOrder:D3}-{item.Id}",
                     SteamId = item.PlayerId,
+                    MapName = string.IsNullOrWhiteSpace(item.MapName)
+                        ? analysis.Demo.MapName
+                        : item.MapName,
                     Type = item.Type.ToString(),
                     Score = item.Score,
                     RoundNumber = item.RoundNumber,
@@ -220,7 +229,16 @@ public sealed class GenerationWorker(
                     FirstKillTick = item.FirstKillTick,
                     LastKillTick = item.LastKillTick,
                     KillCount = item.KillCount,
-                    HeadshotCount = item.HeadshotCount
+                    HeadshotCount = item.HeadshotCount,
+                    CombatScore = item.CombatScore,
+                    BeautyScore = item.BeautyScore,
+                    TotalScore = item.TotalScore,
+                    EstimatedDurationMilliseconds = item.EstimatedDurationMilliseconds,
+                    WeaponSequenceJson = JsonSerializer.Serialize(item.WeaponSequence, JsonOptions),
+                    ScoreBreakdownJson = JsonSerializer.Serialize(item.ScoreBreakdown, JsonOptions),
+                    TagsJson = JsonSerializer.Serialize(item.Tags, JsonOptions),
+                    KillsJson = JsonSerializer.Serialize(item.Kills, JsonOptions),
+                    CreatedAt = timeProvider.GetUtcNow()
                 });
             }
         }
@@ -291,11 +309,13 @@ public sealed class GenerationWorker(
             await FailAsync(publicId, "PLAYER_NOT_FOUND", "A player was not selected.", cancellationToken);
             return;
         }
-        if (snapshot.Status is GenerationStatus.QueuedForGeneration or GenerationStatus.SelectingHighlights)
+        if (snapshot.Status is GenerationStatus.QueuedForGeneration or
+            GenerationStatus.PreparingRenderPlan or
+            GenerationStatus.SelectingHighlights)
         {
             await SetStatusAsync(
-                publicId, GenerationStatus.SelectingHighlights, 38,
-                "Selecting global highlights", cancellationToken);
+                publicId, GenerationStatus.PreparingRenderPlan, 38,
+                "Preparing immutable render plan", cancellationToken);
             if (snapshot.GenerationStartedAt is null)
             {
                 await using GenerationDbContext startedDb =
@@ -307,24 +327,39 @@ public sealed class GenerationWorker(
             }
         }
         Dictionary<long, GenerationDemo> demos = snapshot.Demos.ToDictionary(value => value.Id);
-        IReadOnlyList<GlobalHighlightCandidate> selected = globalSelector.Select(
-            snapshot.Highlights.Select(value => new GlobalHighlightCandidate(
+        GenerationHighlight[] manualSelection = snapshot.Highlights
+            .Where(value =>
+                value.SelectedByUser &&
+                value.SteamId == snapshot.SelectedSteamId)
+            .OrderBy(value => value.SelectionOrder)
+            .ThenBy(value => value.HighlightId, StringComparer.Ordinal)
+            .ToArray();
+        IReadOnlyList<GlobalHighlightCandidate> selected = manualSelection.Length > 0
+            ? manualSelection.Select(value => new GlobalHighlightCandidate(
                 value.GenerationDemoId,
                 demos[value.GenerationDemoId].StoredPath,
                 demos[value.GenerationDemoId].UploadOrder,
-                ToCandidate(value, snapshot.SelectedPlayerName))),
-            snapshot.SelectedSteamId,
-            snapshot.MaximumHighlights,
-            snapshot.MinimumScore,
-            snapshot.OutputOrder);
+                ToCandidate(value, snapshot.SelectedPlayerName))).ToArray()
+            : globalSelector.Select(
+                snapshot.Highlights.Select(value => new GlobalHighlightCandidate(
+                    value.GenerationDemoId,
+                    demos[value.GenerationDemoId].StoredPath,
+                    demos[value.GenerationDemoId].UploadOrder,
+                    ToCandidate(value, snapshot.SelectedPlayerName))),
+                snapshot.SelectedSteamId,
+                snapshot.MaximumHighlights,
+                snapshot.MinimumScore,
+                snapshot.OutputOrder);
         if (selected.Count == 0)
         {
             await FailAsync(publicId, "NO_HIGHLIGHTS_FOUND", "No highlights matched the settings.", cancellationToken);
             return;
         }
         await PersistSelectionAndPlanAsync(snapshot, selected, cancellationToken);
-        if (snapshot.Status is GenerationStatus.QueuedForGeneration or GenerationStatus.SelectingHighlights
-            or GenerationStatus.RenderingClips)
+        if (snapshot.Status is GenerationStatus.QueuedForGeneration or
+            GenerationStatus.PreparingRenderPlan or
+            GenerationStatus.SelectingHighlights or
+            GenerationStatus.RenderingClips)
         {
             await SetStatusAsync(
                 publicId, GenerationStatus.RenderingClips, 40,
@@ -389,8 +424,10 @@ public sealed class GenerationWorker(
                 $"Rendered {renderedCount}/{selected.Count} clips",
                 cancellationToken);
         }
-        string[] clips = selected
+        GlobalHighlightCandidate[] renderedSelection = selected
             .Where(value => rendered.ContainsKey(value.Highlight.Id))
+            .ToArray();
+        string[] clips = renderedSelection
             .Select(value => rendered[value.Highlight.Id])
             .ToArray();
         if (clips.Length == 0)
@@ -398,21 +435,39 @@ public sealed class GenerationWorker(
             await FailAsync(publicId, "NO_CLIPS_RENDERED", "No selected clip rendered successfully.", cancellationToken);
             return;
         }
-        if (snapshot.Status != GenerationStatus.VerifyingOutput)
-        {
+        if (snapshot.Status is not (
+            GenerationStatus.ComposingVideo or
+            GenerationStatus.VerifyingOutput))
             await SetStatusAsync(
-                publicId, GenerationStatus.ComposingVideo, 85,
-                "Composing final video", cancellationToken);
-        }
+                publicId, GenerationStatus.ApplyingEffects, 85,
+                "Applying effects and normalizing clips", cancellationToken);
+        GenerationStatus compilationStatus = snapshot.Status switch
+        {
+            GenerationStatus.ComposingVideo => GenerationStatus.ComposingVideo,
+            GenerationStatus.VerifyingOutput => GenerationStatus.VerifyingOutput,
+            _ => GenerationStatus.ApplyingEffects
+        };
         string output = storage.EnsureDirectory(publicId, "output");
         Progress<CompilationProgress> progress = new(value =>
             _ = PublishAsync(
-                publicId, GenerationStatus.ComposingVideo,
+                publicId, compilationStatus,
                 85 + (int)(value.Percent * 0.12),
                 value.Stage,
                 CancellationToken.None));
+        IReadOnlyList<HighlightEffectPlan> effectPlans =
+            await GetOrCreateEffectPlansAsync(
+                publicId,
+                renderedSelection,
+                snapshot.EffectPreset,
+                cancellationToken);
         CompilationResult compilation = await compilationService.ComposeAsync(
-            new CompilationRequest(clips, output, snapshot.Width, snapshot.Height, snapshot.Fps),
+            new CompilationRequest(
+                clips,
+                output,
+                snapshot.Width,
+                snapshot.Height,
+                snapshot.Fps,
+                EffectPlans: effectPlans),
             progress,
             cancellationToken);
         if (!compilation.Success || compilation.OutputFile is null)
@@ -422,10 +477,77 @@ public sealed class GenerationWorker(
                 compilation.Error ?? "Compilation failed.", cancellationToken);
             return;
         }
+        if (snapshot.Status != GenerationStatus.VerifyingOutput)
+            await SetStatusAsync(
+                publicId, GenerationStatus.ComposingVideo, 97,
+                "Final composition completed", cancellationToken);
         await SetStatusAsync(
             publicId, GenerationStatus.VerifyingOutput, 98,
             "Verifying output", cancellationToken);
         await CompleteAsync(publicId, selected.Count, clips.Length, compilation, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<HighlightEffectPlan>> GetOrCreateEffectPlansAsync(
+        string publicId,
+        GlobalHighlightCandidate[] selected,
+        EffectPreset preset,
+        CancellationToken cancellationToken)
+    {
+        await using GenerationDbContext db =
+            await dbFactory.CreateDbContextAsync(cancellationToken);
+        Generation generation = await db.Generations
+            .SingleAsync(value => value.PublicId == publicId, cancellationToken);
+        long[] demoIds = selected.Select(value => value.SourceDemoId).Distinct().ToArray();
+        Dictionary<long, int> tickRates = await db.GenerationDemos
+            .Where(value => value.GenerationId == generation.Id && demoIds.Contains(value.Id))
+            .ToDictionaryAsync(
+                value => value.Id,
+                value => value.TickRate ?? 64,
+                cancellationToken);
+        GenerationEffectPlan[] existing = await db.GenerationEffectPlans
+            .Where(value => value.GenerationId == generation.Id)
+            .ToArrayAsync(cancellationToken);
+        Dictionary<long, GenerationEffectPlan> existingByHighlight =
+            existing.ToDictionary(value => value.GenerationHighlightId);
+        List<HighlightEffectPlan> result = new(selected.Length);
+        foreach (GlobalHighlightCandidate candidate in selected)
+        {
+            GenerationHighlight highlight = await db.GenerationHighlights.SingleAsync(
+                value =>
+                    value.GenerationId == generation.Id &&
+                    value.GenerationDemoId == candidate.SourceDemoId &&
+                    value.HighlightId == candidate.Highlight.Id,
+                cancellationToken);
+            if (existingByHighlight.TryGetValue(highlight.Id, out GenerationEffectPlan? stored))
+            {
+                HighlightEffectPlan? saved =
+                    JsonSerializer.Deserialize<HighlightEffectPlan>(
+                        stored.EffectPlanJson,
+                        JsonOptions);
+                result.Add(saved ?? effectPlanner.Build(
+                    highlight,
+                    tickRates.GetValueOrDefault(candidate.SourceDemoId, 64),
+                    stored.Preset));
+                continue;
+            }
+
+            HighlightEffectPlan plan = effectPlanner.Build(
+                highlight,
+                tickRates.GetValueOrDefault(candidate.SourceDemoId, 64),
+                preset);
+            db.GenerationEffectPlans.Add(new GenerationEffectPlan
+            {
+                GenerationId = generation.Id,
+                GenerationHighlightId = highlight.Id,
+                Preset = preset,
+                TimelineJson = JsonSerializer.Serialize(plan.Events, JsonOptions),
+                EffectPlanJson = JsonSerializer.Serialize(plan, JsonOptions),
+                CreatedAt = timeProvider.GetUtcNow()
+            });
+            result.Add(plan);
+        }
+        await db.SaveChangesAsync(cancellationToken);
+        return result;
     }
 
     private async Task PersistSelectionAndPlanAsync(
@@ -439,7 +561,7 @@ public sealed class GenerationWorker(
         {
             var plan = new
             {
-                schemaVersion = "1.0",
+                schemaVersion = "1.1",
                 generationId = generation.PublicId,
                 selectedSteamId = generation.SelectedSteamId,
                 price = new { amountMinor = generation.PriceAmountMinor, currency = generation.PriceCurrency },
@@ -450,7 +572,9 @@ public sealed class GenerationWorker(
                     generation.Width,
                     generation.Height,
                     generation.Fps,
-                    order = generation.OutputOrder
+                    order = generation.OutputOrder,
+                    generation.EffectPreset,
+                    generation.EstimatedDurationMilliseconds
                 },
                 sourceDemos = generation.Demos.OrderBy(value => value.UploadOrder).Select(value =>
                     new { demoId = value.Id, fileName = value.OriginalFileName, value.Sha256 }),
@@ -461,8 +585,12 @@ public sealed class GenerationWorker(
                     highlightId = value.Highlight.Id,
                     type = value.Highlight.Type,
                     score = value.Highlight.Score,
+                    combatScore = value.Highlight.CombatScore,
+                    beautyScore = value.Highlight.BeautyScore,
                     startTick = value.Highlight.StartTick,
-                    endTick = value.Highlight.EndTick
+                    endTick = value.Highlight.EndTick,
+                    weaponSequence = value.Highlight.WeaponSequence,
+                    tags = value.Highlight.Tags
                 })
             };
             await File.WriteAllTextAsync(
@@ -506,6 +634,14 @@ public sealed class GenerationWorker(
         GenerationStateMachine.Transition(generation, status, now);
         generation.ProgressPercent = 100;
         generation.GenerationCompletedAt = now;
+        db.GenerationEvents.Add(new GenerationEvent
+        {
+            GenerationId = generation.Id,
+            Stage = status.ToString(),
+            Message = "Completed",
+            ProgressPercent = 100,
+            CreatedAt = now
+        });
         GenerationArtifact artifact = new()
         {
             GenerationId = generation.Id,
@@ -530,7 +666,7 @@ public sealed class GenerationWorker(
             reportPath,
             JsonSerializer.Serialize(new
             {
-                schemaVersion = "1.0",
+                schemaVersion = "1.1",
                 generationId = publicId,
                 paymentId = generation.PaymentId,
                 price = new { amountMinor = 100, currency = "USD" },
@@ -639,8 +775,23 @@ public sealed class GenerationWorker(
         await PublishAsync(publicId, GenerationStatus.Cancelled, generation.ProgressPercent, "Cancelled", cancellationToken);
     }
 
-    private static HighlightCandidate ToCandidate(GenerationHighlight value, string? playerName) =>
-        new(
+    private static HighlightCandidate ToCandidate(
+        GenerationHighlight value,
+        string? playerName)
+    {
+        double total = value.TotalScore != 0 ? value.TotalScore : value.Score;
+        ScoreBreakdown breakdown = DeserializeJson(
+            value.ScoreBreakdownJson,
+            new ScoreBreakdown(total, 0, 0, 0, 0, 0, total)
+            {
+                CombatScore = value.CombatScore != 0 ? value.CombatScore : total,
+                BeautyScore = value.BeautyScore
+            });
+        KillDescriptor[] kills = DeserializeJson<KillDescriptor[]>(value.KillsJson, []);
+        WeaponSequenceSegment[] sequence = DeserializeJson<WeaponSequenceSegment[]>(
+            value.WeaponSequenceJson, []);
+        string[] tags = DeserializeJson<string[]>(value.TagsJson, []);
+        return new HighlightCandidate(
             value.HighlightId,
             Enum.Parse<HighlightType>(value.Type),
             value.SteamId,
@@ -652,10 +803,31 @@ public sealed class GenerationWorker(
             value.EndTick,
             value.KillCount,
             value.HeadshotCount,
-            value.Score,
-            new ScoreBreakdown(value.Score, 0, 0, 0, 0, 0, value.Score),
-            [],
-            []);
+            total,
+            breakdown,
+            kills.Select(item => item.EventIndex).ToArray(),
+            tags)
+        {
+            MapName = value.MapName,
+            CombatScore = value.CombatScore != 0 ? value.CombatScore : total,
+            BeautyScore = value.BeautyScore,
+            Kills = kills,
+            WeaponSequence = sequence,
+            EstimatedDurationMilliseconds = value.EstimatedDurationMilliseconds
+        };
+    }
+
+    private static T DeserializeJson<T>(string json, T fallback)
+    {
+        try
+        {
+            return JsonSerializer.Deserialize<T>(json, JsonOptions) ?? fallback;
+        }
+        catch (JsonException)
+        {
+            return fallback;
+        }
+    }
 
     private static async Task<T> ReadJsonAsync<T>(string path, CancellationToken cancellationToken)
     {

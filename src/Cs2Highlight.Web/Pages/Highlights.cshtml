@@ -1,0 +1,125 @@
+@page "/generations/{publicId}/highlights"
+@model HighlightsModel
+@using Cs2Highlight.Analysis
+@{
+  ViewData["Title"] = "Выбор моментов";
+  string[] categories = ["All", "SoloKill", "DoubleKill", "TripleKill", "QuadKill", "Ace", "Recommended"];
+}
+<section class="catalog"
+         data-highlight-catalog
+         data-maximum="@Model.Generation.MaximumHighlights">
+  <header class="catalog-header">
+    <div>
+      <h1>Выберите моменты</h1>
+      <p class="muted">@Model.Generation.SelectedPlayerName · до оплаты</p>
+    </div>
+    <div class="selection-summary">
+      <strong><span id="selected-count">0</span> выбрано</strong>
+      <span>≈ <span id="selected-duration">0:00</span></span>
+    </div>
+  </header>
+  <div asp-validation-summary="All" class="error"></div>
+  <div class="filters" role="tablist">
+    @foreach (string category in categories)
+    {
+      int count = category switch
+      {
+        "All" => Model.Cards.Count,
+        "Recommended" => Model.Cards.Count(value => value.Recommended),
+        _ => Model.Cards.Count(value => value.Type == category)
+      };
+      <button type="button" class="filter" data-filter="@category">
+        @(category == "All" ? "Все" : category == "Recommended" ? "Рекомендованные" : category.Replace("Kill", ""))
+        <span>@count</span>
+      </button>
+    }
+  </div>
+  <div class="catalog-actions">
+    <button type="button" data-select="recommended">Выбрать рекомендованные</button>
+    <button type="button" data-select="top3">Top 3</button>
+    <button type="button" data-select="top5">Top 5</button>
+    <button type="button" data-select="top10">Top 10</button>
+    <button type="button" data-select="visible">Выбрать видимые</button>
+    <button type="button" data-select="clear-visible">Снять видимые</button>
+    <button type="button" data-select="none">Снять всё</button>
+    <label>
+      Демо
+      <select id="demo-filter">
+        <option value="All">Все</option>
+        @foreach (string demo in Model.Cards
+          .Select(value => value.DemoFileName)
+          .Distinct(StringComparer.Ordinal)
+          .OrderBy(value => value, StringComparer.Ordinal))
+        {
+          <option value="@demo">@demo</option>
+        }
+      </select>
+    </label>
+    <label>
+      Сортировка
+      <select id="catalog-sort">
+        <option value="score">По score</option>
+        <option value="round">По раунду</option>
+        <option value="chronological">Хронологически</option>
+      </select>
+    </label>
+  </div>
+  <form method="post" asp-antiforgery="true" id="selection-form">
+    <div class="highlight-grid">
+      @foreach (HighlightCard card in Model.Cards)
+      {
+        <article class="highlight-card"
+                 data-type="@card.Type"
+                 data-recommended="@card.Recommended.ToString().ToLowerInvariant()"
+                 data-score="@card.TotalScore.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+                 data-duration="@card.DurationMilliseconds"
+                 data-demo="@card.DemoFileName"
+                 data-round="@card.RoundNumber"
+                 data-tick="@card.FirstKillTick">
+          <label class="highlight-select">
+            <input type="checkbox" name="HighlightIds" value="@card.Id" />
+            <span>@card.Type.Replace("Kill", " Kill")</span>
+          </label>
+          @if (card.Recommended) { <span class="recommended">Recommended</span> }
+          <p>Round @card.RoundNumber · @card.MapName · @card.DemoFileName</p>
+          <p><strong>Score: @card.TotalScore.ToString("0.#")</strong> · Beauty: @card.BeautyScore.ToString("0.#") · @TimeSpan.FromMilliseconds(card.DurationMilliseconds).TotalSeconds.ToString("0.0") sec</p>
+          <div class="weapon-sequence">
+            @foreach (WeaponSequenceSegment weapon in card.Weapons)
+            {
+              @if (weapon.SwapBefore) { <span class="swap">→ swap →</span> }
+              <span class="weapon">
+                <img src="@weapon.IconPath" alt="" width="42" height="20" />
+                @weapon.DisplayName@if (weapon.KillCount > 1) { <text> ×@weapon.KillCount</text> }
+              </span>
+            }
+          </div>
+          <p>Убийств: @card.KillCount · Headshot: @card.HeadshotCount</p>
+          <div class="tags">
+            @foreach (string tag in card.Tags) { <span>@tag.Replace('_', ' ')</span> }
+          </div>
+          <details class="score-explanation">
+            <summary>Почему такой score</summary>
+            <p>Combat: @card.ScoreBreakdown.CombatScore.ToString("0.#") · Beauty: @card.ScoreBreakdown.BeautyScore.ToString("0.#")</p>
+            <ul>
+              @if (card.ScoreBreakdown.HeadshotBonus != 0) { <li>Headshot: +@card.ScoreBreakdown.HeadshotBonus</li> }
+              @if (card.ScoreBreakdown.WallbangBonus != 0) { <li>Wallbang: +@card.ScoreBreakdown.WallbangBonus</li> }
+              @if (card.ScoreBreakdown.OneTapBonus != 0) { <li>One-tap: +@card.ScoreBreakdown.OneTapBonus</li> }
+              @if (card.ScoreBreakdown.WeaponSwapBonus != 0) { <li>Weapon swap: +@card.ScoreBreakdown.WeaponSwapBonus</li> }
+              @if (card.ScoreBreakdown.RoundWinBonus != 0) { <li>Round win: +@card.ScoreBreakdown.RoundWinBonus</li> }
+            </ul>
+          </details>
+        </article>
+      }
+    </div>
+    <fieldset>
+      <legend>Эффекты</legend>
+      <label><input asp-for="EffectPreset" type="radio" value="None" /> None</label>
+      <label><input asp-for="EffectPreset" type="radio" value="Clean" /> Clean</label>
+      <label><input asp-for="EffectPreset" type="radio" value="Dynamic" /> Dynamic</label>
+    </fieldset>
+    <button type="submit" class="button">Продолжить к оплате · $1.00</button>
+  </form>
+</section>
+@section Scripts {
+<script src="/js/highlight-catalog.js"></script>
+}

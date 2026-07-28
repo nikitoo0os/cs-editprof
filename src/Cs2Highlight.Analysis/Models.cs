@@ -42,15 +42,28 @@ public sealed record KillEvent(
     string Weapon,
     bool Headshot,
     string? KillerTeam,
-    string? VictimTeam);
+    string? VictimTeam)
+{
+    public bool? Wallbang { get; init; }
+    public bool? OneTap { get; init; }
+    public bool? NoScope { get; init; }
+    public bool? ThroughSmoke { get; init; }
+    public bool? RoundEndingKill { get; init; }
+    public bool? LastEnemyKill { get; init; }
+    public int? KillerHealth { get; init; }
+    public double? DistanceMeters { get; init; }
+    public int? ShotsSinceLastKill { get; init; }
+}
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum HighlightType
 {
+    SoloKill,
     DoubleKill,
     TripleKill,
     QuadKill,
     Ace,
+    [Obsolete("Headshot streak is represented as a tag on SoloKill or a multikill.")]
     HeadshotStreak
 }
 
@@ -61,7 +74,56 @@ public sealed record ScoreBreakdown(
     double FastSequenceBonus,
     double RoundWinBonus,
     double LastKillRoundEndBonus,
-    double Total);
+    double Total)
+{
+    public double BeautyBaseScore { get; init; }
+    public double WallbangBonus { get; init; }
+    public double OneTapBonus { get; init; }
+    public double KnifeBonus { get; init; }
+    public double ZeusBonus { get; init; }
+    public double NoScopeBonus { get; init; }
+    public double ThroughSmokeBonus { get; init; }
+    public double LowHealthBonus { get; init; }
+    public double LongDistanceBonus { get; init; }
+    public double LastEnemyBonus { get; init; }
+    public double WeaponSwapBonus { get; init; }
+    public double CombatScore { get; init; }
+    public double BeautyScore { get; init; }
+}
+
+public sealed record KillDescriptor(
+    int EventIndex,
+    long Tick,
+    string KillerPlayerId,
+    string VictimPlayerId,
+    string WeaponCode,
+    bool Headshot)
+{
+    public bool? Wallbang { get; init; }
+    public bool? OneTap { get; init; }
+    public bool? NoScope { get; init; }
+    public bool? ThroughSmoke { get; init; }
+    public bool RoundEndingKill { get; init; }
+    public bool LastEnemyKill { get; init; }
+    public int? KillerHealth { get; init; }
+    public double? DistanceMeters { get; init; }
+    public int? ShotsSinceLastKill { get; init; }
+}
+
+public enum WeaponCategory { Rifle, Sniper, Pistol, Smg, Heavy, Knife, Equipment, Unknown }
+
+public sealed record WeaponMetadata(
+    string Code,
+    string DisplayName,
+    string IconPath,
+    WeaponCategory Category);
+
+public sealed record WeaponSequenceSegment(
+    string WeaponCode,
+    string DisplayName,
+    string IconPath,
+    int KillCount,
+    bool SwapBefore);
 
 public sealed record HighlightCandidate(
     string Id,
@@ -78,7 +140,17 @@ public sealed record HighlightCandidate(
     double Score,
     ScoreBreakdown ScoreBreakdown,
     IReadOnlyList<int> SourceEventIndexes,
-    IReadOnlyList<string> Tags);
+    IReadOnlyList<string> Tags)
+{
+    public string SourceDemoId { get; init; } = string.Empty;
+    public string MapName { get; init; } = string.Empty;
+    public double CombatScore { get; init; } = Score;
+    public double BeautyScore { get; init; }
+    public double TotalScore => Score;
+    public IReadOnlyList<KillDescriptor> Kills { get; init; } = [];
+    public IReadOnlyList<WeaponSequenceSegment> WeaponSequence { get; init; } = [];
+    public long EstimatedDurationMilliseconds { get; init; }
+}
 
 public sealed class HighlightDetectionOptions
 {
@@ -87,10 +159,44 @@ public sealed class HighlightDetectionOptions
     public double MaximumSequenceDurationSeconds { get; init; } = 12;
     public double PreRollSeconds { get; init; } = 3;
     public double PostRollSeconds { get; init; } = 3;
+    public double RoundEndHoldSeconds { get; init; } = 2.5;
+    public double MinimumClipDurationSeconds { get; init; } = 6;
+    public double MaximumClipDurationSeconds { get; init; } = 25;
     public int MinimumKills { get; init; } = 2;
     public int MinimumHeadshotsForStreak { get; init; } = 2;
-    public bool ClampToRoundBounds { get; init; } = true;
+    // Legacy all-or-nothing switch retained for schema 1.0 callers.
+    public bool ClampToRoundBounds { get; init; }
+    public bool ClampStartToRoundBounds { get; init; } = true;
+    public bool ClampEndToRoundBounds { get; init; }
     public HighlightScoringOptions Scoring { get; init; } = new();
+    public SoloKillDetectionOptions SoloKills { get; init; } = new();
+    public BeautyScoringOptions BeautyScoring { get; init; } = new();
+}
+
+public sealed class SoloKillDetectionOptions
+{
+    public double MinimumBeautyScore { get; init; } = 20;
+    public bool IncludeAllSoloKills { get; init; }
+    public int MaximumSoloCandidatesPerDemo { get; init; } = 30;
+}
+
+public sealed class BeautyScoringOptions
+{
+    public double BaseKillScore { get; init; } = 5;
+    public double HeadshotBonus { get; init; } = 20;
+    public double WallbangBonus { get; init; } = 25;
+    public double OneTapBonus { get; init; } = 20;
+    public double KnifeBonus { get; init; } = 35;
+    public double ZeusBonus { get; init; } = 30;
+    public double NoScopeBonus { get; init; } = 25;
+    public double ThroughSmokeBonus { get; init; } = 20;
+    public double RoundEndingBonus { get; init; } = 10;
+    public double LastEnemyBonus { get; init; } = 10;
+    public double LowHealthBonus { get; init; } = 10;
+    public int LowHealthThreshold { get; init; } = 20;
+    public double LongDistanceBonus { get; init; } = 10;
+    public double LongDistanceThresholdMeters { get; init; } = 25;
+    public double WeaponSwapBonus { get; init; } = 5;
 }
 
 public sealed class HighlightScoringOptions
@@ -118,7 +224,12 @@ public sealed record HighlightOptionsDocument(
     string? TargetPlayerId,
     double MaximumGapBetweenKillsSeconds,
     double PreRollSeconds,
-    double PostRollSeconds);
+    double PostRollSeconds)
+{
+    public double RoundEndHoldSeconds { get; init; }
+    public double MinimumClipDurationSeconds { get; init; }
+    public double MaximumClipDurationSeconds { get; init; }
+}
 
 public sealed record BestHighlightDocument(
     string SchemaVersion,

@@ -40,6 +40,13 @@ public interface IDemoController
     Task QuitAsync(CancellationToken cancellationToken);
 }
 
+public interface ICaptureUiController
+{
+    Task ApplyAsync(
+        CaptureUiProfile profile,
+        CancellationToken cancellationToken);
+}
+
 public interface IRenderOutputWatcher
 {
     Task<(bool Success, string? File, long Size, string? Error)> VerifyAsync(

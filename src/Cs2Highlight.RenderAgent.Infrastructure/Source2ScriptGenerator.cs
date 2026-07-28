@@ -31,12 +31,24 @@ public sealed class Source2ScriptGenerator(RenderEnvironmentOptions options) : I
         cfg.AppendLine(
             CultureInfo.InvariantCulture,
             $"mirv_streams settings edit afxDefault settings {FfmpegPresetName}");
+        AppendCaptureUiProfile(cfg, job.CaptureUi);
         cfg.AppendLine(CultureInfo.InvariantCulture, $"playdemo \"{demo}\"");
         await File.WriteAllTextAsync(path, cfg.ToString(), new UTF8Encoding(false), cancellationToken);
         return new GeneratedRenderScript(path, job.Video.Width, job.Video.Height,
         [
             "POV selection and tick seeking are controlled through local CS2 NetCon and require installed-build E2E verification."
         ]);
+    }
+
+    internal static void AppendCaptureUiProfile(
+        StringBuilder cfg,
+        CaptureUiProfile profile)
+    {
+        cfg.AppendLine(
+            CultureInfo.InvariantCulture,
+            $"// Capture UI adapter: {CaptureUiProfileAdapter.TemplateVersion} ({profile}).");
+        foreach (string command in CaptureUiProfileAdapter.GetCommands(profile))
+            cfg.AppendLine(command);
     }
 
     public static string EscapeCfg(string value)

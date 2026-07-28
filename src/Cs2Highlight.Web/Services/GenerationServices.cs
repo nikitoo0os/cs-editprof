@@ -29,6 +29,7 @@ public sealed class PipelineOptions
         "src/Cs2Highlight.RenderAgent/bin/Release/net8.0/render-agent.exe";
     public string FfmpegPath { get; set; } = "ffmpeg.exe";
     public string FfprobePath { get; set; } = "ffprobe.exe";
+    public int FfmpegTimeoutSeconds { get; set; } = 600;
     public DemoFailurePolicy DemoFailurePolicy { get; set; } = DemoFailurePolicy.SkipInvalidDemo;
 }
 

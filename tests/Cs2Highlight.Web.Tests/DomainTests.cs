@@ -24,11 +24,21 @@ public sealed class DomainTests
         GenerationStateMachine.Transition(generation, GenerationStatus.Uploaded, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.QueuedForAnalysis, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.Analyzing, now);
+        GenerationStateMachine.Transition(
+            generation, GenerationStatus.BuildingHighlightCatalog, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.AwaitingPlayerSelection, now);
+        GenerationStateMachine.Transition(
+            generation, GenerationStatus.AwaitingHighlightSelection, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.AwaitingPayment, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.PaymentProcessing, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.Paid, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.QueuedForGeneration, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.PreparingRenderPlan, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.RenderingClips, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.ApplyingEffects, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.ComposingVideo, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.VerifyingOutput, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.Completed, now);
 
         Assert.Throws<InvalidOperationException>(() =>
             GenerationStateMachine.Transition(generation, GenerationStatus.AwaitingPlayerSelection, now));

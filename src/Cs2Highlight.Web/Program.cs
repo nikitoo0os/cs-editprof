@@ -1,4 +1,6 @@
 using System.Threading.RateLimiting;
+using System.Text.Json;
+using Cs2Highlight.Analysis;
 using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
 using Cs2Highlight.Web.Hubs;
@@ -22,10 +24,13 @@ UploadOptions uploadOptions = builder.Configuration.GetSection("Uploads").Get<Up
 StorageOptions storageOptions = builder.Configuration.GetSection("Storage").Get<StorageOptions>() ?? new();
 PipelineOptions pipelineOptions = builder.Configuration.GetSection("Pipeline").Get<PipelineOptions>() ?? new();
 RetentionOptions retentionOptions = builder.Configuration.GetSection("Retention").Get<RetentionOptions>() ?? new();
+RecommendedSelectionOptions selectionOptions =
+    builder.Configuration.GetSection("RecommendedSelection").Get<RecommendedSelectionOptions>() ?? new();
 builder.Services.AddSingleton(uploadOptions);
 builder.Services.AddSingleton(storageOptions);
 builder.Services.AddSingleton(pipelineOptions);
 builder.Services.AddSingleton(retentionOptions);
+builder.Services.AddSingleton(selectionOptions);
 builder.Services.Configure<FormOptions>(options =>
 {
     options.MultipartBodyLengthLimit = uploadOptions.MaximumTotalSizeBytes;
@@ -38,6 +43,10 @@ builder.Services.AddSingleton<DemoUploadService>();
 builder.Services.AddSingleton<GenerationWakeSignal>();
 builder.Services.AddSingleton<GenerationCancellationRegistry>();
 builder.Services.AddSingleton<GlobalHighlightSelector>();
+builder.Services.AddSingleton<Cs2Highlight.Analysis.IWeaponCatalog, Cs2Highlight.Analysis.WeaponCatalog>();
+builder.Services.AddScoped<HighlightSelectionService>();
+builder.Services.AddSingleton<IEffectPlanner, EffectPlanner>();
+builder.Services.AddSingleton<IEffectFilterGraphBuilder, FfmpegEffectFilterGraphBuilder>();
 builder.Services.AddSingleton<IHighlightCompilationService, FfmpegHighlightCompilationService>();
 builder.Services.AddSingleton<IPaymentProvider, TestPaymentProvider>();
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
@@ -86,6 +95,145 @@ app.MapRazorPages();
 app.MapHub<GenerationHub>("/hubs/generations");
 app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
 app.MapHealthChecks("/health/ready");
+app.MapGet("/api/generations/{publicId}", async (
+    string publicId,
+    IDbContextFactory<GenerationDbContext> factory,
+    CancellationToken cancellationToken) =>
+{
+    await using GenerationDbContext db =
+        await factory.CreateDbContextAsync(cancellationToken);
+    Generation? generation = await db.Generations.AsNoTracking()
+        .SingleOrDefaultAsync(
+            value => value.PublicId == publicId,
+            cancellationToken);
+    if (generation is null) return Results.NotFound();
+    int demoCount = await db.GenerationDemos.CountAsync(
+        value => value.GenerationId == generation.Id,
+        cancellationToken);
+    int playerCount = await db.GenerationPlayers.CountAsync(
+        value => value.GenerationId == generation.Id,
+        cancellationToken);
+    int highlightCount = await db.GenerationHighlights.CountAsync(
+        value => value.GenerationId == generation.Id,
+        cancellationToken);
+    var events = await db.GenerationEvents.AsNoTracking()
+        .Where(value => value.GenerationId == generation.Id)
+        .OrderByDescending(value => value.Id)
+        .Take(8)
+        .OrderBy(value => value.Id)
+        .Select(value => new
+        {
+            value.Id,
+            value.Stage,
+            value.Message,
+            value.ProgressPercent,
+            value.CreatedAt
+        })
+        .ToArrayAsync(cancellationToken);
+    bool completed = generation.Status is
+        GenerationStatus.Completed or GenerationStatus.CompletedWithWarnings;
+    string? actionUrl = generation.Status switch
+    {
+        GenerationStatus.AwaitingPlayerSelection =>
+            $"/generations/{publicId}/player",
+        GenerationStatus.AwaitingHighlightSelection =>
+            $"/generations/{publicId}/highlights",
+        _ => null
+    };
+    return Results.Ok(new
+    {
+        publicId,
+        status = generation.Status.ToString(),
+        stage = generation.CurrentStage,
+        generation.ProgressPercent,
+        demoCount,
+        playerCount,
+        highlightCount,
+        generation.ErrorCode,
+        generation.ErrorMessage,
+        completed,
+        actionUrl,
+        videoUrl = completed ? $"/generations/{publicId}/video" : null,
+        events
+    });
+});
+app.MapGet("/api/generations/{publicId}/highlights", async (
+    string publicId,
+    IDbContextFactory<GenerationDbContext> factory,
+    IWeaponCatalog weaponCatalog,
+    CancellationToken cancellationToken) =>
+{
+    await using GenerationDbContext db =
+        await factory.CreateDbContextAsync(cancellationToken);
+    long? generationId = await db.Generations
+        .Where(value => value.PublicId == publicId)
+        .Select(value => (long?)value.Id)
+        .SingleOrDefaultAsync(cancellationToken);
+    if (generationId is null) return Results.NotFound();
+    GenerationHighlight[] highlights = await db.GenerationHighlights.AsNoTracking()
+        .Where(value => value.GenerationId == generationId.Value)
+        .OrderByDescending(value => value.TotalScore)
+        .ThenBy(value => value.HighlightId)
+        .ToArrayAsync(cancellationToken);
+    JsonSerializerOptions jsonOptions = new(JsonSerializerDefaults.Web);
+    return Results.Ok(highlights.Select(value => new
+    {
+        id = value.HighlightId,
+        value.Type,
+        value.RoundNumber,
+        value.MapName,
+        value.KillCount,
+        value.HeadshotCount,
+        value.CombatScore,
+        value.BeautyScore,
+        value.TotalScore,
+        value.Recommended,
+        value.SelectedByUser,
+        value.EstimatedDurationMilliseconds,
+        weapons = DeserializeWeapons(value.WeaponSequenceJson, jsonOptions)
+            .Select(segment =>
+            {
+                WeaponMetadata trusted = weaponCatalog.Resolve(segment.WeaponCode);
+                return new
+                {
+                    trusted.Code,
+                    trusted.DisplayName,
+                    trusted.IconPath,
+                    segment.KillCount,
+                    segment.SwapBefore
+                };
+            })
+    }));
+});
+app.MapGet("/api/generations/{publicId}/events", async (
+    string publicId,
+    long? after,
+    IDbContextFactory<GenerationDbContext> factory,
+    CancellationToken cancellationToken) =>
+{
+    await using GenerationDbContext db =
+        await factory.CreateDbContextAsync(cancellationToken);
+    bool exists = await db.Generations.AnyAsync(
+        value => value.PublicId == publicId, cancellationToken);
+    if (!exists) return Results.NotFound();
+    var events = await db.GenerationEvents.AsNoTracking()
+        .Where(value =>
+            value.Generation.PublicId == publicId &&
+            value.Id > (after ?? 0))
+        .OrderBy(value => value.Id)
+        .Take(100)
+        .Select(value => new
+        {
+            value.Id,
+            value.Level,
+            value.Stage,
+            value.Message,
+            value.ProgressPercent,
+            value.CreatedAt
+        })
+        .ToArrayAsync(cancellationToken);
+    return Results.Ok(events);
+});
 app.MapGet("/generations/{publicId}/video", async (
     string publicId,
     bool? download,
@@ -105,5 +253,19 @@ app.MapGet("/generations/{publicId}/video", async (
         enableRangeProcessing: true);
 });
 app.Run();
+
+static WeaponSequenceSegment[] DeserializeWeapons(
+    string json,
+    JsonSerializerOptions options)
+{
+    try
+    {
+        return JsonSerializer.Deserialize<WeaponSequenceSegment[]>(json, options) ?? [];
+    }
+    catch (JsonException)
+    {
+        return [];
+    }
+}
 
 public partial class Program;

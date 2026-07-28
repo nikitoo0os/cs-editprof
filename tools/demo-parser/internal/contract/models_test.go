@@ -28,3 +28,28 @@ func TestNilSteamIDSerializesExplicitly(t *testing.T) {
 		t.Fatalf("nil SteamID was not explicit: %s", data)
 	}
 }
+
+func TestUnavailableKillSignalsAreSerializedAsNull(t *testing.T) {
+	value, err := json.Marshal(Kill{
+		EventIndex:     1,
+		Tick:           100,
+		RoundNumber:    1,
+		VictimPlayerID: "victim",
+		VictimName:     "Victim",
+		Weapon:         "unknown",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(value)
+	for _, field := range []string{
+		`"oneTap":null`,
+		`"lastEnemyKill":null`,
+		`"killerHealth":null`,
+		`"distanceMeters":null`,
+	} {
+		if !strings.Contains(text, field) {
+			t.Fatalf("expected %s in %s", field, text)
+		}
+	}
+}

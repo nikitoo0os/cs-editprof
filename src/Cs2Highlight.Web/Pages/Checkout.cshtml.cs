@@ -12,6 +12,9 @@ public sealed class CheckoutModel(
     PaymentService payments) : PageModel
 {
     public Generation Generation { get; private set; } = null!;
+    public int DemoCount { get; private set; }
+    public int SelectedCount { get; private set; }
+    public IReadOnlyList<string> Categories { get; private set; } = [];
 
     public async Task<IActionResult> OnGetAsync(string publicId, CancellationToken cancellationToken)
     {
@@ -19,7 +22,25 @@ public sealed class CheckoutModel(
         Generation? generation = await db.Generations.AsNoTracking()
             .SingleOrDefaultAsync(value => value.PublicId == publicId, cancellationToken);
         if (generation is null) return NotFound();
+        if (generation.Status != GenerationStatus.AwaitingPayment)
+            return RedirectToPage("/Generation", new { publicId });
         Generation = generation;
+        DemoCount = await db.GenerationDemos.CountAsync(
+            value => value.GenerationId == generation.Id,
+            cancellationToken);
+        Categories = await db.GenerationHighlights.AsNoTracking()
+            .Where(value =>
+                value.GenerationId == generation.Id &&
+                value.SelectedByUser)
+            .Select(value => value.Type)
+            .Distinct()
+            .OrderBy(value => value)
+            .ToArrayAsync(cancellationToken);
+        SelectedCount = await db.GenerationHighlights.CountAsync(
+            value =>
+                value.GenerationId == generation.Id &&
+                value.SelectedByUser,
+            cancellationToken);
         return Page();
     }
 

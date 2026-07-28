@@ -36,6 +36,10 @@ namespace Cs2Highlight.Web.Data.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("EffectPreset")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("ErrorCode")
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
@@ -43,6 +47,9 @@ namespace Cs2Highlight.Web.Data.Migrations
                     b.Property<string>("ErrorMessage")
                         .HasMaxLength(1024)
                         .HasColumnType("TEXT");
+
+                    b.Property<long>("EstimatedDurationMilliseconds")
+                        .HasColumnType("INTEGER");
 
                     b.Property<long?>("FinalVideoArtifactId")
                         .HasColumnType("INTEGER");
@@ -238,6 +245,43 @@ namespace Cs2Highlight.Web.Data.Migrations
                     b.ToTable("GenerationDemos");
                 });
 
+            modelBuilder.Entity("Cs2Highlight.Web.Domain.GenerationEffectPlan", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("EffectPlanJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("GenerationHighlightId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("GenerationId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Preset")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TimelineJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GenerationHighlightId");
+
+                    b.HasIndex("GenerationId", "GenerationHighlightId")
+                        .IsUnique();
+
+                    b.ToTable("GenerationEffectPlans");
+                });
+
             modelBuilder.Entity("Cs2Highlight.Web.Domain.GenerationEvent", b =>
                 {
                     b.Property<long>("Id")
@@ -281,10 +325,22 @@ namespace Cs2Highlight.Web.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<double>("BeautyScore")
+                        .HasColumnType("REAL");
+
+                    b.Property<double>("CombatScore")
+                        .HasColumnType("REAL");
+
                     b.Property<int?>("CompilationOrder")
                         .HasColumnType("INTEGER");
 
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<long>("EndTick")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("EstimatedDurationMilliseconds")
                         .HasColumnType("INTEGER");
 
                     b.Property<long>("FirstKillTick")
@@ -307,7 +363,19 @@ namespace Cs2Highlight.Web.Data.Migrations
                     b.Property<int>("KillCount")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("KillsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.Property<long>("LastKillTick")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("MapName")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("Recommended")
                         .HasColumnType("INTEGER");
 
                     b.Property<int>("RoundNumber")
@@ -316,7 +384,17 @@ namespace Cs2Highlight.Web.Data.Migrations
                     b.Property<double>("Score")
                         .HasColumnType("REAL");
 
+                    b.Property<string>("ScoreBreakdownJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("SelectedByUser")
+                        .HasColumnType("INTEGER");
+
                     b.Property<bool>("SelectedForCompilation")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("SelectionOrder")
                         .HasColumnType("INTEGER");
 
                     b.Property<long>("StartTick")
@@ -327,9 +405,20 @@ namespace Cs2Highlight.Web.Data.Migrations
                         .HasMaxLength(17)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("TagsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<double>("TotalScore")
+                        .HasColumnType("REAL");
+
                     b.Property<string>("Type")
                         .IsRequired()
                         .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("WeaponSequenceJson")
+                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.HasKey("Id");
@@ -463,6 +552,25 @@ namespace Cs2Highlight.Web.Data.Migrations
                     b.Navigation("Generation");
                 });
 
+            modelBuilder.Entity("Cs2Highlight.Web.Domain.GenerationEffectPlan", b =>
+                {
+                    b.HasOne("Cs2Highlight.Web.Domain.GenerationHighlight", "Highlight")
+                        .WithMany()
+                        .HasForeignKey("GenerationHighlightId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Cs2Highlight.Web.Domain.Generation", "Generation")
+                        .WithMany("EffectPlans")
+                        .HasForeignKey("GenerationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Generation");
+
+                    b.Navigation("Highlight");
+                });
+
             modelBuilder.Entity("Cs2Highlight.Web.Domain.GenerationEvent", b =>
                 {
                     b.HasOne("Cs2Highlight.Web.Domain.Generation", "Generation")
@@ -512,6 +620,8 @@ namespace Cs2Highlight.Web.Data.Migrations
                     b.Navigation("Artifacts");
 
                     b.Navigation("Demos");
+
+                    b.Navigation("EffectPlans");
 
                     b.Navigation("Events");
 

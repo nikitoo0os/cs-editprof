@@ -24,6 +24,7 @@ public sealed class NetConsoleDemoController(
             Path.Combine(workspace.Logs, "netcon.log"),
             TimeSpan.FromSeconds(options.ProcessStartupTimeoutSeconds),
             cancellationToken);
+        ICaptureUiController captureUi = new NetConCaptureUiController(connection);
 
         await stateJournal.WriteAsync(
             workspace,
@@ -34,6 +35,7 @@ public sealed class NetConsoleDemoController(
             DemoReadyMarker,
             TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
             cancellationToken);
+        await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
 
         await stateJournal.WriteAsync(
             workspace,
@@ -49,6 +51,7 @@ public sealed class NetConsoleDemoController(
             TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
             cancellationToken);
         await connection.SendAsync("demo_pause", cancellationToken);
+        await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
 
         ulong steamId64 = GetSteamId64(job.Player);
         await stateJournal.WriteAsync(
@@ -70,6 +73,24 @@ public sealed class NetConsoleDemoController(
             cancellationToken);
         await stateJournal.WriteAsync(
             workspace,
+            RenderState.ApplyingCaptureProfile,
+            $"Applying {job.CaptureUi} UI profile ({CaptureUiProfileAdapter.TemplateVersion}).",
+            cancellationToken);
+        await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
+        await stateJournal.WriteAsync(
+            workspace,
+            RenderState.VerifyingCaptureProfile,
+            "Capture profile commands applied; stabilizing before recording.",
+            cancellationToken);
+        const string captureMarker = "AFX_RENDER_CAPTURE_PROFILE_APPLIED";
+        await connection.SendAsync($"echo {captureMarker}", cancellationToken);
+        await connection.WaitForAsync(
+            captureMarker,
+            TimeSpan.FromSeconds(5),
+            cancellationToken);
+        await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken);
+        await stateJournal.WriteAsync(
+            workspace,
             RenderState.Recording,
             $"Starting recording through tick {job.Segment.EndTick}.",
             cancellationToken);
@@ -86,6 +107,18 @@ public sealed class NetConsoleDemoController(
             RenderState.StoppingRecording,
             $"Recording stopped at tick {job.Segment.EndTick}.",
             cancellationToken);
+    }
+
+    private sealed class NetConCaptureUiController(
+        NetConsoleConnection connection) : ICaptureUiController
+    {
+        public async Task ApplyAsync(
+            CaptureUiProfile profile,
+            CancellationToken cancellationToken)
+        {
+            foreach (string command in CaptureUiProfileAdapter.GetCommands(profile))
+                await connection.SendAsync(command, cancellationToken);
+        }
     }
 
     public async Task QuitAsync(CancellationToken cancellationToken)

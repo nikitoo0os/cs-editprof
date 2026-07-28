@@ -60,6 +60,8 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             command.StartsWith("spec_player ", StringComparison.Ordinal));
         Assert.Contains("mirv_streams record start", commands);
         Assert.Contains("demo_resume", commands);
+        Assert.Equal(3, commands.Count(command => command == "cl_drawhud 1"));
+        Assert.Equal(3, commands.Count(command => command == "hideconsole"));
         Assert.Contains(commands, command =>
             command.Contains("addAtTick 200", StringComparison.Ordinal) &&
             command.Contains("mirv_streams record end", StringComparison.Ordinal));
@@ -96,6 +98,10 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             if (command == "echo AFX_RENDER_POV_VERIFY_END")
             {
                 await writer.WriteLineAsync("AFX_RENDER_POV_VERIFY_END");
+            }
+            if (command == "echo AFX_RENDER_CAPTURE_PROFILE_APPLIED")
+            {
+                await writer.WriteLineAsync("AFX_RENDER_CAPTURE_PROFILE_APPLIED");
             }
             if (command == "demo_resume")
             {

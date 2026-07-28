@@ -47,7 +47,9 @@ public sealed class GenerationModel(
             or GenerationStatus.Cancelled or GenerationStatus.Failed or GenerationStatus.Expired)
             return StatusCode(StatusCodes.Status409Conflict);
         if (generation.Status is GenerationStatus.RenderingClips or GenerationStatus.ComposingVideo
-            or GenerationStatus.Analyzing or GenerationStatus.SelectingHighlights
+            or GenerationStatus.ApplyingEffects or GenerationStatus.Analyzing
+            or GenerationStatus.BuildingHighlightCatalog
+            or GenerationStatus.PreparingRenderPlan or GenerationStatus.SelectingHighlights
             or GenerationStatus.QueuedForGeneration)
         {
             GenerationStateMachine.Transition(

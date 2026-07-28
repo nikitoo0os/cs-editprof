@@ -80,17 +80,22 @@ public sealed partial class AnalysisPipeline(
 
         DateTimeOffset generatedAt = timeProvider.GetUtcNow();
         HighlightsDocument highlights = new(
-            "1.0",
+            "1.1",
             analysis.Demo.FileName,
             generatedAt,
             new HighlightOptionsDocument(
                 detectionOptions.TargetPlayerId,
                 detectionOptions.MaximumGapBetweenKillsSeconds,
                 detectionOptions.PreRollSeconds,
-                detectionOptions.PostRollSeconds),
+                detectionOptions.PostRollSeconds)
+            {
+                RoundEndHoldSeconds = detectionOptions.RoundEndHoldSeconds,
+                MinimumClipDurationSeconds = detectionOptions.MinimumClipDurationSeconds,
+                MaximumClipDurationSeconds = detectionOptions.MaximumClipDurationSeconds
+            },
             candidates);
         BestHighlightDocument bestDocument = new(
-            "1.0",
+            "1.1",
             best is not null,
             best,
             best is null ? "NO_HIGHLIGHTS_FOUND" : null);

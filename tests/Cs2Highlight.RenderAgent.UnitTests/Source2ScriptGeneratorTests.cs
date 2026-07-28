@@ -92,6 +92,15 @@ public sealed class Source2ScriptGeneratorTests
             Assert.DoesNotContain("demo_gototick", cfg);
             Assert.DoesNotContain("addAtTick", cfg);
             Assert.DoesNotContain("spec_player", cfg);
+            Assert.Contains("capture-clean.v1 (Gameplay)", cfg);
+            Assert.Contains("cl_drawhud 1", cfg);
+            Assert.Contains("cl_draw_only_deathnotices 0", cfg);
+            Assert.Contains("gameui_hide", cfg);
+            Assert.Contains("hideconsole", cfg);
+            Assert.DoesNotContain(job.Player.Name!, cfg);
+            Assert.True(
+                cfg.IndexOf("hideconsole", StringComparison.Ordinal) <
+                cfg.IndexOf("playdemo", StringComparison.Ordinal));
         }
         finally
         {

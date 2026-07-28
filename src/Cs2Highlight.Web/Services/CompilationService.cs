@@ -12,7 +12,8 @@ public sealed record CompilationRequest(
     int Width,
     int Height,
     int Fps,
-    int MinimumOutputBytes = 1024);
+    int MinimumOutputBytes = 1024,
+    IReadOnlyList<HighlightEffectPlan>? EffectPlans = null);
 public sealed record CompilationProgress(int Percent, string Stage);
 public sealed record CompilationVideo(int Width, int Height, int Fps, string Codec);
 public sealed record CompilationAudio(string? Codec, int? SampleRate);
@@ -36,7 +37,36 @@ public interface IHighlightCompilationService
         CancellationToken cancellationToken);
 }
 
-public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
+public sealed record VideoOutputOptions(int Width, int Height, int Fps);
+public sealed record FfmpegFilterGraph(string Video, string Audio);
+
+public interface IEffectFilterGraphBuilder
+{
+    FfmpegFilterGraph Build(
+        double durationSeconds,
+        HighlightEffectPlan? plan,
+        VideoOutputOptions output);
+}
+
+public sealed class FfmpegEffectFilterGraphBuilder : IEffectFilterGraphBuilder
+{
+    public FfmpegFilterGraph Build(
+        double durationSeconds,
+        HighlightEffectPlan? plan,
+        VideoOutputOptions output) =>
+        new(
+            FfmpegEffectFilterBuilder.Build(
+                output.Width,
+                output.Height,
+                output.Fps,
+                durationSeconds,
+                plan),
+            FfmpegEffectFilterBuilder.BuildAudio(durationSeconds, plan));
+}
+
+public sealed class FfmpegHighlightCompilationService(
+    PipelineOptions options,
+    IEffectFilterGraphBuilder filterGraphs)
     : IHighlightCompilationService
 {
     private static readonly Encoding Utf8WithoutBom = new UTF8Encoding(false);
@@ -82,27 +112,72 @@ public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
                 5 + (int)(60d * index / Math.Max(1, request.ClipPaths.Count)),
                 $"Normalizing clip {index + 1}/{request.ClipPaths.Count}"));
             string target = Path.Combine(normalizedDirectory, $"clip-{index + 1:D3}.mp4");
+            if (File.Exists(target))
+            {
+                MediaMetadata persisted = await ProbeAsync(target, cancellationToken);
+                if (persisted.Error is null &&
+                    persisted.HasVideo &&
+                    persisted.DurationSeconds > 0 &&
+                    persisted.Width == request.Width &&
+                    persisted.Height == request.Height)
+                {
+                    normalized.Add(target);
+                    continue;
+                }
+                File.Delete(target);
+            }
+            string temporaryTarget = Path.Combine(
+                normalizedDirectory,
+                $"clip-{index + 1:D3}.tmp.mp4");
+            if (File.Exists(temporaryTarget)) File.Delete(temporaryTarget);
             List<string> arguments = ["-y", "-hide_banner", "-loglevel", "error", "-i", input];
             if (!metadata.HasAudio)
             {
                 arguments.AddRange(
                     ["-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000"]);
             }
+            HighlightEffectPlan? effectPlan =
+                request.EffectPlans is not null && index < request.EffectPlans.Count
+                    ? request.EffectPlans[index]
+                    : null;
+            FfmpegFilterGraph graph = filterGraphs.Build(
+                metadata.DurationSeconds,
+                effectPlan,
+                new VideoOutputOptions(request.Width, request.Height, request.Fps));
             arguments.AddRange(
             [
                 "-map", "0:v:0",
                 "-map", metadata.HasAudio ? "0:a:0" : "1:a:0",
-                "-vf", $"scale={request.Width}:{request.Height}:force_original_aspect_ratio=decrease,pad={request.Width}:{request.Height}:(ow-iw)/2:(oh-ih)/2,fps={request.Fps},format=yuv420p",
+                "-vf", graph.Video,
+                "-af", graph.Audio,
                 "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                 "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
-                "-shortest", "-movflags", "+faststart", target
+                "-shortest", "-movflags", "+faststart", temporaryTarget
             ]);
             ProcessResult normalization = await RunAsync(options.FfmpegPath, arguments, cancellationToken);
-            if (normalization.ExitCode != 0 || !File.Exists(target))
+            await WriteProcessLogAsync(
+                Path.Combine(normalizedDirectory, $"clip-{index + 1:D3}.ffmpeg.log"),
+                normalization,
+                cancellationToken);
+            if (normalization.ExitCode != 0 || !File.Exists(temporaryTarget))
             {
+                if (File.Exists(temporaryTarget)) File.Delete(temporaryTarget);
                 skipped++;
                 continue;
             }
+            MediaMetadata normalizedMetadata =
+                await ProbeAsync(temporaryTarget, cancellationToken);
+            if (normalizedMetadata.Error is not null ||
+                !normalizedMetadata.HasVideo ||
+                normalizedMetadata.DurationSeconds <= 0 ||
+                normalizedMetadata.Width != request.Width ||
+                normalizedMetadata.Height != request.Height)
+            {
+                File.Delete(temporaryTarget);
+                skipped++;
+                continue;
+            }
+            File.Move(temporaryTarget, target, true);
             normalized.Add(target);
         }
         if (normalized.Count == 0)
@@ -128,8 +203,15 @@ public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
             ["-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0",
              "-i", concatFile, "-c", "copy", "-movflags", "+faststart", temporary],
             cancellationToken);
+        await WriteProcessLogAsync(
+            Path.Combine(outputDirectory, "composition.ffmpeg.log"),
+            composition,
+            cancellationToken);
         if (composition.ExitCode != 0)
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
             return Failure($"COMPILATION_FAILED: {composition.Error}", request.ClipPaths.Count, skipped, watch.ElapsedMilliseconds);
+        }
         progress?.Report(new CompilationProgress(95, "Verifying final video"));
         MediaMetadata finalMetadata = await ProbeAsync(temporary, cancellationToken);
         FileInfo file = new(temporary);
@@ -139,7 +221,7 @@ public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
             return Failure("FINAL_VIDEO_INVALID", request.ClipPaths.Count, skipped, watch.ElapsedMilliseconds);
         File.Move(temporary, final, true);
         CompilationResult result = new(
-            "1.0", true, final, normalized.Count, skipped, watch.ElapsedMilliseconds,
+            "1.1", true, final, normalized.Count, skipped, watch.ElapsedMilliseconds,
             new FileInfo(final).Length,
             new CompilationVideo(request.Width, request.Height, request.Fps, finalMetadata.VideoCodec ?? "h264"),
             new CompilationAudio(finalMetadata.AudioCodec, finalMetadata.AudioSampleRate),
@@ -195,7 +277,7 @@ public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
         };
     }
 
-    private static async Task<ProcessResult> RunAsync(
+    private async Task<ProcessResult> RunAsync(
         string executable,
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
@@ -219,16 +301,37 @@ public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
         {
             return new ProcessResult(-1, string.Empty, exception.Message);
         }
-        Task<string> output = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        Task<string> error = process.StandardError.ReadToEndAsync(cancellationToken);
-        try { await process.WaitForExitAsync(cancellationToken); }
+        using CancellationTokenSource timeout =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(
+            Math.Max(1, options.FfmpegTimeoutSeconds)));
+        Task<string> output = process.StandardOutput.ReadToEndAsync(timeout.Token);
+        Task<string> error = process.StandardError.ReadToEndAsync(timeout.Token);
+        try { await process.WaitForExitAsync(timeout.Token); }
         catch (OperationCanceledException)
         {
             if (!process.HasExited) process.Kill(true);
+            if (!cancellationToken.IsCancellationRequested)
+                return new ProcessResult(
+                    -1,
+                    string.Empty,
+                    $"Process timed out after {options.FfmpegTimeoutSeconds} seconds.");
             throw;
         }
         return new ProcessResult(process.ExitCode, await output, await error);
     }
+
+    private static Task WriteProcessLogAsync(
+        string path,
+        ProcessResult result,
+        CancellationToken cancellationToken) =>
+        File.WriteAllTextAsync(
+            path,
+            $"exitCode={result.ExitCode}{Environment.NewLine}" +
+            $"stdout:{Environment.NewLine}{result.Output}{Environment.NewLine}" +
+            $"stderr:{Environment.NewLine}{result.Error}",
+            Utf8WithoutBom,
+            cancellationToken);
 
     private static string ResolveExecutable(string configured)
     {
@@ -244,7 +347,7 @@ public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
     }
 
     private static CompilationResult Failure(string error, int total, int skipped, long duration) =>
-        new("1.0", false, null, 0, Math.Max(skipped, total), duration, 0, null, null, error);
+        new("1.1", false, null, 0, Math.Max(skipped, total), duration, 0, null, null, error);
 
     private sealed record ProcessResult(int ExitCode, string Output, string Error);
     private sealed class MediaMetadata
@@ -258,5 +361,98 @@ public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
         public string? AudioCodec { get; init; }
         public int? AudioSampleRate { get; init; }
         public string? Error { get; init; }
+    }
+}
+
+public static class FfmpegEffectFilterBuilder
+{
+    public static string Build(
+        int width,
+        int height,
+        int fps,
+        double durationSeconds,
+        HighlightEffectPlan? plan)
+    {
+        List<string> filters =
+        [
+            $"scale={width}:{height}:force_original_aspect_ratio=decrease",
+            $"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
+            $"fps={fps}"
+        ];
+        if (plan?.Preset is Domain.EffectPreset.Clean or Domain.EffectPreset.Dynamic)
+        {
+            filters.Add("eq=saturation=1.02:contrast=1.01");
+            filters.Add("fade=t=in:st=0:d=0.15");
+            filters.Add(FormattableString.Invariant(
+                $"fade=t=out:st={Math.Max(0, durationSeconds - 0.3):0.###}:d=0.3"));
+        }
+        if (plan?.Preset == Domain.EffectPreset.Dynamic)
+        {
+            EffectTimelineEvent[] zooms = plan.Events
+                .Where(value => value.Type == EffectType.SmoothZoom)
+                .ToArray();
+            if (zooms.Length > 0)
+            {
+                string activity = zooms
+                    .Select(value => Pulse(value))
+                    .Aggregate((left, right) => $"max({left}\\,{right})");
+                double intensity = zooms.Max(value => value.Intensity);
+                string factor = FormattableString.Invariant($"1+{intensity:0.####}*{activity}");
+                filters.Add($"scale=w='{width}*({factor})':h='{height}*({factor})':eval=frame");
+                filters.Add($"crop={width}:{height}:(iw-ow)/2:(ih-oh)/2");
+            }
+            foreach (EffectTimelineEvent flash in plan.Events.Where(value =>
+                         value.Type == EffectType.HeadshotFlash))
+            {
+                filters.Add(FormattableString.Invariant(
+                    $"eq=brightness={flash.Intensity:0.####}:enable='{Between(flash)}'"));
+            }
+            foreach (EffectTimelineEvent vignette in plan.Events.Where(value =>
+                         value.Type == EffectType.VignettePulse))
+            {
+                filters.Add(
+                    $"vignette=PI/12:eval=frame:enable='{Between(vignette)}'");
+            }
+        }
+        filters.Add("format=yuv420p");
+        return string.Join(',', filters);
+    }
+
+    public static string BuildAudio(
+        double durationSeconds,
+        HighlightEffectPlan? plan)
+    {
+        List<string> filters = ["aresample=48000"];
+        if (plan?.Preset is Domain.EffectPreset.Clean or Domain.EffectPreset.Dynamic)
+        {
+            filters.Add("loudnorm=I=-16:TP=-1.5:LRA=11");
+            filters.Add("afade=t=in:st=0:d=0.15");
+            filters.Add(FormattableString.Invariant(
+                $"afade=t=out:st={Math.Max(0, durationSeconds - 0.3):0.###}:d=0.3"));
+        }
+        return string.Join(',', filters);
+    }
+
+    private static string Between(EffectTimelineEvent value)
+    {
+        double start = value.StartMilliseconds / 1000d;
+        double end = (value.StartMilliseconds + value.DurationMilliseconds) / 1000d;
+        return FormattableString.Invariant($"between(t\\,{start:0.###}\\,{end:0.###})");
+    }
+
+    private static string Pulse(EffectTimelineEvent value)
+    {
+        double start = value.StartMilliseconds / 1000d;
+        double duration = Math.Max(0.001, value.DurationMilliseconds / 1000d);
+        double end = start + duration;
+        double rise = value.PeakOffsetMilliseconds > 0
+            ? Math.Min(duration, value.PeakOffsetMilliseconds / 1000d)
+            : duration / 2;
+        rise = Math.Max(0.001, rise);
+        double fall = Math.Max(0.001, duration - rise);
+        double peak = start + rise;
+        return string.Create(
+            CultureInfo.InvariantCulture,
+            $"if(between(t\\,{start:0.###}\\,{end:0.###})\\,if(lt(t\\,{peak:0.###})\\,(t-{start:0.###})/{rise:0.###}\\,({end:0.###}-t)/{fall:0.###})\\,0)");
     }
 }

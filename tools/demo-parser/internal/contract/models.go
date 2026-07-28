@@ -39,16 +39,25 @@ type Round struct {
 }
 
 type Kill struct {
-	EventIndex       int     `json:"eventIndex"`
-	Tick             int64   `json:"tick"`
-	RoundNumber      int     `json:"roundNumber"`
-	KillerPlayerID   *string `json:"killerPlayerId"`
-	KillerName       *string `json:"killerName"`
-	VictimPlayerID   string  `json:"victimPlayerId"`
-	VictimName       string  `json:"victimName"`
-	AssisterPlayerID *string `json:"assisterPlayerId"`
-	Weapon           string  `json:"weapon"`
-	Headshot         bool    `json:"headshot"`
-	KillerTeam       *string `json:"killerTeam"`
-	VictimTeam       *string `json:"victimTeam"`
+	EventIndex         int      `json:"eventIndex"`
+	Tick               int64    `json:"tick"`
+	RoundNumber        int      `json:"roundNumber"`
+	KillerPlayerID     *string  `json:"killerPlayerId"`
+	KillerName         *string  `json:"killerName"`
+	VictimPlayerID     string   `json:"victimPlayerId"`
+	VictimName         string   `json:"victimName"`
+	AssisterPlayerID   *string  `json:"assisterPlayerId"`
+	Weapon             string   `json:"weapon"`
+	Headshot           bool     `json:"headshot"`
+	KillerTeam         *string  `json:"killerTeam"`
+	VictimTeam         *string  `json:"victimTeam"`
+	Wallbang           *bool    `json:"wallbang"`
+	OneTap             *bool    `json:"oneTap"`
+	NoScope            *bool    `json:"noScope"`
+	ThroughSmoke       *bool    `json:"throughSmoke"`
+	RoundEndingKill    *bool    `json:"roundEndingKill"`
+	LastEnemyKill      *bool    `json:"lastEnemyKill"`
+	KillerHealth       *int     `json:"killerHealth"`
+	DistanceMeters     *float64 `json:"distanceMeters"`
+	ShotsSinceLastKill *int     `json:"shotsSinceLastKill"`
 }

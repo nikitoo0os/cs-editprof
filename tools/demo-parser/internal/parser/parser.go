@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	SchemaVersion = "1.0"
+	SchemaVersion = "1.1"
 	ParserName    = "cs2-demo-parser"
-	ParserVersion = "0.1.0"
+	ParserVersion = "0.2.0"
 )
 
 type roundBuilder struct {
@@ -52,6 +52,8 @@ func Analyze(path string) (contract.Analysis, error) {
 	matchStarted := false
 	var currentRound *roundBuilder
 	roundNumber := 0
+	shotsSinceLastKill := make(map[string]int)
+	weaponFireEvents := 0
 
 	currentTick := func() int64 {
 		return int64(p.GameState().IngameTick())
@@ -100,6 +102,7 @@ func Analyze(path string) (contract.Analysis, error) {
 			return
 		}
 		roundNumber++
+		clear(shotsSinceLastKill)
 		currentRound = &roundBuilder{number: roundNumber, startTick: currentTick()}
 		collectParticipants()
 	})
@@ -125,6 +128,14 @@ func Analyze(path string) (contract.Analysis, error) {
 		currentRound = nil
 		collectParticipants()
 	})
+	p.RegisterEventHandler(func(event events.WeaponFire) {
+		if !matchStarted || currentRound == nil || event.Shooter == nil {
+			return
+		}
+		player := mapPlayer(event.Shooter)
+		shotsSinceLastKill[player.PlayerID]++
+		weaponFireEvents++
+	})
 	p.RegisterEventHandler(func(event events.Kill) {
 		if !matchStarted || currentRound == nil || event.Victim == nil {
 			return
@@ -137,21 +148,53 @@ func Analyze(path string) (contract.Analysis, error) {
 		victim := mapPlayer(event.Victim)
 		weapon := "unknown"
 		if event.Weapon != nil {
-			weapon = event.Weapon.String()
+			weapon = canonicalWeapon(event.Weapon.String())
+		}
+		wallbang := event.IsWallBang()
+		noScope := event.NoScope
+		throughSmoke := event.ThroughSmoke
+		var killerHealth *int
+		var distanceMeters *float64
+		var shots *int
+		var oneTap *bool
+		if event.Killer != nil {
+			health := event.Killer.Health()
+			if health > 0 {
+				killerHealth = &health
+			}
+			mapped := mapPlayer(event.Killer)
+			if count := shotsSinceLastKill[mapped.PlayerID]; count > 0 {
+				value := count
+				shots = &value
+				isOneTap := count == 1
+				oneTap = &isOneTap
+			}
+			shotsSinceLastKill[mapped.PlayerID] = 0
+		}
+		if event.Distance > 0 {
+			value := float64(event.Distance)
+			distanceMeters = &value
 		}
 		result.Kills = append(result.Kills, contract.Kill{
-			EventIndex:       len(result.Kills) + 1,
-			Tick:             currentTick(),
-			RoundNumber:      currentRound.number,
-			KillerPlayerID:   killerID,
-			KillerName:       killerName,
-			VictimPlayerID:   victim.PlayerID,
-			VictimName:       victim.Name,
-			AssisterPlayerID: assisterID,
-			Weapon:           weapon,
-			Headshot:         event.IsHeadshot,
-			KillerTeam:       killerTeam,
-			VictimTeam:       teamName(event.Victim.Team),
+			EventIndex:         len(result.Kills) + 1,
+			Tick:               currentTick(),
+			RoundNumber:        currentRound.number,
+			KillerPlayerID:     killerID,
+			KillerName:         killerName,
+			VictimPlayerID:     victim.PlayerID,
+			VictimName:         victim.Name,
+			AssisterPlayerID:   assisterID,
+			Weapon:             weapon,
+			Headshot:           event.IsHeadshot,
+			KillerTeam:         killerTeam,
+			VictimTeam:         teamName(event.Victim.Team),
+			Wallbang:           &wallbang,
+			OneTap:             oneTap,
+			NoScope:            &noScope,
+			ThroughSmoke:       &throughSmoke,
+			KillerHealth:       killerHealth,
+			DistanceMeters:     distanceMeters,
+			ShotsSinceLastKill: shots,
 		})
 	})
 
@@ -192,6 +235,15 @@ func Analyze(path string) (contract.Analysis, error) {
 	for index := range result.Kills {
 		result.Kills[index].EventIndex = index + 1
 	}
+	markRoundEndingKills(&result)
+	if weaponFireEvents == 0 {
+		result.Warnings = append(
+			result.Warnings,
+			"WeaponFire events were unavailable; oneTap and shotsSinceLastKill are null.")
+	}
+	result.Warnings = append(
+		result.Warnings,
+		"lastEnemyKill is unavailable in parser v0.2.0 and remains null.")
 
 	if result.Demo.TickRate <= 0 {
 		return contract.Analysis{}, fmt.Errorf("required tick rate could not be extracted")
@@ -200,6 +252,47 @@ func Analyze(path string) (contract.Analysis, error) {
 		return contract.Analysis{}, fmt.Errorf("required round events could not be extracted")
 	}
 	return result, nil
+}
+
+func markRoundEndingKills(result *contract.Analysis) {
+	roundEnds := make(map[int]int64, len(result.Rounds))
+	for _, round := range result.Rounds {
+		roundEnds[round.RoundNumber] = round.EndTick
+	}
+	lastByRound := make(map[int]int)
+	for index := range result.Kills {
+		lastByRound[result.Kills[index].RoundNumber] = index
+	}
+	tolerance := int64(result.Demo.TickRate)
+	for round, index := range lastByRound {
+		value := false
+		if endTick, ok := roundEnds[round]; ok {
+			delta := endTick - result.Kills[index].Tick
+			value = delta >= 0 && delta <= tolerance
+		}
+		result.Kills[index].RoundEndingKill = &value
+	}
+}
+
+func canonicalWeapon(value string) string {
+	aliases := map[string]string{
+		"AK-47":        "ak47",
+		"M4A4":         "m4a1",
+		"M4A1-S":       "m4a1_silencer",
+		"AWP":          "awp",
+		"SSG 08":       "ssg08",
+		"Desert Eagle": "deagle",
+		"Glock-18":     "glock",
+		"USP-S":        "usp_silencer",
+		"Zeus x27":     "taser",
+	}
+	if code, ok := aliases[value]; ok {
+		return code
+	}
+	if len(value) >= 5 && value[:5] == "Knife" {
+		return "knife"
+	}
+	return "unknown"
 }
 
 func mapPlayer(player *common.Player) contract.Player {

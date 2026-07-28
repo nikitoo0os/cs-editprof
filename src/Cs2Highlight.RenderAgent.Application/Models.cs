@@ -9,7 +9,18 @@ public sealed record RenderJob(
     RenderSegment Segment,
     VideoSettings Video,
     string OutputDirectory,
-    int TimeoutSeconds = 600);
+    int TimeoutSeconds = 600)
+{
+    public CaptureUiProfile CaptureUi { get; init; } = CaptureUiProfile.Gameplay;
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum CaptureUiProfile
+{
+    Gameplay,
+    Minimal,
+    Cinematic
+}
 
 public sealed record PlayerSelector(string? SteamId, string? Name);
 public sealed record RenderSegment(long StartTick, long EndTick);
@@ -49,6 +60,8 @@ public enum RenderState
     LoadingDemo,
     Seeking,
     SelectingPlayer,
+    ApplyingCaptureProfile,
+    VerifyingCaptureProfile,
     Recording,
     StoppingRecording,
     VerifyingOutput,

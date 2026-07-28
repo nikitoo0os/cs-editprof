@@ -7,8 +7,10 @@ namespace Cs2Highlight.Web.Domain;
 public enum GenerationStatus
 {
     Draft, Uploading, Uploaded, QueuedForAnalysis, Analyzing,
-    AwaitingPlayerSelection, AwaitingPayment, PaymentProcessing, Paid,
-    QueuedForGeneration, SelectingHighlights, RenderingClips, ComposingVideo,
+    BuildingHighlightCatalog, AwaitingPlayerSelection, AwaitingHighlightSelection,
+    AwaitingPayment, PaymentProcessing, Paid,
+    QueuedForGeneration, PreparingRenderPlan, SelectingHighlights,
+    RenderingClips, ApplyingEffects, ComposingVideo,
     VerifyingOutput, Completed, CompletedWithWarnings, Cancelling, Cancelled,
     Failed, Expired
 }
@@ -23,6 +25,8 @@ public enum OutputOrder { Chronological, ScoreDescending }
 public enum TransitionType { Cut, Fade }
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum DemoFailurePolicy { FailGeneration, SkipInvalidDemo }
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum EffectPreset { None, Clean, Dynamic }
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ArtifactType
 {
@@ -46,6 +50,8 @@ public sealed class Generation
     public int Fps { get; set; } = 60;
     public TransitionType TransitionType { get; set; } = TransitionType.Fade;
     public int TransitionDurationMilliseconds { get; set; } = 300;
+    public EffectPreset EffectPreset { get; set; } = EffectPreset.Clean;
+    public long EstimatedDurationMilliseconds { get; set; }
     public long PriceAmountMinor { get; set; } = 100;
     [MaxLength(3)] public string PriceCurrency { get; set; } = "USD";
     public PaymentStatus PaymentStatus { get; set; }
@@ -66,6 +72,7 @@ public sealed class Generation
     public List<GenerationPlayer> Players { get; set; } = [];
     public List<GenerationHighlight> Highlights { get; set; } = [];
     public List<GenerationArtifact> Artifacts { get; set; } = [];
+    public List<GenerationEffectPlan> EffectPlans { get; set; } = [];
     public List<Payment> Payments { get; set; } = [];
     public List<GenerationEvent> Events { get; set; } = [];
 }
@@ -109,6 +116,7 @@ public sealed class GenerationHighlight
     public long GenerationDemoId { get; set; }
     [MaxLength(256)] public string HighlightId { get; set; } = string.Empty;
     [MaxLength(17)] public string SteamId { get; set; } = string.Empty;
+    [MaxLength(128)] public string MapName { get; set; } = string.Empty;
     [MaxLength(32)] public string Type { get; set; } = string.Empty;
     public double Score { get; set; }
     public int RoundNumber { get; set; }
@@ -118,8 +126,33 @@ public sealed class GenerationHighlight
     public long LastKillTick { get; set; }
     public int KillCount { get; set; }
     public int HeadshotCount { get; set; }
+    public double CombatScore { get; set; }
+    public double BeautyScore { get; set; }
+    public double TotalScore { get; set; }
+    public bool Recommended { get; set; }
+    public bool SelectedByUser { get; set; }
+    public int? SelectionOrder { get; set; }
+    public long EstimatedDurationMilliseconds { get; set; }
+    public string WeaponSequenceJson { get; set; } = "[]";
+    public string ScoreBreakdownJson { get; set; } = "{}";
+    public string TagsJson { get; set; } = "[]";
+    public string KillsJson { get; set; } = "[]";
+    public DateTimeOffset CreatedAt { get; set; }
     public bool SelectedForCompilation { get; set; }
     public int? CompilationOrder { get; set; }
+}
+
+public sealed class GenerationEffectPlan
+{
+    public long Id { get; set; }
+    public long GenerationId { get; set; }
+    public Generation Generation { get; set; } = null!;
+    public long GenerationHighlightId { get; set; }
+    public GenerationHighlight Highlight { get; set; } = null!;
+    public EffectPreset Preset { get; set; }
+    public string TimelineJson { get; set; } = "[]";
+    public string EffectPlanJson { get; set; } = "{}";
+    public DateTimeOffset CreatedAt { get; set; }
 }
 
 public sealed class GenerationArtifact
