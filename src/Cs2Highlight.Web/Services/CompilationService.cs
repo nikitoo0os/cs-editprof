@@ -39,6 +39,7 @@ public interface IHighlightCompilationService
 public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
     : IHighlightCompilationService
 {
+    private static readonly Encoding Utf8WithoutBom = new UTF8Encoding(false);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true
@@ -117,7 +118,7 @@ public sealed class FfmpegHighlightCompilationService(PipelineOptions options)
         string concat = string.Join(
             Environment.NewLine,
             normalized.Select(path => $"file '{path.Replace("'", "'\\''", StringComparison.Ordinal)}'"));
-        await File.WriteAllTextAsync(concatFile, concat, Encoding.UTF8, cancellationToken);
+        await File.WriteAllTextAsync(concatFile, concat, Utf8WithoutBom, cancellationToken);
         progress?.Report(new CompilationProgress(75, "Composing final video"));
         string temporary = Path.Combine(outputDirectory, "final-highlights.tmp.mp4");
         string final = Path.Combine(outputDirectory, "final-highlights.mp4");
