@@ -18,6 +18,40 @@ public sealed class MusicUploadOptions
         [".mp3", ".wav", ".flac", ".m4a", ".aac"];
 }
 
+public sealed class TrustedLutOptions
+{
+    public string Root { get; set; } = "assets/luts";
+    public Dictionary<string, string> Assets { get; set; } =
+        new(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class TrustedLutCatalog(TrustedLutOptions options)
+{
+    public IReadOnlyList<string> Keys => options.Assets.Keys
+        .OrderBy(value => value, StringComparer.OrdinalIgnoreCase)
+        .ToArray();
+
+    public string? Resolve(string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key))
+            return null;
+        if (!options.Assets.TryGetValue(key, out string? configured) ||
+            string.IsNullOrWhiteSpace(configured))
+            throw new InvalidOperationException("UNKNOWN_LUT_ASSET");
+        string root = Path.GetFullPath(options.Root);
+        string path = Path.GetFullPath(Path.Combine(root, configured));
+        string rootPrefix = root.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!path.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(Path.GetExtension(path), ".cube", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("UNTRUSTED_LUT_ASSET");
+        if (!File.Exists(path))
+            throw new InvalidOperationException("LUT_ASSET_MISSING");
+        return path;
+    }
+}
+
 public sealed record MusicMediaMetadata(
     double DurationSeconds,
     int SampleRate,
@@ -225,10 +259,33 @@ public sealed class ProcessMusicAnalyzerClient(PipelineOptions pipeline) : IMusi
         })
             start.ArgumentList.Add(argument);
         using Process process = new() { StartInfo = start };
-        if (!process.Start()) throw new InvalidOperationException("MUSIC_ANALYZER_START_FAILED");
-        Task<string> stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
-        Task<string> stderr = process.StandardError.ReadToEndAsync(cancellationToken);
-        await process.WaitForExitAsync(cancellationToken);
+        try
+        {
+            if (!process.Start())
+                throw new InvalidOperationException("MUSIC_ANALYZER_START_FAILED");
+        }
+        catch (Exception exception) when (
+            exception is Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException(
+                "MUSIC_ANALYZER_START_FAILED",
+                exception);
+        }
+        using CancellationTokenSource timeout =
+            CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(
+            Math.Max(1, pipeline.MusicAnalyzerTimeoutSeconds)));
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync(timeout.Token);
+        Task<string> stderr = process.StandardError.ReadToEndAsync(timeout.Token);
+        try
+        {
+            await process.WaitForExitAsync(timeout.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            throw new InvalidOperationException("MUSIC_ANALYZER_TIMEOUT");
+        }
         string output = await stdout;
         string error = await stderr;
         await File.WriteAllTextAsync(

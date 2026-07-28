@@ -102,10 +102,92 @@ public sealed class Stage5ServicesTests
 
         string graph = FfmpegMovieFilterBuilder.AudioMix(settings);
 
-        Assert.Contains("volume=-3dB", graph);
-        Assert.Contains("volume=-16dB", graph);
+        Assert.Contains("volume='0.158489'", graph);
+        Assert.Contains("volume='0.707946'", graph);
         Assert.Contains("amix=", graph);
         Assert.Contains("alimiter=limit=0.891251", graph);
+        Assert.Contains("loudnorm=I=-14:TP=-1", graph);
+    }
+
+    [Fact]
+    public void PiecewiseTimeWarpBuildsSynchronizedVideoAndAudioGraph()
+    {
+        TimeWarpPlan plan = new(
+            1,
+            [
+                new TimeWarpSegment(0, 1, 1),
+                new TimeWarpSegment(1, 2, 0.8),
+                new TimeWarpSegment(2, 4, 1)
+            ],
+            true,
+            []);
+
+        string graph = FfmpegMovieFilterBuilder.TimeWarp(
+            "fps=60",
+            "aresample=48000",
+            "0:a:0",
+            plan);
+
+        Assert.Contains("trim=start=1:end=2,setpts=(PTS-STARTPTS)/0.8", graph);
+        Assert.Contains("atrim=start=1:end=2,asetpts=PTS-STARTPTS,atempo=0.8", graph);
+        Assert.Contains("concat=n=3:v=1:a=0[warped_video]", graph);
+        Assert.Contains("concat=n=3:v=0:a=1[warped_audio]", graph);
+    }
+
+    [Fact]
+    public void AudioMixCreatesKillAccentAndMusicDuckingEnvelope()
+    {
+        GenerationMovieSettings settings = new()
+        {
+            MusicGainDb = -3,
+            GameplayGainDb = -16
+        };
+        MusicEditPlan plan = new(
+            "1.0",
+            "generation",
+            "music.mp3",
+            30,
+            MovieStyle.Dynamic,
+            MusicSyncIntensity.Expressive,
+            [
+                new MusicEditSegment(
+                    1,
+                    "highlight",
+                    HighlightType.SoloKill,
+                    1,
+                    0,
+                    8,
+                    5,
+                    null,
+                    0,
+                    5,
+                    new TimeWarpPlan(
+                        1,
+                        [new TimeWarpSegment(0, 8, 1)],
+                        false,
+                        []),
+                    "Cut",
+                    "Cut",
+                    new MusicEditScoreBreakdown(0, 0, 0, 0, 0, 0),
+                    [])
+            ],
+            []);
+
+        string graph = FfmpegMovieFilterBuilder.AudioMix(settings, plan);
+
+        Assert.Contains("between(t\\,4.95\\,5)", graph);
+        Assert.Contains("1+(", graph);
+        Assert.Contains("1-(1-", graph);
+        Assert.Contains("eval=frame", graph);
+    }
+
+    [Fact]
+    public void LutFilterEscapesWindowsDriveSeparator()
+    {
+        string filter = FfmpegMovieFilterBuilder.Lut(
+            Path.Combine("C:\\", "trusted", "grade.cube"));
+
+        Assert.Equal("lut3d=file='C\\:/trusted/grade.cube'", filter);
     }
 
     [Fact]

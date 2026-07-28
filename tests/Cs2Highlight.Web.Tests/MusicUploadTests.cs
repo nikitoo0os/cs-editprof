@@ -53,6 +53,44 @@ public sealed class MusicUploadTests : IDisposable
         Assert.Equal(30, stored.Metadata.DurationSeconds);
     }
 
+    [Fact]
+    public void TrustedLutCatalogRejectsUnknownAndTraversalPaths()
+    {
+        string lutRoot = Path.Combine(root, "luts");
+        Directory.CreateDirectory(lutRoot);
+        TrustedLutCatalog unknown = new(new TrustedLutOptions { Root = lutRoot });
+        Assert.Equal(
+            "UNKNOWN_LUT_ASSET",
+            Assert.Throws<InvalidOperationException>(() => unknown.Resolve("other")).Message);
+        TrustedLutCatalog traversal = new(new TrustedLutOptions
+        {
+            Root = lutRoot,
+            Assets = new Dictionary<string, string>
+            {
+                ["escape"] = "..\\outside.cube"
+            }
+        });
+        Assert.Equal(
+            "UNTRUSTED_LUT_ASSET",
+            Assert.Throws<InvalidOperationException>(() => traversal.Resolve("escape")).Message);
+    }
+
+    [Fact]
+    public void TrustedLutCatalogResolvesOnlyWhitelistedCube()
+    {
+        string lutRoot = Path.Combine(root, "luts");
+        Directory.CreateDirectory(lutRoot);
+        string path = Path.Combine(lutRoot, "owned.cube");
+        System.IO.File.WriteAllText(path, "LUT_3D_SIZE 2");
+        TrustedLutCatalog catalog = new(new TrustedLutOptions
+        {
+            Root = lutRoot,
+            Assets = new Dictionary<string, string> { ["owned"] = "owned.cube" }
+        });
+
+        Assert.Equal(Path.GetFullPath(path), catalog.Resolve("owned"));
+    }
+
     private MusicUploadService Service() =>
         new(
             new GenerationStorage(new StorageOptions { Root = root }),

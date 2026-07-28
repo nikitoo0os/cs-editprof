@@ -15,6 +15,7 @@ public sealed class MusicModel(
     MusicUploadService uploads,
     GenerationStorage storage,
     IMusicEditPlanner musicEditPlanner,
+    TrustedLutCatalog trustedLuts,
     GenerationWakeSignal queue,
     TimeProvider timeProvider) : PageModel
 {
@@ -29,14 +30,16 @@ public sealed class MusicModel(
     public int StrongAnchorCount { get; private set; }
     public int DropCount { get; private set; }
     public string EstimatedDurationText { get; private set; } = "—";
+    public IReadOnlyList<string> AvailableLuts => trustedLuts.Keys;
 
     [BindProperty] public IFormFile? MusicFile { get; set; }
     [BindProperty] public bool RightsConfirmed { get; set; }
     [BindProperty] public MovieStyle MovieStyle { get; set; } = MovieStyle.Dynamic;
     [BindProperty] public MusicSyncIntensity SyncIntensity { get; set; } = MusicSyncIntensity.Expressive;
     [BindProperty] public ColorGradePreset ColorGrade { get; set; } = ColorGradePreset.Natural;
-    [BindProperty] public int GameplayGainPercent { get; set; } = 40;
-    [BindProperty] public int MusicGainPercent { get; set; } = 85;
+    [BindProperty] public string? LutAssetKey { get; set; }
+    [BindProperty] public int GameplayGainPercent { get; set; } = 16;
+    [BindProperty] public int MusicGainPercent { get; set; } = 71;
 
     public async Task<IActionResult> OnGetAsync(string publicId, CancellationToken cancellationToken) =>
         await LoadAsync(publicId, cancellationToken);
@@ -106,6 +109,15 @@ public sealed class MusicModel(
     {
         if (GameplayGainPercent is < 0 or > 100 || MusicGainPercent is < 0 or > 100)
             return BadRequest();
+        try
+        {
+            _ = trustedLuts.Resolve(LutAssetKey);
+        }
+        catch (InvalidOperationException exception)
+        {
+            ModelState.AddModelError(string.Empty, exception.Message);
+            return await LoadAsync(publicId, cancellationToken);
+        }
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation generation = await db.Generations.SingleAsync(
             value => value.PublicId == publicId, cancellationToken);
@@ -132,6 +144,9 @@ public sealed class MusicModel(
             MovieStyle = MovieStyle,
             SyncIntensity = SyncIntensity,
             ColorGradePreset = ColorGrade,
+            LutAssetKey = string.IsNullOrWhiteSpace(LutAssetKey)
+                ? null
+                : LutAssetKey,
             GameplayGainDb = PercentToDb(GameplayGainPercent),
             MusicGainDb = PercentToDb(MusicGainPercent),
             CreatedAt = now

@@ -78,8 +78,13 @@ public sealed class GenerationWorker(
                 value.Status == GenerationStatus.PreparingRenderPlan ||
                 value.Status == GenerationStatus.SelectingHighlights ||
                 value.Status == GenerationStatus.RenderingClips ||
+                value.Status == GenerationStatus.VerifyingClips ||
+                value.Status == GenerationStatus.PlanningMusicEdit ||
+                value.Status == GenerationStatus.ApplyingTimeWarp ||
                 value.Status == GenerationStatus.ApplyingEffects ||
                 value.Status == GenerationStatus.ComposingVideo ||
+                value.Status == GenerationStatus.MixingAudio ||
+                value.Status == GenerationStatus.ApplyingColorGrade ||
                 value.Status == GenerationStatus.VerifyingOutput ||
                 value.Status == GenerationStatus.Cancelling)
             .ToArrayAsync(cancellationToken);
@@ -109,6 +114,18 @@ public sealed class GenerationWorker(
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             await MarkCancelledAsync(generation.PublicId, CancellationToken.None);
+        }
+        catch (InvalidOperationException exception) when (
+            exception.Message.StartsWith("MUSIC_", StringComparison.Ordinal) ||
+            exception.Message.Contains("LUT_", StringComparison.Ordinal))
+        {
+            string code = exception.Message.Split(':', 2)[0].Trim();
+            LogGenerationFailure(logger, generation.PublicId, exception);
+            await FailAsync(
+                generation.PublicId,
+                code,
+                exception.Message,
+                cancellationToken);
         }
         catch (Exception exception)
         {
@@ -552,32 +569,30 @@ public sealed class GenerationWorker(
             publicId,
             renderedSelection,
             cancellationToken);
+        int resumeStage = GenerationStageOrder(snapshot.Status);
         if (musicContext is not null)
         {
-            await SetStatusAsync(
-                publicId, GenerationStatus.VerifyingClips, 85,
-                "Verifying safe clip boundaries", cancellationToken);
-            await SetStatusAsync(
-                publicId, GenerationStatus.PlanningMusicEdit, 86,
-                "Synchronizing highlights with musical accents", cancellationToken);
-            await SetStatusAsync(
-                publicId, GenerationStatus.ApplyingTimeWarp, 87,
-                "Applying bounded gameplay time warp", cancellationToken);
+            if (resumeStage <= GenerationStageOrder(GenerationStatus.VerifyingClips))
+                await SetStatusAsync(
+                    publicId, GenerationStatus.VerifyingClips, 85,
+                    "Verifying safe clip boundaries", cancellationToken);
+            if (resumeStage <= GenerationStageOrder(GenerationStatus.PlanningMusicEdit))
+                await SetStatusAsync(
+                    publicId, GenerationStatus.PlanningMusicEdit, 86,
+                    "Synchronizing highlights with musical accents", cancellationToken);
+            if (resumeStage <= GenerationStageOrder(GenerationStatus.ApplyingTimeWarp))
+                await SetStatusAsync(
+                    publicId, GenerationStatus.ApplyingTimeWarp, 87,
+                    "Applying bounded gameplay time warp", cancellationToken);
         }
-        if (snapshot.Status is not (
-            GenerationStatus.ComposingVideo or
-            GenerationStatus.VerifyingOutput))
+        if (resumeStage <= GenerationStageOrder(GenerationStatus.ApplyingEffects))
             await SetStatusAsync(
                 publicId, GenerationStatus.ApplyingEffects, 85,
                 "Applying effects and normalizing clips", cancellationToken);
-        GenerationStatus compilationStatus = musicContext is not null
-            ? GenerationStatus.ApplyingColorGrade
-            : snapshot.Status switch
-            {
-                GenerationStatus.ComposingVideo => GenerationStatus.ComposingVideo,
-                GenerationStatus.VerifyingOutput => GenerationStatus.VerifyingOutput,
-                _ => GenerationStatus.ApplyingEffects
-            };
+        GenerationStatus compilationStatus =
+            resumeStage >= GenerationStageOrder(GenerationStatus.ApplyingEffects)
+                ? snapshot.Status
+                : GenerationStatus.ApplyingEffects;
         string output = storage.EnsureDirectory(publicId, "output");
         Progress<CompilationProgress> progress = new(value =>
             _ = PublishAsync(
@@ -593,15 +608,18 @@ public sealed class GenerationWorker(
                 cancellationToken);
         if (musicContext is not null)
         {
-            await SetStatusAsync(
-                publicId, GenerationStatus.ComposingVideo, 88,
-                "Composing music-driven video timeline", cancellationToken);
-            await SetStatusAsync(
-                publicId, GenerationStatus.MixingAudio, 92,
-                "Mixing music and gameplay audio", cancellationToken);
-            await SetStatusAsync(
-                publicId, GenerationStatus.ApplyingColorGrade, 96,
-                "Applying consistent color grade", cancellationToken);
+            if (resumeStage <= GenerationStageOrder(GenerationStatus.ComposingVideo))
+                await SetStatusAsync(
+                    publicId, GenerationStatus.ComposingVideo, 88,
+                    "Composing music-driven video timeline", cancellationToken);
+            if (resumeStage <= GenerationStageOrder(GenerationStatus.MixingAudio))
+                await SetStatusAsync(
+                    publicId, GenerationStatus.MixingAudio, 92,
+                    "Mixing music and gameplay audio", cancellationToken);
+            if (resumeStage <= GenerationStageOrder(GenerationStatus.ApplyingColorGrade))
+                await SetStatusAsync(
+                    publicId, GenerationStatus.ApplyingColorGrade, 96,
+                    "Applying consistent color grade", cancellationToken);
         }
         CompilationResult compilation = await compilationService.ComposeAsync(
             new CompilationRequest(
@@ -827,6 +845,23 @@ public sealed class GenerationWorker(
         string MusicPath,
         GenerationMovieSettings Settings);
 
+    private static int GenerationStageOrder(GenerationStatus status) => status switch
+    {
+        GenerationStatus.QueuedForGeneration => 0,
+        GenerationStatus.PreparingRenderPlan => 1,
+        GenerationStatus.SelectingHighlights => 2,
+        GenerationStatus.RenderingClips => 3,
+        GenerationStatus.VerifyingClips => 4,
+        GenerationStatus.PlanningMusicEdit => 5,
+        GenerationStatus.ApplyingTimeWarp => 6,
+        GenerationStatus.ApplyingEffects => 7,
+        GenerationStatus.ComposingVideo => 8,
+        GenerationStatus.MixingAudio => 9,
+        GenerationStatus.ApplyingColorGrade => 10,
+        GenerationStatus.VerifyingOutput => 11,
+        _ => 0
+    };
+
     private async Task PersistSelectionAndPlanAsync(
         Generation generation,
         IReadOnlyList<GlobalHighlightCandidate> selected,
@@ -943,6 +978,8 @@ public sealed class GenerationWorker(
             storage.EnsureDirectory(publicId, "output"), "audio-mix-result.json");
         string alignmentResultPath = Path.Combine(
             storage.EnsureDirectory(publicId, "output"), "music-alignment-result.json");
+        string colorGradeResultPath = Path.Combine(
+            storage.EnsureDirectory(publicId, "output"), "color-grade-result.json");
         await File.WriteAllTextAsync(
             reportPath,
             JsonSerializer.Serialize(new
@@ -980,6 +1017,10 @@ public sealed class GenerationWorker(
             await AddArtifactAsync(
                 db, generation.Id, ArtifactType.MusicAlignmentResult,
                 alignmentResultPath, cancellationToken);
+        if (File.Exists(colorGradeResultPath))
+            await AddArtifactAsync(
+                db, generation.Id, ArtifactType.ColorGradeResult,
+                colorGradeResultPath, cancellationToken);
         await AddArtifactAsync(
             db, generation.Id, ArtifactType.GenerationReport, reportPath, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);

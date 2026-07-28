@@ -41,6 +41,14 @@
       <select asp-for="SyncIntensity" asp-items="Html.GetEnumSelectList<MusicSyncIntensity>()"></select>
       <label asp-for="ColorGrade">Цвет</label>
       <select asp-for="ColorGrade" asp-items="Html.GetEnumSelectList<ColorGradePreset>()"></select>
+      <label asp-for="LutAssetKey">Проверенный LUT (необязательно)</label>
+      <select asp-for="LutAssetKey">
+        <option value="">Без LUT</option>
+        @foreach (string lut in Model.AvailableLuts)
+        {
+          <option value="@lut">@lut</option>
+        }
+      </select>
       <label asp-for="GameplayGainPercent">Игровой звук: <span id="gameplay-value">@Model.GameplayGainPercent</span>%</label>
       <input asp-for="GameplayGainPercent" type="range" min="0" max="100" />
       <label asp-for="MusicGainPercent">Музыка: <span id="music-value">@Model.MusicGainPercent</span>%</label>

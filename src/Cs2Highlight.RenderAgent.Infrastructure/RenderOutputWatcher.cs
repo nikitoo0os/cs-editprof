@@ -7,6 +7,9 @@ namespace Cs2Highlight.RenderAgent.Infrastructure;
 
 public sealed class RenderOutputWatcher(RenderEnvironmentOptions options, TimeProvider timeProvider) : IRenderOutputWatcher
 {
+    private static readonly JsonSerializerOptions ReportJsonOptions =
+        new(JsonSerializerDefaults.Web) { WriteIndented = true };
+
     public async Task<(bool Success, string? File, long Size, string? Error)> VerifyAsync(
         RenderJob job,
         RenderWorkspace workspace,
@@ -40,9 +43,17 @@ public sealed class RenderOutputWatcher(RenderEnvironmentOptions options, TimePr
                     }
                     if (options.EnableClipStartQualityGate)
                     {
+                        string qualityReportPath = Path.Combine(
+                            workspace.Logs,
+                            "clip-artifact-quality.json");
                         ClipStartQualityResult quality = await AnalyzeClipStartAsync(
                             candidate,
                             Path.Combine(workspace.Logs, "clip-start-quality.log"),
+                            cancellationToken);
+                        await WriteClipQualityReportAsync(
+                            qualityReportPath,
+                            candidate,
+                            quality,
                             cancellationToken);
                         if (!quality.Success)
                         {
@@ -52,6 +63,13 @@ public sealed class RenderOutputWatcher(RenderEnvironmentOptions options, TimePr
                                 size,
                                 $"CLIP_START_QUALITY_FAILED: {quality.Error}");
                         }
+                        Directory.CreateDirectory(job.OutputDirectory);
+                        File.Copy(
+                            qualityReportPath,
+                            Path.Combine(
+                                job.OutputDirectory,
+                                "clip-artifact-quality.json"),
+                            overwrite: false);
                     }
 
                     Directory.CreateDirectory(job.OutputDirectory);
@@ -108,6 +126,30 @@ public sealed class RenderOutputWatcher(RenderEnvironmentOptions options, TimePr
     public static bool HasStartDefect(string diagnostic) =>
         diagnostic.Contains("black_start:0", StringComparison.OrdinalIgnoreCase) ||
         diagnostic.Contains("freeze_start:0", StringComparison.OrdinalIgnoreCase);
+
+    private Task WriteClipQualityReportAsync(
+        string path,
+        string mediaPath,
+        ClipStartQualityResult result,
+        CancellationToken cancellationToken) =>
+        File.WriteAllTextAsync(
+            path,
+            JsonSerializer.Serialize(
+                new
+                {
+                    schemaVersion = "1.0",
+                    mediaFile = mediaPath,
+                    success = result.Success,
+                    sampleSeconds = options.ClipStartSampleSeconds,
+                    maximumBlackSeconds =
+                        options.ClipStartBlackDurationSeconds,
+                    maximumFreezeSeconds =
+                        options.ClipStartFreezeDurationSeconds,
+                    result.Error,
+                    analyzedAt = timeProvider.GetUtcNow()
+                },
+                ReportJsonOptions),
+            cancellationToken);
 
     public static string ResolveFfprobePath(RenderEnvironmentOptions environment)
     {

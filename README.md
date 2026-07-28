@@ -83,14 +83,17 @@ Build the local analyzer with Python 3.10 or 3.11:
 
 The deterministic planner uses a bounded beam search over musical anchors,
 highlight importance and allowed speed adjustment. It persists
-`music-edit-plan.json` before rendering. FFmpeg applies the bounded base speed
-to video and gameplay audio, a single selected color preset, mixes music with
-gameplay audio, and applies a final limiter.
+`music-edit-plan.json` before payment. FFmpeg applies a bounded piecewise speed
+curve to video and gameplay audio, keeps the full safe tail, applies one color
+preset (and optionally a server-whitelisted `.cube` LUT), raises gameplay
+audio around kills, briefly ducks music, normalizes loudness and applies a
+final limiter. Alignment, loudness, color and clip-start quality reports are
+persisted with the generation.
 
-The implementation and automated contracts are not a claim of a completed
-music-driven E2E. Smooth piecewise local ramps, pixel-level loading-screen and
-lower-overlay verification, measured loudness/alignment reports, full
-Playwright flow and real visual/audio acceptance remain subject to
+The repository contains an opt-in full Playwright flow and an output verifier.
+Their presence is not a claim of a completed real-machine E2E. Pixel-level
+loading-screen/lower-overlay verification and real visual/audio acceptance
+remain subject to
 [Stage 6 real E2E](docs/STAGE6_E2E.md).
 
 ## Stage 5: highlight catalog, clean capture and effects

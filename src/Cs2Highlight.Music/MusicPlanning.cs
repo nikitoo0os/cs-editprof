@@ -136,14 +136,157 @@ public sealed class TimeWarpPlanner : ITimeWarpPlanner
             MusicSyncIntensity.Soft =>
                 (options.SoftMinimumSpeed, options.SoftMaximumSpeed),
             MusicSyncIntensity.Expressive =>
-                (options.ExpressiveMinimumBaseSpeed, options.ExpressiveMaximumBaseSpeed),
+                (options.ExpressiveMinimumRampSpeed, options.ExpressiveMaximumRampSpeed),
             _ => (options.AggressiveMinimumRampSpeed, options.AggressiveMaximumRampSpeed)
         };
         if (requested < minimum || requested > maximum)
             return Constant(1, duration, ["EXCESSIVE_TIME_WARP_FALLBACK"]);
 
-        double speed = Math.Clamp(requested, minimum, maximum);
-        return Constant(speed, duration, []);
+        if (intensity == MusicSyncIntensity.Soft)
+            return Constant(Math.Clamp(requested, minimum, maximum), duration, []);
+
+        double rampMinimum = intensity == MusicSyncIntensity.Aggressive
+            ? options.AggressiveMinimumRampSpeed
+            : options.ExpressiveMinimumRampSpeed;
+        double rampMaximum = intensity == MusicSyncIntensity.Aggressive
+            ? options.AggressiveMaximumRampSpeed
+            : options.ExpressiveMaximumRampSpeed;
+        TimeWarpPlan? local = CreateLocalRamp(
+            duration,
+            killOffset,
+            targetOffset,
+            rampMinimum,
+            rampMaximum,
+            options);
+        if (local is not null)
+            return local;
+        if (requested >= options.ExpressiveMinimumBaseSpeed &&
+            requested <= options.ExpressiveMaximumBaseSpeed)
+            return Constant(requested, duration, ["LOCAL_RAMP_NOT_FEASIBLE"]);
+        return Constant(1, duration, ["EXCESSIVE_TIME_WARP_FALLBACK"]);
+    }
+
+    private static TimeWarpPlan? CreateLocalRamp(
+        double duration,
+        double killOffset,
+        double targetOffset,
+        double minimumSpeed,
+        double maximumSpeed,
+        TimeWarpOptions options)
+    {
+        double rampDuration = Math.Min(
+            options.MaximumRampDurationSeconds,
+            killOffset);
+        if (rampDuration <
+            options.MinimumConstantSegmentSeconds * 3)
+            return null;
+        double rampStart = killOffset - rampDuration;
+        double requiredRampOutput = targetOffset - rampStart;
+        if (requiredRampOutput <= 0)
+            return null;
+
+        const int steps = 6;
+        double stepDuration = rampDuration / steps;
+        double OutputAt(double peak)
+        {
+            double output = 0;
+            for (int index = 0; index < steps; index++)
+            {
+                double position = (index + 0.5) / steps;
+                double segmentSpeed = 1 + (peak - 1) * position;
+                output += stepDuration / segmentSpeed;
+            }
+            return output;
+        }
+
+        double slowOutput = OutputAt(minimumSpeed);
+        double fastOutput = OutputAt(maximumSpeed);
+        if (requiredRampOutput > slowOutput + 0.001 ||
+            requiredRampOutput < fastOutput - 0.001)
+            return null;
+
+        double low = minimumSpeed;
+        double high = maximumSpeed;
+        for (int iteration = 0; iteration < 64; iteration++)
+        {
+            double middle = (low + high) / 2;
+            if (OutputAt(middle) > requiredRampOutput)
+                low = middle;
+            else
+                high = middle;
+        }
+        double peakSpeed = (low + high) / 2;
+        List<TimeWarpSegment> segments = [];
+        AddSegment(segments, 0, rampStart, 1, options);
+        for (int index = 0; index < steps; index++)
+        {
+            double start = rampStart + index * stepDuration;
+            double end = rampStart + (index + 1) * stepDuration;
+            double position = (index + 0.5) / steps;
+            AddSegment(
+                segments,
+                start,
+                end,
+                1 + (peakSpeed - 1) * position,
+                options);
+        }
+
+        double holdDuration = Math.Min(
+            options.MinimumConstantSegmentSeconds,
+            Math.Max(0, duration - killOffset));
+        AddSegment(
+            segments,
+            killOffset,
+            killOffset + holdDuration,
+            peakSpeed,
+            options);
+        double recoveryDuration = Math.Min(
+            options.MaximumRampDurationSeconds,
+            Math.Max(0, duration - killOffset - holdDuration));
+        double recoveryStep = recoveryDuration / steps;
+        for (int index = 0; index < steps && recoveryStep > 0; index++)
+        {
+            double start = killOffset + holdDuration + index * recoveryStep;
+            double end = killOffset + holdDuration + (index + 1) * recoveryStep;
+            double position = (index + 0.5) / steps;
+            AddSegment(
+                segments,
+                start,
+                end,
+                peakSpeed + (1 - peakSpeed) * position,
+                options);
+        }
+        AddSegment(
+            segments,
+            killOffset + holdDuration + recoveryDuration,
+            duration,
+            1,
+            options);
+        return new TimeWarpPlan(
+            1,
+            segments,
+            true,
+            []);
+    }
+
+    private static void AddSegment(
+        List<TimeWarpSegment> segments,
+        double start,
+        double end,
+        double speed,
+        TimeWarpOptions options)
+    {
+        if (end - start < 0.000001)
+            return;
+        if (segments.Count > 0 &&
+            end - start < options.MinimumConstantSegmentSeconds &&
+            Math.Abs(segments[^1].Speed - speed) < 0.01)
+        {
+            TimeWarpSegment previous = segments[^1];
+            segments[^1] = previous with { SourceEndSeconds = end };
+            return;
+        }
+        segments.Add(new TimeWarpSegment(start, end, speed));
     }
 
     private static TimeWarpPlan Constant(
@@ -151,6 +294,42 @@ public sealed class TimeWarpPlanner : ITimeWarpPlanner
         double duration,
         IReadOnlyList<string> warnings) =>
         new(speed, [new TimeWarpSegment(0, duration, speed)], false, warnings);
+}
+
+public static class TimeWarpMath
+{
+    public static double OutputDuration(TimeWarpPlan plan, double sourceDuration) =>
+        MapSourceTime(plan, sourceDuration);
+
+    public static double MapSourceTime(TimeWarpPlan plan, double sourceTime)
+    {
+        if (sourceTime <= 0)
+            return 0;
+        double output = 0;
+        double consumed = 0;
+        foreach (TimeWarpSegment segment in plan.Segments
+                     .OrderBy(value => value.SourceStartSeconds))
+        {
+            if (segment.SourceStartSeconds > consumed)
+            {
+                double naturalEnd = Math.Min(sourceTime, segment.SourceStartSeconds);
+                output += Math.Max(0, naturalEnd - consumed);
+                consumed = naturalEnd;
+            }
+            if (consumed >= sourceTime)
+                break;
+            double end = Math.Min(sourceTime, segment.SourceEndSeconds);
+            double start = Math.Max(consumed, segment.SourceStartSeconds);
+            if (end > start)
+            {
+                output += (end - start) / segment.Speed;
+                consumed = end;
+            }
+        }
+        if (consumed < sourceTime)
+            output += sourceTime - consumed;
+        return output;
+    }
 }
 
 public interface IMusicEditPlanner
@@ -206,7 +385,9 @@ public sealed class MusicEditPlanner(
                         new TimeWarpOptions());
                     if (warp.Warnings.Contains("EXCESSIVE_TIME_WARP_FALLBACK", StringComparer.Ordinal))
                         continue;
-                    double duration = SourceDuration(selected.Bounds) / warp.BaseSpeedFactor;
+                    double duration = TimeWarpMath.OutputDuration(
+                        warp,
+                        SourceDuration(selected.Bounds));
                     if (state.CursorSeconds + duration > music.Audio.DurationSeconds)
                         continue;
                     MusicEditScoreBreakdown score = Score(
@@ -276,8 +457,9 @@ public sealed class MusicEditPlanner(
         MovieStyle style)
     {
         double sourceStart = selected.Bounds.SafeStartSeconds;
-        double primaryOffset =
-            (selected.Bounds.PrimaryKillSeconds - sourceStart) / warp.BaseSpeedFactor;
+        double primaryOffset = TimeWarpMath.MapSourceTime(
+            warp,
+            selected.Bounds.PrimaryKillSeconds - sourceStart);
         return new MusicEditSegment(
             index,
             selected.Id,

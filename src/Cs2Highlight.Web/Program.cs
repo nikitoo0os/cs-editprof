@@ -28,6 +28,8 @@ PipelineOptions pipelineOptions = builder.Configuration.GetSection("Pipeline").G
 RetentionOptions retentionOptions = builder.Configuration.GetSection("Retention").Get<RetentionOptions>() ?? new();
 MusicUploadOptions musicUploadOptions =
     builder.Configuration.GetSection("MusicUploads").Get<MusicUploadOptions>() ?? new();
+TrustedLutOptions trustedLutOptions =
+    builder.Configuration.GetSection("TrustedLuts").Get<TrustedLutOptions>() ?? new();
 RecommendedSelectionOptions selectionOptions =
     builder.Configuration.GetSection("RecommendedSelection").Get<RecommendedSelectionOptions>() ?? new();
 builder.Services.AddSingleton(uploadOptions);
@@ -35,6 +37,7 @@ builder.Services.AddSingleton(storageOptions);
 builder.Services.AddSingleton(pipelineOptions);
 builder.Services.AddSingleton(retentionOptions);
 builder.Services.AddSingleton(musicUploadOptions);
+builder.Services.AddSingleton(trustedLutOptions);
 builder.Services.AddSingleton(selectionOptions);
 builder.Services.Configure<FormOptions>(options =>
 {
@@ -47,6 +50,7 @@ builder.Services.AddSingleton<GenerationStorage>();
 builder.Services.AddSingleton<DemoUploadService>();
 builder.Services.AddSingleton<IMusicMediaValidator, FfprobeMusicMediaValidator>();
 builder.Services.AddSingleton<MusicUploadService>();
+builder.Services.AddSingleton<TrustedLutCatalog>();
 builder.Services.AddSingleton<IMusicAnalyzerClient, ProcessMusicAnalyzerClient>();
 builder.Services.AddSingleton<Cs2Highlight.Music.IMusicalAnchorBuilder, Cs2Highlight.Music.MusicalAnchorBuilder>();
 builder.Services.AddSingleton<Cs2Highlight.Music.IHighlightImportanceCalculator, Cs2Highlight.Music.HighlightImportanceCalculator>();

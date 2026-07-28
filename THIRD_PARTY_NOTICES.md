@@ -11,6 +11,6 @@ Their exact transitive dependency versions are resolved from
 `tools/music-analyzer/requirements.txt` during the isolated build. Distribution
 must retain the license files emitted by the packaged dependency set.
 
-No third-party LUT is currently bundled. Stage 6 color presets use explicit
-FFmpeg filters; future `.cube` assets must be whitelisted and documented here
-before distribution.
+No third-party LUT is currently bundled. Stage 6 accepts `.cube` assets only
+from the configured local whitelist under `assets/luts`; every added asset must
+be reviewed and documented here before distribution.

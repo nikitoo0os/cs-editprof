@@ -1,8 +1,10 @@
 using System.Diagnostics;
 using System.ComponentModel;
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Cs2Highlight.Music;
 using Cs2Highlight.Web.Domain;
 
@@ -71,7 +73,8 @@ public sealed class FfmpegEffectFilterGraphBuilder : IEffectFilterGraphBuilder
 
 public sealed class FfmpegHighlightCompilationService(
     PipelineOptions options,
-    IEffectFilterGraphBuilder filterGraphs)
+    IEffectFilterGraphBuilder filterGraphs,
+    TrustedLutCatalog trustedLuts)
     : IHighlightCompilationService
 {
     private static readonly Encoding Utf8WithoutBom = new UTF8Encoding(false);
@@ -117,20 +120,7 @@ public sealed class FfmpegHighlightCompilationService(
                 5 + (int)(60d * index / Math.Max(1, request.ClipPaths.Count)),
                 $"Normalizing clip {index + 1}/{request.ClipPaths.Count}"));
             string target = Path.Combine(normalizedDirectory, $"clip-{index + 1:D3}.mp4");
-            if (File.Exists(target))
-            {
-                MediaMetadata persisted = await ProbeAsync(target, cancellationToken);
-                if (persisted.Error is null &&
-                    persisted.HasVideo &&
-                    persisted.DurationSeconds > 0 &&
-                    persisted.Width == request.Width &&
-                    persisted.Height == request.Height)
-                {
-                    normalized.Add(target);
-                    continue;
-                }
-                File.Delete(target);
-            }
+            string signaturePath = target + ".signature";
             string temporaryTarget = Path.Combine(
                 normalizedDirectory,
                 $"clip-{index + 1:D3}.tmp.mp4");
@@ -149,25 +139,86 @@ public sealed class FfmpegHighlightCompilationService(
                 metadata.DurationSeconds,
                 effectPlan,
                 new VideoOutputOptions(request.Width, request.Height, request.Fps));
-            double speed = request.MusicEditPlan is not null &&
+            TimeWarpPlan? timeWarp = request.MusicEditPlan is not null &&
                 index < request.MusicEditPlan.Segments.Count
-                    ? request.MusicEditPlan.Segments[index].TimeWarp.BaseSpeedFactor
-                    : 1;
+                    ? request.MusicEditPlan.Segments[index].TimeWarp
+                    : null;
+            double speed = timeWarp?.BaseSpeedFactor ?? 1;
             string videoFilters = graph.Video;
             string audioFilters = graph.Audio;
-            if (Math.Abs(speed - 1) > 0.0001)
-            {
-                videoFilters += FormattableString.Invariant($",setpts=PTS/{speed:0.######}");
-                audioFilters += FormattableString.Invariant($",atempo={speed:0.######}");
-            }
+            string? selectedLutPath = null;
             if (request.MovieSettings is not null)
+            {
                 videoFilters += "," + FfmpegMovieFilterBuilder.Color(request.MovieSettings.ColorGradePreset);
+                selectedLutPath = trustedLuts.Resolve(request.MovieSettings.LutAssetKey);
+                if (selectedLutPath is not null)
+                    videoFilters += "," + FfmpegMovieFilterBuilder.Lut(selectedLutPath);
+            }
+            string lutFingerprint = selectedLutPath is null
+                ? string.Empty
+                : Convert.ToHexString(SHA256.HashData(
+                    await File.ReadAllBytesAsync(selectedLutPath, cancellationToken)));
+            string signature = Convert.ToHexString(SHA256.HashData(
+                Encoding.UTF8.GetBytes(string.Join(
+                    '\n',
+                    input,
+                    new FileInfo(input).Length.ToString(CultureInfo.InvariantCulture),
+                    File.GetLastWriteTimeUtc(input).Ticks.ToString(CultureInfo.InvariantCulture),
+                    videoFilters,
+                    audioFilters,
+                    lutFingerprint,
+                    JsonSerializer.Serialize(timeWarp, JsonOptions))))).ToLowerInvariant();
+            if (File.Exists(target) &&
+                File.Exists(signaturePath) &&
+                string.Equals(
+                    await File.ReadAllTextAsync(signaturePath, cancellationToken),
+                    signature,
+                    StringComparison.Ordinal))
+            {
+                MediaMetadata persisted = await ProbeAsync(target, cancellationToken);
+                if (persisted.Error is null &&
+                    persisted.HasVideo &&
+                    persisted.DurationSeconds > 0 &&
+                    persisted.Width == request.Width &&
+                    persisted.Height == request.Height)
+                {
+                    normalized.Add(target);
+                    continue;
+                }
+            }
+            if (File.Exists(target)) File.Delete(target);
+            if (File.Exists(signaturePath)) File.Delete(signaturePath);
+            if (timeWarp?.UsesLocalRamp == true && timeWarp.Segments.Count > 1)
+            {
+                string timeWarpGraph = FfmpegMovieFilterBuilder.TimeWarp(
+                    videoFilters,
+                    audioFilters,
+                    metadata.HasAudio ? "0:a:0" : "1:a:0",
+                    timeWarp);
+                arguments.AddRange(
+                [
+                    "-filter_complex", timeWarpGraph,
+                    "-map", "[warped_video]",
+                    "-map", "[warped_audio]"
+                ]);
+            }
+            else
+            {
+                if (Math.Abs(speed - 1) > 0.0001)
+                {
+                    videoFilters += FormattableString.Invariant($",setpts=PTS/{speed:0.######}");
+                    audioFilters += FormattableString.Invariant($",atempo={speed:0.######}");
+                }
+                arguments.AddRange(
+                [
+                    "-map", "0:v:0",
+                    "-map", metadata.HasAudio ? "0:a:0" : "1:a:0",
+                    "-vf", videoFilters,
+                    "-af", audioFilters
+                ]);
+            }
             arguments.AddRange(
             [
-                "-map", "0:v:0",
-                "-map", metadata.HasAudio ? "0:a:0" : "1:a:0",
-                "-vf", videoFilters,
-                "-af", audioFilters,
                 "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                 "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
                 "-shortest", "-movflags", "+faststart", temporaryTarget
@@ -196,6 +247,11 @@ public sealed class FfmpegHighlightCompilationService(
                 continue;
             }
             File.Move(temporaryTarget, target, true);
+            await File.WriteAllTextAsync(
+                signaturePath,
+                signature,
+                Utf8WithoutBom,
+                cancellationToken);
             normalized.Add(target);
         }
         if (normalized.Count == 0)
@@ -236,7 +292,29 @@ public sealed class FfmpegHighlightCompilationService(
         if (request.MusicPath is not null && request.MovieSettings is not null)
         {
             progress?.Report(new CompilationProgress(85, "Mixing music and gameplay audio"));
-            string mix = FfmpegMovieFilterBuilder.AudioMix(request.MovieSettings);
+            AudioMixOptions mixOptions = new()
+            {
+                MusicGainDb = request.MovieSettings.MusicGainDb,
+                GameplayBaseGainDb = request.MovieSettings.GameplayGainDb,
+                GameplayKillAccentGainDb =
+                    request.MovieSettings.SyncIntensity switch
+                    {
+                        MusicSyncIntensity.Soft => -9,
+                        MusicSyncIntensity.Aggressive => -5,
+                        _ => -7
+                    },
+                MusicDuckOnKillDb =
+                    request.MovieSettings.SyncIntensity switch
+                    {
+                        MusicSyncIntensity.Soft => -1.5,
+                        MusicSyncIntensity.Aggressive => -4.5,
+                        _ => -3
+                    }
+            };
+            string mix = FfmpegMovieFilterBuilder.AudioMix(
+                request.MovieSettings,
+                request.MusicEditPlan,
+                mixOptions);
             composition = await RunAsync(
                 options.FfmpegPath,
                 ["-y", "-hide_banner", "-loglevel", "error",
@@ -249,17 +327,6 @@ public sealed class FfmpegHighlightCompilationService(
             await WriteProcessLogAsync(
                 Path.Combine(outputDirectory, "ffmpeg-mix.log"),
                 composition,
-                cancellationToken);
-            await File.WriteAllTextAsync(
-                Path.Combine(outputDirectory, "audio-mix-result.json"),
-                JsonSerializer.Serialize(new
-                {
-                    schemaVersion = "1.0",
-                    request.MovieSettings.MusicGainDb,
-                    gameplayGainDb = request.MovieSettings.GameplayGainDb,
-                    limiter = true,
-                    outputTruePeakDb = -1.0
-                }, JsonOptions),
                 cancellationToken);
         }
         else
@@ -282,7 +349,62 @@ public sealed class FfmpegHighlightCompilationService(
             finalMetadata.Width != request.Width || finalMetadata.Height != request.Height ||
             file.Length < request.MinimumOutputBytes)
             return Failure("FINAL_VIDEO_INVALID", request.ClipPaths.Count, skipped, watch.ElapsedMilliseconds);
+        LoudnessMeasurement? loudness = null;
+        if (request.MusicPath is not null && request.MovieSettings is not null)
+        {
+            loudness = await MeasureLoudnessAsync(temporary, cancellationToken);
+            if (!loudness.Success)
+            {
+                File.Delete(temporary);
+                return Failure(
+                    $"AUDIO_LOUDNESS_ANALYSIS_FAILED: {loudness.Error}",
+                    request.ClipPaths.Count,
+                    skipped,
+                    watch.ElapsedMilliseconds);
+            }
+        }
         File.Move(temporary, final, true);
+        if (request.MovieSettings is not null)
+        {
+            string? lutPath = trustedLuts.Resolve(request.MovieSettings.LutAssetKey);
+            await File.WriteAllTextAsync(
+                Path.Combine(outputDirectory, "color-grade-result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    preset = request.MovieSettings.ColorGradePreset,
+                    filter = FfmpegMovieFilterBuilder.Color(
+                        request.MovieSettings.ColorGradePreset),
+                    lutAssetKey = request.MovieSettings.LutAssetKey,
+                    lutSha256 = lutPath is null
+                        ? null
+                        : Convert.ToHexString(SHA256.HashData(
+                            await File.ReadAllBytesAsync(lutPath, cancellationToken)))
+                            .ToLowerInvariant(),
+                    appliedConsistentlyToAllClips = true
+                }, JsonOptions),
+                cancellationToken);
+        }
+        if (request.MusicPath is not null && request.MovieSettings is not null)
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(outputDirectory, "audio-mix-result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    musicGainDb = request.MovieSettings.MusicGainDb,
+                    gameplayGainDb = request.MovieSettings.GameplayGainDb,
+                    killAccents = request.MusicEditPlan?.Segments.Count ?? 0,
+                    musicDucking = true,
+                    limiter = true,
+                    targetIntegratedLoudnessLufs = -14.0,
+                    targetTruePeakDb = -1.0,
+                    measuredIntegratedLoudnessLufs =
+                        loudness?.IntegratedLoudnessLufs,
+                    measuredTruePeakDb = loudness?.TruePeakDb
+                }, JsonOptions),
+                cancellationToken);
+        }
         if (request.MusicEditPlan is not null)
         {
             var alignment = request.MusicEditPlan.Segments
@@ -376,6 +498,47 @@ public sealed class FfmpegHighlightCompilationService(
         };
     }
 
+    private async Task<LoudnessMeasurement> MeasureLoudnessAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        ProcessResult result = await RunAsync(
+            options.FfmpegPath,
+            ["-hide_banner", "-nostats", "-i", path, "-filter_complex",
+             "ebur128=peak=true", "-f", "null", "-"],
+            cancellationToken);
+        if (result.ExitCode != 0)
+            return new LoudnessMeasurement(false, null, null, result.Error.Trim());
+        MatchCollection integratedMatches = Regex.Matches(
+            result.Error,
+            @"I:\s*(-?\d+(?:\.\d+)?)\s+LUFS",
+            RegexOptions.CultureInvariant);
+        MatchCollection peakMatches = Regex.Matches(
+            result.Error,
+            @"Peak:\s*(-?\d+(?:\.\d+)?)\s+dBFS",
+            RegexOptions.CultureInvariant);
+        double? integrated = ParseLast(integratedMatches);
+        double? peak = ParseLast(peakMatches);
+        return new LoudnessMeasurement(
+            integrated is not null,
+            integrated,
+            peak,
+            integrated is null ? "FFmpeg did not emit an integrated loudness summary." : null);
+    }
+
+    private static double? ParseLast(MatchCollection matches)
+    {
+        if (matches.Count == 0)
+            return null;
+        return double.TryParse(
+            matches[^1].Groups[1].Value,
+            NumberStyles.Float,
+            CultureInfo.InvariantCulture,
+            out double value)
+                ? value
+                : null;
+    }
+
     private async Task<ProcessResult> RunAsync(
         string executable,
         IReadOnlyList<string> arguments,
@@ -449,6 +612,11 @@ public sealed class FfmpegHighlightCompilationService(
         new("1.1", false, null, 0, Math.Max(skipped, total), duration, 0, null, null, error);
 
     private sealed record ProcessResult(int ExitCode, string Output, string Error);
+    private sealed record LoudnessMeasurement(
+        bool Success,
+        double? IntegratedLoudnessLufs,
+        double? TruePeakDb,
+        string? Error);
     private sealed class MediaMetadata
     {
         public bool HasVideo { get; init; }
@@ -479,19 +647,140 @@ public static class FfmpegMovieFilterBuilder
         _ => throw new ArgumentOutOfRangeException(nameof(preset), preset, null)
     };
 
-    public static string AudioMix(GenerationMovieSettings settings)
+    public static string Lut(string trustedAbsolutePath)
     {
-        string musicVolume = Db(settings.MusicGainDb);
-        string gameplayVolume = Db(settings.GameplayGainDb);
-        return
-            $"[0:a:0]aresample=48000,volume={gameplayVolume}[game];" +
-            $"[1:a:0]aresample=48000,volume={musicVolume}[music];" +
-            "[music][game]amix=inputs=2:duration=shortest:normalize=0," +
-            "alimiter=limit=0.891251:attack=5:release=50[mixed]";
+        string path = Path.GetFullPath(trustedAbsolutePath)
+            .Replace('\\', '/')
+            .Replace(":", "\\:", StringComparison.Ordinal)
+            .Replace("'", "\\'", StringComparison.Ordinal);
+        return $"lut3d=file='{path}'";
+    }
+
+    public static string AudioMix(
+        GenerationMovieSettings settings,
+        MusicEditPlan? plan = null,
+        AudioMixOptions? options = null)
+    {
+        options ??= new AudioMixOptions
+        {
+            MusicGainDb = settings.MusicGainDb,
+            GameplayBaseGainDb = settings.GameplayGainDb
+        };
+        double[] killTimes = plan?.Segments
+            .Select(value => value.PrimaryKillOutputTimeSeconds)
+            .Where(value => value >= 0)
+            .OrderBy(value => value)
+            .ToArray() ?? [];
+        string pulse = AccentPulse(killTimes, options);
+        double gameplayBase = Linear(options.GameplayBaseGainDb);
+        double gameplayAccent = Linear(Math.Max(
+            options.GameplayBaseGainDb,
+            options.GameplayKillAccentGainDb));
+        double musicBase = Linear(options.MusicGainDb);
+        double duckFactor = Linear(options.MusicDuckOnKillDb);
+        string gameplayVolume = Number(gameplayBase);
+        string musicVolume = Number(musicBase);
+        if (killTimes.Length > 0)
+        {
+            gameplayVolume =
+                $"{Number(gameplayBase)}*(1+({Number(gameplayAccent / gameplayBase)}-1)*({pulse}))";
+            musicVolume =
+                $"{Number(musicBase)}*(1-(1-{Number(duckFactor)})*({pulse}))";
+        }
+        StringBuilder graph = new();
+        graph.Append("[0:a:0]aresample=48000,volume='")
+            .Append(gameplayVolume).Append("':eval=frame[game];")
+            .Append("[1:a:0]aresample=48000,volume='")
+            .Append(musicVolume).Append("':eval=frame[music];")
+            .Append("[music][game]amix=inputs=2:duration=shortest:normalize=0,")
+            .Append("loudnorm=I=-14:TP=")
+            .Append(Number(options.OutputTruePeakDb))
+            .Append(":LRA=11");
+        if (options.EnableLimiter)
+            graph.Append(",alimiter=limit=")
+                .Append(Number(Linear(options.OutputTruePeakDb)))
+                .Append(":attack=5:release=50");
+        graph.Append("[mixed]");
+        return graph.ToString();
+    }
+
+    public static string TimeWarp(
+        string videoFilters,
+        string audioFilters,
+        string audioInput,
+        TimeWarpPlan plan)
+    {
+        if (plan.Segments.Count == 0)
+            throw new ArgumentException("Time-warp plan has no segments.", nameof(plan));
+        StringBuilder graph = new();
+        graph.Append("[0:v:0]").Append(videoFilters)
+            .Append(",split=").Append(plan.Segments.Count);
+        for (int index = 0; index < plan.Segments.Count; index++)
+            graph.Append("[warp_v").Append(index).Append(']');
+        graph.Append(';').Append('[').Append(audioInput).Append(']')
+            .Append(audioFilters)
+            .Append(",asplit=").Append(plan.Segments.Count);
+        for (int index = 0; index < plan.Segments.Count; index++)
+            graph.Append("[warp_a").Append(index).Append(']');
+        graph.Append(';');
+        for (int index = 0; index < plan.Segments.Count; index++)
+        {
+            TimeWarpSegment segment = plan.Segments[index];
+            string start = Number(segment.SourceStartSeconds);
+            string end = Number(segment.SourceEndSeconds);
+            string speed = Number(segment.Speed);
+            graph.Append("[warp_v").Append(index).Append("]trim=start=")
+                .Append(start).Append(":end=").Append(end)
+                .Append(",setpts=(PTS-STARTPTS)/").Append(speed)
+                .Append("[warp_vo").Append(index).Append("];");
+            graph.Append("[warp_a").Append(index).Append("]atrim=start=")
+                .Append(start).Append(":end=").Append(end)
+                .Append(",asetpts=PTS-STARTPTS,atempo=").Append(speed)
+                .Append("[warp_ao").Append(index).Append("];");
+        }
+        for (int index = 0; index < plan.Segments.Count; index++)
+            graph.Append("[warp_vo").Append(index).Append(']');
+        graph.Append("concat=n=").Append(plan.Segments.Count)
+            .Append(":v=1:a=0[warped_video];");
+        for (int index = 0; index < plan.Segments.Count; index++)
+            graph.Append("[warp_ao").Append(index).Append(']');
+        graph.Append("concat=n=").Append(plan.Segments.Count)
+            .Append(":v=0:a=1[warped_audio]");
+        return graph.ToString();
     }
 
     private static string Db(double value) =>
         FormattableString.Invariant($"{Math.Clamp(value, -60, 12):0.###}dB");
+
+    private static string Number(double value) =>
+        value.ToString("0.######", CultureInfo.InvariantCulture);
+
+    private static double Linear(double decibels) =>
+        Math.Pow(10, Math.Clamp(decibels, -60, 12) / 20);
+
+    private static string AccentPulse(
+        IReadOnlyList<double> killTimes,
+        AudioMixOptions options)
+    {
+        string[] pulses = killTimes.Select(kill =>
+        {
+            double attack = options.KillAccentAttackMilliseconds / 1000;
+            double hold = options.KillAccentHoldMilliseconds / 1000;
+            double release = options.KillAccentReleaseMilliseconds / 1000;
+            double start = Math.Max(0, kill - attack);
+            double holdEnd = kill + hold;
+            double end = holdEnd + release;
+            return string.Create(
+                CultureInfo.InvariantCulture,
+                $"if(between(t\\,{start:0.######}\\,{kill:0.######})\\,(t-{start:0.######})/{Math.Max(attack, 0.001):0.######}\\,if(between(t\\,{kill:0.######}\\,{holdEnd:0.######})\\,1\\,if(between(t\\,{holdEnd:0.######}\\,{end:0.######})\\,({end:0.######}-t)/{Math.Max(release, 0.001):0.######}\\,0)))");
+        }).ToArray();
+        return pulses.Length switch
+        {
+            0 => "0",
+            1 => pulses[0],
+            _ => pulses.Aggregate((left, right) => $"max({left}\\,{right})")
+        };
+    }
 }
 
 public static class FfmpegEffectFilterBuilder

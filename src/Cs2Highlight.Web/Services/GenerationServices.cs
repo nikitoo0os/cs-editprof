@@ -32,6 +32,7 @@ public sealed class PipelineOptions
     public string MusicAnalyzerPath { get; set; } =
         "artifacts/music-analyzer/music-analyzer.exe";
     public int FfmpegTimeoutSeconds { get; set; } = 600;
+    public int MusicAnalyzerTimeoutSeconds { get; set; } = 180;
     public DemoFailurePolicy DemoFailurePolicy { get; set; } = DemoFailurePolicy.SkipInvalidDemo;
 }
 

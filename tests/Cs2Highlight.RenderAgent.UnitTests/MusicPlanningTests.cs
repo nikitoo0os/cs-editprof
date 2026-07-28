@@ -70,6 +70,50 @@ public sealed class MusicPlanningTests
         Assert.Contains("EXCESSIVE_TIME_WARP_FALLBACK", result.Warnings);
     }
 
+    [Fact]
+    public void ExpressiveWarpBuildsContinuousPiecewiseRampAndAlignsKill()
+    {
+        TimeWarpPlan result = new TimeWarpPlanner().Create(
+            new SafeClipBounds(0, 0, 5, 5, 8, 8),
+            new MusicalAnchor("beat", MusicalAnchorType.StrongBeat, 5.1, 1, 1),
+            0,
+            MusicSyncIntensity.Expressive,
+            new TimeWarpOptions());
+
+        Assert.True(result.UsesLocalRamp);
+        Assert.True(result.Segments.Count > 3);
+        Assert.Equal(0, result.Segments[0].SourceStartSeconds, 6);
+        Assert.Equal(8, result.Segments[^1].SourceEndSeconds, 6);
+        Assert.InRange(
+            TimeWarpMath.MapSourceTime(result, 5),
+            5.099,
+            5.101);
+        Assert.All(
+            result.Segments,
+            value => Assert.InRange(value.Speed, 0.75, 1.20));
+        Assert.All(
+            result.Segments.Zip(result.Segments.Skip(1)),
+            pair => Assert.Equal(
+                pair.First.SourceEndSeconds,
+                pair.Second.SourceStartSeconds,
+                6));
+    }
+
+    [Fact]
+    public void TimeWarpAlwaysPreservesSafeTail()
+    {
+        TimeWarpPlan result = new TimeWarpPlanner().Create(
+            new SafeClipBounds(0, 0, 5, 5, 8, 8),
+            new MusicalAnchor("beat", MusicalAnchorType.StrongBeat, 5.1, 1, 1),
+            0,
+            MusicSyncIntensity.Expressive,
+            new TimeWarpOptions());
+
+        Assert.True(TimeWarpMath.OutputDuration(result, 8) >
+            TimeWarpMath.MapSourceTime(result, 5));
+        Assert.Equal(8, result.Segments.Max(value => value.SourceEndSeconds), 6);
+    }
+
     private static MusicAnalysis Music(
         IReadOnlyList<MusicBeat> beats,
         IReadOnlyList<MusicDropCandidate> drops) =>

@@ -150,3 +150,16 @@ public sealed class DropDetectionOptions
     public double MinimumDropScore { get; init; } = 0.65;
     public double MinimumDropGapSeconds { get; init; } = 4;
 }
+
+public sealed class AudioMixOptions
+{
+    public double MusicGainDb { get; init; } = -3;
+    public double GameplayBaseGainDb { get; init; } = -16;
+    public double GameplayKillAccentGainDb { get; init; } = -7;
+    public double KillAccentAttackMilliseconds { get; init; } = 50;
+    public double KillAccentHoldMilliseconds { get; init; } = 250;
+    public double KillAccentReleaseMilliseconds { get; init; } = 400;
+    public double MusicDuckOnKillDb { get; init; } = -3;
+    public bool EnableLimiter { get; init; } = true;
+    public double OutputTruePeakDb { get; init; } = -1;
+}

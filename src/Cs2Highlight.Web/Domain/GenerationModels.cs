@@ -118,6 +118,7 @@ public sealed class GenerationMovieSettings
     public MovieStyle MovieStyle { get; set; } = MovieStyle.Dynamic;
     public MusicSyncIntensity SyncIntensity { get; set; } = MusicSyncIntensity.Expressive;
     public ColorGradePreset ColorGradePreset { get; set; } = ColorGradePreset.Natural;
+    [MaxLength(64)] public string? LutAssetKey { get; set; }
     public double MusicGainDb { get; set; } = -3;
     public double GameplayGainDb { get; set; } = -16;
     [MaxLength(32)] public string TransitionPreference { get; set; } = "Automatic";
