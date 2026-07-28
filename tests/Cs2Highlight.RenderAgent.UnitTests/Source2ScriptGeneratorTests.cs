@@ -48,7 +48,49 @@ public sealed class Source2ScriptGeneratorTests
         Assert.Contains("-autoStart", arguments);
         Assert.Contains("-noGui", arguments);
         Assert.Contains("-insecure", arguments.Single(value => value.Contains("-insecure", StringComparison.Ordinal)));
+        Assert.Contains("-afxFixNetCon", arguments.Single(value => value.Contains("-afxFixNetCon", StringComparison.Ordinal)));
+        Assert.Contains("-netconport 32123", arguments.Single(value => value.Contains("-netconport 32123", StringComparison.Ordinal)));
         Assert.Contains("-w 2560", arguments.Single(value => value.Contains("-w 2560", StringComparison.Ordinal)));
         Assert.Contains($"USRLOCALCSGO={workspace.Config}", arguments);
+    }
+
+    [Fact]
+    public async Task StartupScriptLoadsDemoButDefersControlCommands()
+    {
+        string root = Path.Combine(Path.GetTempPath(), $"source2-script-{Guid.NewGuid():N}");
+        RenderWorkspace workspace = new(
+            root,
+            Path.Combine(root, "input"),
+            Path.Combine(root, "config"),
+            Path.Combine(root, "raw"),
+            Path.Combine(root, "output"),
+            Path.Combine(root, "logs"),
+            Path.Combine(root, "state"),
+            Path.Combine(root, "input", "demo_safe138.dem"));
+        RenderJob job = new(
+            "test",
+            workspace.PreparedDemoPath,
+            new PlayerSelector("76561198000000001", "Player"),
+            new RenderSegment(100, 200),
+            new VideoSettings(1920, 1080, 60, 90),
+            workspace.Output);
+        try
+        {
+            GeneratedRenderScript script = await new Source2ScriptGenerator()
+                .GenerateAsync(job, workspace, CancellationToken.None);
+            string cfg = await File.ReadAllTextAsync(script.Path);
+
+            Assert.Contains("playdemo", cfg);
+            Assert.DoesNotContain("demo_gototick", cfg);
+            Assert.DoesNotContain("addAtTick", cfg);
+            Assert.DoesNotContain("spec_player", cfg);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, true);
+            }
+        }
     }
 }

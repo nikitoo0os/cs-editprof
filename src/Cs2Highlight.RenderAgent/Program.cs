@@ -78,6 +78,7 @@ internal static class Program
         builder.Services.AddSingleton<IRenderScriptGenerator, Source2ScriptGenerator>();
         builder.Services.AddSingleton<IProcessSupervisor, ProcessSupervisor>();
         builder.Services.AddSingleton<IHlaeLauncher, HlaeLauncher>();
+        builder.Services.AddSingleton<IDemoController, NetConsoleDemoController>();
         builder.Services.AddSingleton<IRenderOutputWatcher, RenderOutputWatcher>();
         builder.Services.AddSingleton<IRenderLockFactory, RenderLockFactory>();
         builder.Services.AddSingleton<IStateJournal, StateJournal>();

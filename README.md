@@ -6,7 +6,10 @@ Before playback, the agent automatically checks its isolated demo copy for the
 CS2 July 2026 legacy entity-message-138 regression. Affected demos are repaired
 into a separate `_safe138.dem` workspace file; the source demo is never changed.
 
-This repository does **not** claim a completed real HLAE/CS2 E2E. HLAE, CS2, and a compatible demo were not available during development. Execution is intentionally blocked until the exact command set is manually verified and `AutomationVerified` is enabled.
+This repository does **not** claim a completed real HLAE/CS2 E2E until the
+acceptance checklist succeeds repeatedly on the render machine. Execution is
+intentionally blocked until the exact command set is manually verified and
+`AutomationVerified` is enabled.
 
 ## Confirmed HLAE surface
 
@@ -26,7 +29,11 @@ The unattended HLAE custom-loader CLI is confirmed from the upstream HLAE source
 `-noConfig -customLoader -autoStart -noGui -hookDllPath ... -programPath ... -cmdLine ... -addEnv ...`.
 The launcher always forces `-insecure`, uses an isolated `USRLOCALCSGO`, and injects `AfxHookSource2.dll` only into the CS2 process it creates. Normal CS2 launches through Steam are untouched.
 
-The CS2 commands `playdemo`, `demo_gototick`, and `spec_player` remain operator-verified inputs. The application refuses to run when `AutomationVerified=false`.
+The launcher also enables local NetCon with `-afxFixNetCon`. The agent waits
+for actual demo initialization before sending `demo_gototick`, selects the
+POV, starts recording, schedules the stop command at `endTick`, and then
+gracefully quits the isolated CS2 process. The application refuses to run when
+`AutomationVerified=false`.
 
 ## Requirements
 
@@ -34,7 +41,7 @@ The CS2 commands `playdemo`, `demo_gototick`, and `spec_player` remain operator-
 - .NET 8 SDK/runtime
 - Steam and CS2
 - current HLAE with AfxHookSource2
-- FFmpeg supplied with HLAE when an FFmpeg preset is used
+- FFmpeg and ffprobe supplied with HLAE
 - bundled `cs2-demo-playback-fix` compatibility helper (copied by the build)
 - at least 1 GiB free on the working drive (real high-quality renders need much more)
 
@@ -66,6 +73,16 @@ Published executable:
 render-agent.exe render --job render-job.json
 ```
 
+After one successful job, run consecutive acceptance jobs without rebooting:
+
+```powershell
+.\scripts\run-acceptance.ps1 -JobPath .\render-job.json -Count 3
+```
+
+The script creates unique job IDs and output directories and stops at the first
+failure. Per-run inputs and result JSON files are saved under
+`artifacts\acceptance-runs`.
+
 ## Job and output
 
 See `examples/render-job.example.json`. Existing non-empty output directories are rejected to prevent silent overwrites. Per-job workspaces contain:
@@ -74,11 +91,16 @@ See `examples/render-job.example.json`. Existing non-empty output directories ar
 input/  config/  raw/  output/  logs/  state/
 ```
 
-`state/render-state.json` contains the latest transition, `render-state.jsonl` contains history, and `render-result.json` contains the final structured result. On success, media is copied as `raw-highlight.<ext>` to the requested output directory.
+`state/render-state.json` contains the latest transition, `render-state.jsonl`
+contains history, and `render-result.json` contains the final structured
+result. On success, an ffprobe-validated MP4 is copied as
+`raw-highlight.mp4` to the requested output directory.
 
 `logs/demo-compatibility-repair.log` reports either `REPAIRED` with removal
 statistics or `CLEAN`. The bundled helper is Apache-2.0 licensed; provenance,
 license, and notices are stored in `third_party/cs2-demo-playback-fix`.
+`logs/netcon.log` contains received CS2 console lines and every command sent by
+the agent, prefixed with `>`.
 
 ## Exit codes
 
@@ -99,16 +121,19 @@ license, and notices are stored in `third_party/cs2-demo-playback-fix`.
 
 ## Cancellation and recovery
 
-Ctrl+C cancels waits and kills only the process tree started by the current job. The named mutex prevents concurrent render jobs. Diagnostic workspace data is preserved on failure.
+Ctrl+C cancels waits and kills only the process tree started by the current
+job. A named cross-process semaphore prevents concurrent render jobs and is
+safe across asynchronous continuations. Diagnostic workspace data is preserved
+on failure.
 
 Use `scripts/kill-render-processes.ps1 -StateDirectory <job-state-path> -WhatIf` before any manual cleanup. The script only acts on PIDs recorded for the job and prompts by default; it never kills processes by name.
 
 ## Troubleshooting
 
 - Run `scripts/verify-environment.ps1 -SettingsPath <settings.json>`.
-- Inspect `logs/hlae.stdout.log`, `logs/hlae.stderr.log`, and `state/render-state.jsonl`.
+- Inspect `logs/netcon.log`, `logs/hlae.stdout.log`, `logs/hlae.stderr.log`, and `state/render-state.jsonl`.
 - If automation is rejected, follow `docs/MANUAL_E2E.md`; do not bypass the guard without testing the installed builds.
-- If output is missing, use HLAE console help for `mirv_streams` and verify its FFmpeg installation.
+- If output is missing, use HLAE console help for `mirv_streams` and verify both FFmpeg and ffprobe.
 - If CS2 reports `Unknown message type 138` or `Failed to parse message`, inspect
   `logs/demo-compatibility-repair.log` and confirm the generated CFG uses the
   `_safe138.dem` workspace copy.

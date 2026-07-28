@@ -1,4 +1,7 @@
 using System.Runtime.InteropServices;
+using System.Net;
+using System.Net.Sockets;
+using System.Diagnostics;
 using Cs2Highlight.RenderAgent.Application;
 
 namespace Cs2Highlight.RenderAgent.Infrastructure;
@@ -15,7 +18,12 @@ public sealed class EnvironmentVerifier(RenderEnvironmentOptions options) : IEnv
             FileCheck("AfxHookSource2", GetHookPath(options.HlaeExecutablePath)),
             FileCheck("CS2", options.Cs2ExecutablePath),
             FileCheck("Steam", options.SteamExecutablePath),
+            FileCheck("FFmpeg", options.FfmpegExecutablePath ?? string.Empty),
+            FileCheck("FFprobe", RenderOutputWatcher.ResolveFfprobePath(options)),
             FileCheck("DemoCompatibilityRepair", DemoCompatibilityRepairer.ResolveExecutablePath(options)),
+            CheckNetConPort(options.NetConPort),
+            CheckProcessNotRunning("CS2NotRunning", "cs2"),
+            CheckProcessNotRunning("HLAENotRunning", "HLAE"),
             Check("AutomationVerified", options.AutomationVerified,
                 options.AutomationVerified
                     ? "The operator marked this exact HLAE/CS2 command set as manually verified."
@@ -62,6 +70,50 @@ public sealed class EnvironmentVerifier(RenderEnvironmentOptions options) : IEnv
         catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
         {
             return Check(name, false, exception.Message);
+        }
+    }
+
+    private static EnvironmentCheck CheckNetConPort(int port)
+    {
+        if (port is < IPEndPoint.MinPort or > IPEndPoint.MaxPort)
+        {
+            return Check("NetConPortAvailable", false, $"Port {port} is outside the valid TCP range.");
+        }
+
+        TcpListener listener = new(IPAddress.Loopback, port);
+        try
+        {
+            listener.Start();
+            return Check("NetConPortAvailable", true, $"127.0.0.1:{port}");
+        }
+        catch (SocketException exception)
+        {
+            return Check("NetConPortAvailable", false, exception.Message);
+        }
+        finally
+        {
+            listener.Stop();
+        }
+    }
+
+    private static EnvironmentCheck CheckProcessNotRunning(string checkName, string processName)
+    {
+        Process[] processes = Process.GetProcessesByName(processName);
+        try
+        {
+            return Check(
+                checkName,
+                processes.Length == 0,
+                processes.Length == 0
+                    ? $"{processName}.exe is not running."
+                    : $"{processName}.exe is already running (PID: {string.Join(", ", processes.Select(process => process.Id))}).");
+        }
+        finally
+        {
+            foreach (Process process in processes)
+            {
+                process.Dispose();
+            }
         }
     }
 

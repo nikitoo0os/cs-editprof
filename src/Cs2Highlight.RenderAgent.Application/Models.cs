@@ -21,11 +21,15 @@ public sealed class RenderEnvironmentOptions
     public string Cs2ExecutablePath { get; set; } = string.Empty;
     public string SteamExecutablePath { get; set; } = string.Empty;
     public string? FfmpegExecutablePath { get; set; }
+    public string? FfprobeExecutablePath { get; set; }
     public string DemoRepairExecutablePath { get; set; } = string.Empty;
     public string WorkingRoot { get; set; } = string.Empty;
     public string HlaeArguments { get; set; } = string.Empty;
     public bool AutomationVerified { get; set; }
     public int ProcessStartupTimeoutSeconds { get; set; } = 90;
+    public int DemoLoadTimeoutSeconds { get; set; } = 120;
+    public int ProcessShutdownTimeoutSeconds { get; set; } = 15;
+    public int NetConPort { get; set; } = 32123;
     public int OutputStableSeconds { get; set; } = 3;
     public long MinimumOutputBytes { get; set; } = 1024;
     public bool KillProcessTreeOnFailure { get; set; } = true;

@@ -5,6 +5,7 @@ namespace Cs2Highlight.RenderAgent.Infrastructure;
 public sealed class HlaeLauncher(RenderEnvironmentOptions options, IProcessSupervisor supervisor) : IHlaeLauncher
 {
     public Task<ProcessExecutionResult> LaunchAsync(
+        RenderJob job,
         RenderWorkspace workspace,
         GeneratedRenderScript script,
         CancellationToken cancellationToken)
@@ -27,7 +28,7 @@ public sealed class HlaeLauncher(RenderEnvironmentOptions options, IProcessSuper
             workspace.Root,
             Path.Combine(workspace.Logs, "hlae.stdout.log"),
             Path.Combine(workspace.Logs, "hlae.stderr.log"),
-            TimeSpan.FromSeconds(options.ProcessStartupTimeoutSeconds));
+            TimeSpan.FromSeconds(job.TimeoutSeconds));
         return supervisor.RunAsync(request, cancellationToken);
     }
 
@@ -65,6 +66,8 @@ public sealed class HlaeLauncher(RenderEnvironmentOptions options, IProcessSuper
             "-insecure",
             "+sv_lan 1",
             "-console",
+            "-afxFixNetCon",
+            $"-netconport {environment.NetConPort}",
             "-sw",
             $"-w {script.Width}",
             $"-h {script.Height}",

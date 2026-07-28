@@ -24,9 +24,9 @@ public static partial class RenderJobValidator
             errors.Add("demoPath must reference an existing .dem file.");
         }
 
-        if (string.IsNullOrWhiteSpace(job.Player?.SteamId) && string.IsNullOrWhiteSpace(job.Player?.Name))
+        if (string.IsNullOrWhiteSpace(job.Player?.Name))
         {
-            errors.Add("player.steamId, player.name, or both are required.");
+            errors.Add("player.name is required for deterministic CS2 spec_player POV selection.");
         }
 
         if (job.Player?.SteamId is { Length: > 32 } || job.Player?.Name is { Length: > 128 })
@@ -48,6 +48,17 @@ public static partial class RenderJobValidator
         if (job.TimeoutSeconds is < 1 or > 86400)
         {
             errors.Add("timeoutSeconds must be between 1 and 86400.");
+        }
+
+        if (environment.NetConPort is < 1 or > 65535)
+        {
+            errors.Add("RenderEnvironment.NetConPort must be between 1 and 65535.");
+        }
+        if (environment.ProcessStartupTimeoutSeconds < 1 ||
+            environment.DemoLoadTimeoutSeconds < 1 ||
+            environment.ProcessShutdownTimeoutSeconds < 1)
+        {
+            errors.Add("RenderEnvironment process and demo timeout values must be positive.");
         }
 
         ValidateOutput(job.OutputDirectory, environment.Cs2ExecutablePath, errors);

@@ -27,7 +27,17 @@ public interface IProcessSupervisor
 
 public interface IHlaeLauncher
 {
-    Task<ProcessExecutionResult> LaunchAsync(RenderWorkspace workspace, GeneratedRenderScript script, CancellationToken cancellationToken);
+    Task<ProcessExecutionResult> LaunchAsync(
+        RenderJob job,
+        RenderWorkspace workspace,
+        GeneratedRenderScript script,
+        CancellationToken cancellationToken);
+}
+
+public interface IDemoController
+{
+    Task ControlAsync(RenderJob job, RenderWorkspace workspace, CancellationToken cancellationToken);
+    Task QuitAsync(CancellationToken cancellationToken);
 }
 
 public interface IRenderOutputWatcher

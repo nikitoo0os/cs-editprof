@@ -11,7 +11,6 @@ public sealed class Source2ScriptGenerator : IRenderScriptGenerator
         RenderWorkspace workspace,
         CancellationToken cancellationToken)
     {
-        string player = EscapeCfg(job.Player.SteamId ?? job.Player.Name ?? throw new InvalidOperationException("Missing player selector."));
         string demo = EscapeCfg(workspace.PreparedDemoPath);
         string raw = EscapeCfg(workspace.Raw);
         string cfgDirectory = Path.Combine(workspace.Config, "cfg");
@@ -26,14 +25,10 @@ public sealed class Source2ScriptGenerator : IRenderScriptGenerator
         cfg.AppendLine(CultureInfo.InvariantCulture, $"mirv_streams record name \"{raw}\"");
         cfg.AppendLine("mirv_streams settings edit afxDefault settings afxFfmpeg");
         cfg.AppendLine(CultureInfo.InvariantCulture, $"playdemo \"{demo}\"");
-        cfg.AppendLine(CultureInfo.InvariantCulture, $"mirv_cmd addAtTick {job.Segment.StartTick} \"spec_player {player}; mirv_streams record start\"");
-        cfg.AppendLine(CultureInfo.InvariantCulture, $"mirv_cmd addAtTick {job.Segment.EndTick} \"mirv_streams record end; demo_pause\"");
-        cfg.AppendLine(CultureInfo.InvariantCulture, $"demo_gototick {job.Segment.StartTick}");
         await File.WriteAllTextAsync(path, cfg.ToString(), new UTF8Encoding(false), cancellationToken);
         return new GeneratedRenderScript(path, job.Video.Width, job.Video.Height,
         [
-            "playdemo, demo_gototick, and spec_player must be manually checked against the installed CS2 build.",
-            "The HLAE custom-loader CLI is source-confirmed; demo loading, seeking, and POV commands still require an installed-build E2E check."
+            "POV selection and tick seeking are controlled through local CS2 NetCon and require installed-build E2E verification."
         ]);
     }
 

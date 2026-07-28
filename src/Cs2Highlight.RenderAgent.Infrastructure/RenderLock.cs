@@ -4,32 +4,22 @@ namespace Cs2Highlight.RenderAgent.Infrastructure;
 
 public sealed class RenderLockFactory : IRenderLockFactory
 {
-    public IRenderLock TryAcquire() => new NamedMutexRenderLock();
+    public IRenderLock TryAcquire() => new NamedSemaphoreRenderLock();
 
-    private sealed class NamedMutexRenderLock : IRenderLock
+    private sealed class NamedSemaphoreRenderLock : IRenderLock
     {
-        private readonly Mutex mutex = new(false, @"Local\Cs2Highlight.RenderAgent");
+        private readonly Semaphore semaphore = new(1, 1, @"Local\Cs2Highlight.RenderAgent");
         public bool Acquired { get; }
 
-        public NamedMutexRenderLock()
-        {
-            try
-            {
-                Acquired = mutex.WaitOne(TimeSpan.Zero);
-            }
-            catch (AbandonedMutexException)
-            {
-                Acquired = true;
-            }
-        }
+        public NamedSemaphoreRenderLock() => Acquired = semaphore.WaitOne(TimeSpan.Zero);
 
         public ValueTask DisposeAsync()
         {
             if (Acquired)
             {
-                mutex.ReleaseMutex();
+                semaphore.Release();
             }
-            mutex.Dispose();
+            semaphore.Dispose();
             return ValueTask.CompletedTask;
         }
     }

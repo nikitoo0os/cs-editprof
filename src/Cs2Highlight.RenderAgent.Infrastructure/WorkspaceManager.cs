@@ -14,11 +14,11 @@ public sealed class WorkspaceManager(RenderEnvironmentOptions options) : IWorksp
         }
 
         string input = Create(root, "input");
-        string config = Create(root, "config");
-        string raw = Create(root, "raw");
-        string output = Create(root, "output");
-        string logs = Create(root, "logs");
-        string state = Create(root, "state");
+        string config = Recreate(root, "config");
+        string raw = Recreate(root, "raw");
+        string output = Recreate(root, "output");
+        string logs = Recreate(root, "logs");
+        string state = Recreate(root, "state");
         string demo = Path.Combine(input, Path.GetFileName(job.DemoPath));
         if (!File.Exists(demo))
         {
@@ -33,6 +33,22 @@ public sealed class WorkspaceManager(RenderEnvironmentOptions options) : IWorksp
     private static string Create(string root, string name)
     {
         string path = Path.Combine(root, name);
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static string Recreate(string root, string name)
+    {
+        string fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar);
+        string path = Path.GetFullPath(Path.Combine(fullRoot, name));
+        if (!path.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Generated workspace path escaped the job root.");
+        }
+        if (Directory.Exists(path))
+        {
+            Directory.Delete(path, recursive: true);
+        }
         Directory.CreateDirectory(path);
         return path;
     }
