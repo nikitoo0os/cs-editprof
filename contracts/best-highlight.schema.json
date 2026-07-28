@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nikitoo0os/cs-editprof/contracts/best-highlight.schema.json",
+  "title": "Selected CS2 highlight",
+  "type": "object",
+  "required": ["schemaVersion", "found", "highlight", "reason"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "found": { "type": "boolean" },
+    "highlight": { "type": ["object", "null"] },
+    "reason": { "type": ["string", "null"] }
+  }
+}

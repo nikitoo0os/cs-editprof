@@ -1,0 +1,30 @@
+{
+  "schemaVersion": "1.0",
+  "found": true,
+  "highlight": {
+    "id": "round-8-player-76561198000000001-45120-45430",
+    "type": "TripleKill",
+    "playerId": "76561198000000001",
+    "playerName": "Player1",
+    "roundNumber": 8,
+    "firstKillTick": 45120,
+    "lastKillTick": 45430,
+    "startTick": 44928,
+    "endTick": 45622,
+    "killCount": 3,
+    "headshotCount": 2,
+    "score": 99,
+    "scoreBreakdown": {
+      "baseKillScore": 60,
+      "headshotBonus": 14,
+      "typeBonus": 15,
+      "fastSequenceBonus": 10,
+      "roundWinBonus": 0,
+      "lastKillRoundEndBonus": 0,
+      "total": 99
+    },
+    "sourceEventIndexes": [14, 15, 16],
+    "tags": ["FAST_SEQUENCE", "HEADSHOT_STREAK"]
+  },
+  "reason": null
+}

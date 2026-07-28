@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nikitoo0os/cs-editprof/contracts/highlights.schema.json",
+  "title": "CS2 highlight candidates",
+  "type": "object",
+  "required": ["schemaVersion", "demoFile", "generatedAt", "options", "candidates"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "demoFile": { "type": "string", "minLength": 1 },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "options": { "type": "object" },
+    "candidates": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/highlight" }
+    }
+  },
+  "$defs": {
+    "highlight": {
+      "type": "object",
+      "required": [
+        "id", "type", "playerId", "playerName", "roundNumber", "firstKillTick",
+        "lastKillTick", "startTick", "endTick", "killCount", "headshotCount",
+        "score", "scoreBreakdown", "sourceEventIndexes", "tags"
+      ],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "type": { "enum": ["DoubleKill", "TripleKill", "QuadKill", "Ace", "HeadshotStreak"] },
+        "playerId": { "type": "string", "minLength": 1 },
+        "playerName": { "type": "string" },
+        "roundNumber": { "type": "integer", "minimum": 1 },
+        "firstKillTick": { "type": "integer", "minimum": 0 },
+        "lastKillTick": { "type": "integer", "minimum": 0 },
+        "startTick": { "type": "integer", "minimum": 0 },
+        "endTick": { "type": "integer", "minimum": 1 },
+        "killCount": { "type": "integer", "minimum": 2 },
+        "headshotCount": { "type": "integer", "minimum": 0 },
+        "score": { "type": "number" },
+        "scoreBreakdown": { "type": "object" },
+        "sourceEventIndexes": { "type": "array", "items": { "type": "integer", "minimum": 1 } },
+        "tags": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  }
+}

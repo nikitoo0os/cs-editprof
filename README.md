@@ -77,6 +77,121 @@ Published executable:
 render-agent.exe render --job render-job.json
 ```
 
+## Stage 2: Demo analysis and highlight detection
+
+Stage 2 turns real CS2 demo events into a deterministic Stage 1 `RenderJob`:
+
+```text
+.dem -> Go demo-parser -> demo-analysis.json
+     -> C# rules -> highlights.json -> best-highlight.json -> render-job.json
+```
+
+Binary parsing stays in the small Go CLI. Highlight rules, scoring, selection,
+window calculation, and the adapter to the existing Render Agent contract stay
+in .NET. The analysis command does not start HLAE or CS2.
+
+### Requirements and build
+
+- Go 1.24 or newer (development used Go 1.26.5);
+- .NET 8 SDK;
+- `demoinfocs-golang/v5` v5.2.0, pinned by `go.mod`.
+
+```powershell
+.\scripts\build-demo-parser.ps1
+dotnet build .\Cs2Highlight.RenderPoC.sln -c Release
+dotnet test .\Cs2Highlight.RenderPoC.sln -c Release --no-build
+```
+
+The parser can also be built directly:
+
+```powershell
+cd .\tools\demo-parser
+go test ./...
+go build -trimpath -o .\bin\demo-parser.exe .\cmd\demo-parser
+```
+
+### Run
+
+Low-level parser commands:
+
+```powershell
+.\artifacts\demo-parser\demo-parser.exe version
+.\artifacts\demo-parser\demo-parser.exe validate --input "D:\demos\match.dem"
+.\artifacts\demo-parser\demo-parser.exe analyze `
+  --input "D:\demos\match.dem" `
+  --output "D:\analysis\demo-analysis.json" `
+  --pretty `
+  --log-file "D:\analysis\logs\demo-parser.log"
+```
+
+Complete Stage 2 pipeline:
+
+```powershell
+dotnet .\src\Cs2Highlight.Cli\bin\Release\net8.0\cs2-highlight.dll analyze `
+  --demo "D:\demos\match.dem" `
+  --output "D:\analysis\match-001" `
+  --parser-path ".\artifacts\demo-parser\demo-parser.exe"
+```
+
+The output directory must be empty. Successful analysis creates:
+
+```text
+demo-analysis.json
+highlights.json
+best-highlight.json
+render-job.json
+logs/demo-parser.log
+logs/highlight-detector.log
+```
+
+The contracts are versioned as `1.0` and documented under `contracts/`.
+Steam IDs are JSON strings. Ticks remain integer server ticks from the demo.
+The generated `render-job.json` uses the existing Stage 1 model without renamed
+or parallel fields and can be passed directly to:
+
+```powershell
+render-agent.exe render --job "D:\analysis\match-001\render-job.json"
+```
+
+### Detection and scoring
+
+Kills are grouped by round and stable killer ID. Missing killers, suicides, and
+teamkills are excluded. Adjacent kills may be at most six seconds apart and a
+sequence may span at most twelve seconds. Only the maximal double/triple/quad/
+ace candidate is emitted for a sequence. Render windows use three-second
+pre-roll/post-roll and are clamped to round and demo bounds.
+
+Scoring is explainable and serialized as `scoreBreakdown`: kill count, headshot
+streak, type, fast-sequence, round-win, and round-ending bonuses. Best selection
+uses score, kills, headshots, shorter duration, round, tick, and stable ID in
+that order. No random value or current timestamp affects the decision.
+
+### Stage 2 limitations and real verification
+
+- Clutch, cinematic camera, positions, economy, grenade trajectories, editing,
+  and ML scoring are outside this stage.
+- Headshot streak is currently a tag and score bonus on a multikill, not a
+  separate overlapping clip.
+- Round-end reasons unavailable from the parser remain `null`.
+- Demos without stable SteamID cannot produce a Stage 1 render job.
+- The parser spike and complete pipeline were verified on three real fixtures
+  from the official `markus-wa/cs-demos-2` regression set:
+  - `s2.dem`: `de_ancient`, 144 kills, 10 candidates, TripleKill,
+    SteamID64 `76561198213282160`, ticks `28123..28837`;
+  - `1_2v2_6thAug23_64cf951f9b4ce6b86c73b089.dem`: `de_overpass`,
+    38 kills, 4 candidates, DoubleKill, SteamID64 `76561197986329856`,
+    ticks `45947..46445`;
+  - `Anubis_ShortMatch_2023-08-04.dem`: `de_anubis`, 99 kills,
+    10 candidates, TripleKill, SteamID64 `76561198071076641`,
+    ticks `47704..48523`.
+- These regression fixtures are from 2023. Current user demos still need
+  installed-machine verification before declaring broad format compatibility.
+
+For parser failures, inspect structured stderr and `logs/demo-parser.log`.
+`MALFORMED_DEMO` is distinct from the valid `NO_HIGHLIGHTS_FOUND` result.
+Local real demos belong under `tools/demo-parser/testdata/local/` and must not
+be committed.
+
 After one successful job, run consecutive acceptance jobs without rebooting:
 
 ```powershell

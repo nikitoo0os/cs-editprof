@@ -1,0 +1,9 @@
+{
+  "files": [
+    {
+      "path": "local/triple-kill.dem",
+      "expectedMinimumKills": 2,
+      "expectedMap": "de_mirage"
+    }
+  ]
+}

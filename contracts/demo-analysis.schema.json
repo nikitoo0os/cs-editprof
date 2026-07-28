@@ -1,0 +1,87 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nikitoo0os/cs-editprof/contracts/demo-analysis.schema.json",
+  "title": "CS2 demo analysis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "parser", "demo", "players", "rounds", "kills", "warnings"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "parser": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 }
+      }
+    },
+    "demo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fileName", "mapName", "tickRate", "durationTicks", "durationMilliseconds"],
+      "properties": {
+        "fileName": { "type": "string", "minLength": 1 },
+        "mapName": { "type": "string" },
+        "tickRate": { "type": "integer", "minimum": 1 },
+        "durationTicks": { "type": "integer", "minimum": 1 },
+        "durationMilliseconds": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "players": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["playerId", "steamId", "name"],
+        "properties": {
+          "playerId": { "type": "string", "minLength": 1 },
+          "steamId": { "type": ["string", "null"] },
+          "name": { "type": "string", "maxLength": 128 }
+        }
+      }
+    },
+    "rounds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["roundNumber", "startTick", "freezeEndTick", "endTick", "winner", "reason"],
+        "properties": {
+          "roundNumber": { "type": "integer", "minimum": 1 },
+          "startTick": { "type": "integer", "minimum": 0 },
+          "freezeEndTick": { "type": ["integer", "null"], "minimum": 0 },
+          "endTick": { "type": "integer", "minimum": 1 },
+          "winner": { "enum": ["T", "CT", null] },
+          "reason": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "kills": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "eventIndex", "tick", "roundNumber", "killerPlayerId", "killerName",
+          "victimPlayerId", "victimName", "assisterPlayerId", "weapon",
+          "headshot", "killerTeam", "victimTeam"
+        ],
+        "properties": {
+          "eventIndex": { "type": "integer", "minimum": 1 },
+          "tick": { "type": "integer", "minimum": 0 },
+          "roundNumber": { "type": "integer", "minimum": 1 },
+          "killerPlayerId": { "type": ["string", "null"] },
+          "killerName": { "type": ["string", "null"] },
+          "victimPlayerId": { "type": "string", "minLength": 1 },
+          "victimName": { "type": "string" },
+          "assisterPlayerId": { "type": ["string", "null"] },
+          "weapon": { "type": "string" },
+          "headshot": { "type": "boolean" },
+          "killerTeam": { "enum": ["T", "CT", null] },
+          "victimTeam": { "enum": ["T", "CT", null] }
+        }
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  }
+}

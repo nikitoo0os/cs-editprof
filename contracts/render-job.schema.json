@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nikitoo0os/cs-editprof/contracts/render-job.schema.json",
+  "title": "Stage 1 RenderJob",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["jobId", "demoPath", "player", "segment", "video", "outputDirectory", "timeoutSeconds"],
+  "properties": {
+    "jobId": { "type": "string", "pattern": "^[A-Za-z0-9._-]{1,80}$" },
+    "demoPath": { "type": "string", "minLength": 1 },
+    "player": {
+      "type": "object",
+      "required": ["steamId", "name"],
+      "properties": {
+        "steamId": { "type": "string", "pattern": "^7656119[0-9]{10}$" },
+        "name": { "type": ["string", "null"], "maxLength": 128 }
+      }
+    },
+    "segment": {
+      "type": "object",
+      "required": ["startTick", "endTick"],
+      "properties": {
+        "startTick": { "type": "integer", "minimum": 0 },
+        "endTick": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "video": {
+      "type": "object",
+      "required": ["width", "height", "fps", "fov"],
+      "properties": {
+        "width": { "type": "integer", "minimum": 320, "maximum": 7680 },
+        "height": { "type": "integer", "minimum": 240, "maximum": 4320 },
+        "fps": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "fov": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 180 }
+      }
+    },
+    "outputDirectory": { "type": "string", "minLength": 1 },
+    "timeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 86400 }
+  }
+}

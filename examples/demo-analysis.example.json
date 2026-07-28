@@ -1,0 +1,48 @@
+{
+  "schemaVersion": "1.0",
+  "parser": {
+    "name": "cs2-demo-parser",
+    "version": "0.1.0"
+  },
+  "demo": {
+    "fileName": "match.dem",
+    "mapName": "de_mirage",
+    "tickRate": 64,
+    "durationTicks": 125400,
+    "durationMilliseconds": 1959375
+  },
+  "players": [
+    {
+      "playerId": "76561198000000001",
+      "steamId": "76561198000000001",
+      "name": "Player1"
+    }
+  ],
+  "rounds": [
+    {
+      "roundNumber": 8,
+      "startTick": 43000,
+      "freezeEndTick": 43500,
+      "endTick": 47000,
+      "winner": "T",
+      "reason": "TerroristsWin"
+    }
+  ],
+  "kills": [
+    {
+      "eventIndex": 14,
+      "tick": 45120,
+      "roundNumber": 8,
+      "killerPlayerId": "76561198000000001",
+      "killerName": "Player1",
+      "victimPlayerId": "76561198000000002",
+      "victimName": "Player2",
+      "assisterPlayerId": null,
+      "weapon": "AK-47",
+      "headshot": true,
+      "killerTeam": "T",
+      "victimTeam": "CT"
+    }
+  ],
+  "warnings": []
+}
