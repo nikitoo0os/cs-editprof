@@ -157,6 +157,117 @@ or parallel fields and can be passed directly to:
 render-agent.exe render --job "D:\analysis\match-001\render-job.json"
 ```
 
+## Stage 3: Batch rendering
+
+Stage 3 turns every selected highlight for one SteamID into an independent,
+strictly sequential Stage 1 render. It reuses `HighlightCandidate`,
+`IRenderJobBuilder`, `RenderJob`, `RenderResult`, and the existing Render Agent;
+the batch layer does not control HLAE or CS2 itself.
+
+Build and create a plan without starting CS2:
+
+```powershell
+dotnet build .\Cs2Highlight.RenderPoC.sln -c Release
+
+dotnet .\src\Cs2Highlight.Cli\bin\Release\net8.0\cs2-highlight.dll render-batch `
+  --demo "D:\demos\match.dem" `
+  --steam-id "76561198000000001" `
+  --output "D:\Cs2Highlights\batches\match-player" `
+  --parser-path ".\artifacts\demo-parser\demo-parser.exe" `
+  --dry-run
+```
+
+Remove `--dry-run` to render. The default Render Agent location is the Release
+build under `src`; override it with `--render-agent-path`. To consume an existing
+Stage 2 file without parsing the demo again, pass both `--highlights` and
+`--demo`; in that form `--demo` supplies only the immutable source path used by
+RenderJob.
+
+Candidate processing is deterministic:
+
+```text
+SteamID -> valid range -> type -> minimum score -> duplicate removal
+        -> strong-overlap resolution -> sorting -> maximum clips
+```
+
+Supported controls include:
+
+```text
+--min-score <double>
+--types <DoubleKill,TripleKill,QuadKill,Ace,HeadshotStreak>
+--max-clips <int>
+--sort-by <score|tick|round>
+--order <asc|desc>
+--overlap-policy <KeepAll|KeepHighestScore>
+--overlap-threshold <0..1>
+--continue-on-error <true|false>
+--max-retries <int>
+--overwrite
+```
+
+`KeepHighestScore` at a 70% overlap threshold is the default. Ties prefer more
+kills, then shorter duration, then earlier tick. `Merge` is reserved in the
+contract and deliberately rejected because it is not implemented.
+
+Every item has its own safe directory and `render-job.json`. The orchestrator
+runs only one Render Agent at a time, validates its structured result and
+non-empty output, persists state atomically after significant transitions, and
+retries only errors marked `retryable` by Stage 1. With
+`--continue-on-error true`, later clips continue after an exhausted failure.
+With `false`, remaining items become `Skipped`.
+
+Resume an interrupted batch without rebuilding its plan or repeating Stage 2:
+
+```powershell
+dotnet .\src\Cs2Highlight.Cli\bin\Release\net8.0\cs2-highlight.dll render-batch `
+  --output "D:\Cs2Highlights\batches\match-player" `
+  --render-agent-path ".\src\Cs2Highlight.RenderAgent\bin\Release\net8.0\render-agent.exe" `
+  --resume
+```
+
+Succeeded items are never rerun. An orphan `Running` item is reconciled from
+its existing `render-result.json` and MP4; an invalid partial attempt returns to
+Pending. Ctrl+C kills the owned Render Agent process tree, persists Cancelled
+state, writes a partial report, and releases the batch lock.
+
+Output layout:
+
+```text
+match-player/
+  batch-plan.json
+  batch-state.json
+  batch-report.json
+  batch-summary.txt
+  analysis/
+  jobs/
+    highlight-001-r08-triplekill/
+      render-job.json
+      render-result.json
+      raw-highlight.mp4
+      logs/
+  logs/batch-render.log
+```
+
+Batch schemas are versioned as `1.0` under `contracts/`. Exit codes are: `0`
+success, `2` invalid arguments, `10` invalid input, `11` no player highlights,
+`20` plan failure, `21` existing output conflict, `31` renderer busy, `41`
+completed with errors, `42` fail-fast, `50` invalid resume state, `51`
+unsupported schema, `70` cancellation, and `99` unexpected failure.
+
+Troubleshooting:
+
+- Use `--dry-run` first and inspect `batch-plan.json`.
+- Use a new output path, `--resume`, or intentional `--overwrite`; artifacts are
+  not silently replaced.
+- If a previous manual run left HLAE/CS2 behind, run
+  `.\scripts\kill-render-processes.ps1` before resuming.
+- Only one batch/HLAE/CS2 instance is supported per interactive Windows session.
+- Unit and controlled integration coverage does not replace installed-machine
+  E2E. As of 2026-07-28, this repository has **zero locally verified real batch
+  clips** because this development machine lacks the installed HLAE/CS2
+  environment. Stage 3 must not be declared complete until the remote render
+  machine creates at least two MP4 files sequentially and its report is reviewed.
+
 ### Detection and scoring
 
 Kills are grouped by round and stable killer ID. Missing killers, suicides, and

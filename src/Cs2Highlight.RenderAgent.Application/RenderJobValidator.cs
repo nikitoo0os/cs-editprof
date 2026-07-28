@@ -83,7 +83,8 @@ public static partial class RenderJobValidator
                 errors.Add("outputDirectory points to a file.");
             }
 
-            if (Directory.Exists(output) && Directory.EnumerateFileSystemEntries(output).Any())
+            if (Directory.Exists(output) &&
+                Directory.EnumerateFileSystemEntries(output).Any(IsUnexpectedOutputEntry))
             {
                 errors.Add("Existing outputDirectory is not empty; results are never overwritten.");
             }
@@ -103,6 +104,14 @@ public static partial class RenderJobValidator
         {
             errors.Add($"outputDirectory is invalid: {exception.Message}");
         }
+    }
+
+    private static bool IsUnexpectedOutputEntry(string path)
+    {
+        string name = Path.GetFileName(path);
+        return !string.Equals(name, "render-job.json", StringComparison.OrdinalIgnoreCase) &&
+            !(string.Equals(name, "logs", StringComparison.OrdinalIgnoreCase) &&
+              Directory.Exists(path));
     }
 
     [GeneratedRegex(@"^[A-Za-z0-9._-]{1,80}$", RegexOptions.CultureInvariant)]

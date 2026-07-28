@@ -13,6 +13,12 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
+        if (args.Length > 0 &&
+            string.Equals(args[0], "render-batch", StringComparison.OrdinalIgnoreCase))
+        {
+            using ILoggerFactory batchLoggerFactory = CreateLoggerFactory();
+            return await new RenderBatchCommand(batchLoggerFactory).ExecuteAsync(args[1..]);
+        }
         if (!TryParse(args, out CliOptions? parsedOptions) || parsedOptions is null)
         {
             Console.Error.WriteLine(
@@ -23,12 +29,7 @@ internal static class Program
         }
         CliOptions options = parsedOptions;
 
-        using ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
-            builder.AddSimpleConsole(console =>
-            {
-                console.SingleLine = true;
-                console.TimestampFormat = "HH:mm:ss ";
-            }));
+        using ILoggerFactory loggerFactory = CreateLoggerFactory();
         AnalysisPipeline pipeline = new(
             new GoCliDemoParser(options.ParserPath, TimeSpan.FromMinutes(5)),
             new RuleBasedHighlightDetector(),
@@ -91,6 +92,14 @@ internal static class Program
             };
         }
     }
+
+    private static ILoggerFactory CreateLoggerFactory() =>
+        LoggerFactory.Create(builder =>
+            builder.AddSimpleConsole(console =>
+            {
+                console.SingleLine = true;
+                console.TimestampFormat = "HH:mm:ss ";
+            }));
 
     private static bool TryParse(string[] args, out CliOptions? options)
     {

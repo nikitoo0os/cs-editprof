@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nikitoo0os/cs-editprof/contracts/batch-plan.schema.json",
+  "title": "CS2 batch render plan",
+  "type": "object",
+  "required": ["schemaVersion", "batchId", "demoPath", "player", "createdAt", "options", "metrics", "items"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "batchId": { "type": "string", "minLength": 1 },
+    "demoPath": { "type": "string", "minLength": 1 },
+    "player": {
+      "type": "object",
+      "required": ["steamId"],
+      "properties": {
+        "steamId": { "type": "string", "pattern": "^[0-9]{17}$" },
+        "name": { "type": ["string", "null"] }
+      }
+    },
+    "createdAt": { "type": "string", "format": "date-time" },
+    "options": { "type": "object" },
+    "metrics": { "type": "object" },
+    "items": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["index", "itemId", "highlightId", "type", "playerSteamId", "startTick", "endTick", "renderJobPath", "outputDirectory"]
+      }
+    }
+  }
+}

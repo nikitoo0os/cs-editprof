@@ -75,6 +75,30 @@ public sealed class RenderJobValidatorTests : IDisposable
         Assert.True(result.IsValid, string.Join(", ", result.Errors));
     }
 
+    [Fact]
+    public void BatchControlFilesAreAllowedInOutputDirectory()
+    {
+        RenderJob job = ValidJob();
+        Directory.CreateDirectory(Path.Combine(job.OutputDirectory, "logs"));
+        File.WriteAllText(Path.Combine(job.OutputDirectory, "render-job.json"), "{}");
+
+        ValidationReport result = RenderJobValidator.Validate(job, new RenderEnvironmentOptions());
+
+        Assert.True(result.IsValid, string.Join(", ", result.Errors));
+    }
+
+    [Fact]
+    public void ExistingRenderArtifactStillPreventsOverwrite()
+    {
+        RenderJob job = ValidJob();
+        Directory.CreateDirectory(job.OutputDirectory);
+        File.WriteAllBytes(Path.Combine(job.OutputDirectory, "raw-highlight.mp4"), [1]);
+
+        ValidationReport result = RenderJobValidator.Validate(job, new RenderEnvironmentOptions());
+
+        Assert.Contains(result.Errors, error => error.Contains("not empty", StringComparison.Ordinal));
+    }
+
     private RenderJob ValidJob() => new(
         "job-1", demo, new PlayerSelector("76561198000000001", "Player"),
         new RenderSegment(10, 20), new VideoSettings(1920, 1080, 60, 90),

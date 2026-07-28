@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nikitoo0os/cs-editprof/contracts/batch-state.schema.json",
+  "title": "CS2 batch render state",
+  "type": "object",
+  "required": ["schemaVersion", "batchId", "status", "updatedAt", "items"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "batchId": { "type": "string", "minLength": 1 },
+    "status": {
+      "enum": ["Created", "Planning", "Ready", "Running", "Cancelling", "Completed", "CompletedWithErrors", "Failed", "Cancelled"]
+    },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "items": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["itemId", "status", "attempts"],
+        "properties": {
+          "status": { "enum": ["Pending", "Running", "Succeeded", "Failed", "Skipped", "Cancelled"] },
+          "attempts": { "type": "integer", "minimum": 0 }
+        }
+      }
+    }
+  }
+}

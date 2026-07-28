@@ -1,0 +1,41 @@
+{
+  "schemaVersion": "1.0",
+  "batchId": "match-player-76561198000000001",
+  "demoPath": "D:/demos/match.dem",
+  "player": {
+    "steamId": "76561198000000001",
+    "name": "Player1"
+  },
+  "createdAt": "2026-07-28T15:00:00Z",
+  "options": {
+    "minimumScore": 0,
+    "maximumClips": null,
+    "continueOnError": true,
+    "maxRetries": 1,
+    "sortBy": "Tick",
+    "sortOrder": "Ascending"
+  },
+  "metrics": {
+    "inputCandidates": 3,
+    "playerCandidates": 3,
+    "filteredCandidates": 3,
+    "resolvedCandidates": 2
+  },
+  "items": [
+    {
+      "index": 1,
+      "itemId": "r08-triplekill-45120-45430",
+      "highlightId": "round-8-player-76561198000000001-45120-45430",
+      "type": "TripleKill",
+      "playerSteamId": "76561198000000001",
+      "playerName": "Player1",
+      "roundNumber": 8,
+      "startTick": 44928,
+      "endTick": 45622,
+      "killCount": 3,
+      "score": 99,
+      "renderJobPath": "D:/output/jobs/highlight-001-r08-triplekill/render-job.json",
+      "outputDirectory": "D:/output/jobs/highlight-001-r08-triplekill"
+    }
+  ]
+}
