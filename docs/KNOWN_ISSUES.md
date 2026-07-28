@@ -4,8 +4,8 @@
 - The unattended HLAE custom-loader CLI is confirmed from upstream source and used with `-insecure` plus isolated `USRLOCALCSGO`.
 - `mirv_streams`, `mirv_cmd`, and `mirv_fov` are documented for
   AfxHookSource2. The NetCon sequencing of `playdemo`, `demo_gototick`, and
-  first-person numeric-slot `spec_player`, with verified slot probing and
-  post-selection SteamID64 verification, has automated tests but still
+  first-person AccountID locking, with SteamID64 conversion and
+  post-selection verification, has automated tests but still
   requires repeated real-machine E2E acceptance.
 - Current CS2 clients can reject legacy entity message type 138 in otherwise
   valid demos. The agent applies the narrow, fail-closed

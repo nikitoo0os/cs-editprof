@@ -11,6 +11,7 @@ public sealed class NetConsoleDemoControllerTests
         PlayerSelector player = new("76561199031052443", "Player One");
 
         Assert.Equal(76561199031052443UL, NetConsoleDemoController.GetSteamId64(player));
+        Assert.Equal(1070786715U, NetConsoleDemoController.GetAccountId(76561199031052443UL));
     }
 
     [Theory]

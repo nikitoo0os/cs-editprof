@@ -31,8 +31,8 @@ The launcher always forces `-insecure`, uses an isolated `USRLOCALCSGO`, and inj
 
 The launcher also enables local NetCon with `-afxFixNetCon`. The agent waits
 for actual demo initialization before sending `demo_gototick`, switches to
-first-person mode, probes numeric demo player slots and checks each one against
-`player.steamId`, then verifies the resulting
+first-person mode, converts `player.steamId` to the 32-bit AccountID expected by
+`spec_lock_to_accountid`, then verifies the resulting
 `spec_lock_to_accountid` before recording. `player.name` is informational and
 is not used for POV selection. It then
 schedules the stop command at `endTick` and

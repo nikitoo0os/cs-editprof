@@ -57,20 +57,11 @@ public sealed class NetConsoleDemoController(
             $"Seek completed; locking POV to SteamID64 {steamId64}.",
             cancellationToken);
         await connection.SendAsync("mirv_cvar_unhide_all", cancellationToken);
-        await connection.SendAsync("spec_lock_to_accountid 0", cancellationToken);
         await connection.SendAsync("spec_mode 1", cancellationToken);
-        int playerSlot;
-        try
-        {
-            playerSlot = await FindPlayerSlotAsync(connection, steamId64, cancellationToken);
-        }
-        catch
-        {
-            await connection.SendAsync("quit", cancellationToken);
-            throw;
-        }
-        await connection.SendAsync($"spec_player {playerSlot}", cancellationToken);
-        await connection.SendAsync("spec_lock_to_current_player", cancellationToken);
+        uint accountId = GetAccountId(steamId64);
+        await connection.SendAsync(
+            $"spec_lock_to_accountid {accountId.ToString(CultureInfo.InvariantCulture)}",
+            cancellationToken);
         await VerifySelectedPlayerAsync(connection, steamId64, cancellationToken);
         await connection.SendAsync(
             string.Create(
@@ -124,6 +115,20 @@ public sealed class NetConsoleDemoController(
         return steamId64;
     }
 
+    public static uint GetAccountId(ulong steamId64)
+    {
+        const ulong individualSteamId64Base = 76561197960265728UL;
+        if (steamId64 < individualSteamId64Base ||
+            steamId64 > individualSteamId64Base + uint.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(steamId64),
+                "SteamID64 must identify an individual Steam account.");
+        }
+
+        return checked((uint)(steamId64 - individualSteamId64Base));
+    }
+
     public static string EscapeCommandArgument(string value)
     {
         if (value.Any(character => character is '\r' or '\n' or ';' or '\0'))
@@ -132,34 +137,6 @@ public sealed class NetConsoleDemoController(
         }
         return value.Replace("\\", "\\\\", StringComparison.Ordinal)
             .Replace("\"", "\\\"", StringComparison.Ordinal);
-    }
-
-    private static async Task<int> FindPlayerSlotAsync(
-        NetConsoleConnection connection,
-        ulong steamId64,
-        CancellationToken cancellationToken)
-    {
-        for (int slot = 1; slot <= 64; slot++)
-        {
-            string marker = $"AFX_RENDER_SLOT_{slot}_END";
-            await connection.SendAsync("spec_lock_to_accountid 0", cancellationToken);
-            await connection.SendAsync($"spec_player {slot}", cancellationToken);
-            await connection.SendAsync("spec_lock_to_current_player", cancellationToken);
-            await connection.SendAsync("spec_lock_to_accountid", cancellationToken);
-            await connection.SendAsync($"echo {marker}", cancellationToken);
-            IReadOnlyList<string> output = await connection.ReadThroughAsync(
-                marker,
-                TimeSpan.FromSeconds(2),
-                cancellationToken);
-            if (ContainsPlayerIdentity(output, steamId64))
-            {
-                return slot;
-            }
-        }
-
-        throw new InvalidOperationException(
-            $"SteamID64 {steamId64.ToString(CultureInfo.InvariantCulture)} " +
-            "was not found while probing CS2 demo player slots 1 through 64.");
     }
 
     private static async Task VerifySelectedPlayerAsync(
@@ -188,7 +165,7 @@ public sealed class NetConsoleDemoController(
         IReadOnlyList<string> output,
         ulong expectedSteamId64)
     {
-        uint accountId = checked((uint)(expectedSteamId64 - 76561197960265728UL));
+        uint accountId = GetAccountId(expectedSteamId64);
         string steamIdText = expectedSteamId64.ToString(CultureInfo.InvariantCulture);
         string accountIdText = accountId.ToString(CultureInfo.InvariantCulture);
         return output.Any(line =>

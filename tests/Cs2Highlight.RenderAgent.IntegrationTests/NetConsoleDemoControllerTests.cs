@@ -54,10 +54,10 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
 
         Assert.Contains("demo_gototick 100", commands);
         Assert.Contains("mirv_cvar_unhide_all", commands);
-        Assert.Contains("spec_lock_to_accountid 0", commands);
         Assert.Contains("spec_mode 1", commands);
-        Assert.Contains("spec_player 3", commands);
-        Assert.Contains("spec_lock_to_current_player", commands);
+        Assert.Contains("spec_lock_to_accountid 39734273", commands);
+        Assert.DoesNotContain(commands, command =>
+            command.StartsWith("spec_player ", StringComparison.Ordinal));
         Assert.Contains("mirv_streams record start", commands);
         Assert.Contains("demo_resume", commands);
         Assert.Contains(commands, command =>
@@ -91,16 +91,7 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             }
             if (command == "spec_lock_to_accountid")
             {
-                bool selectedTarget = commands.LastOrDefault(
-                    item => item.StartsWith("spec_player ", StringComparison.Ordinal)) == "spec_player 3";
-                await writer.WriteLineAsync(
-                    selectedTarget
-                        ? "\"spec_lock_to_accountid\" = \"76561198000000001\""
-                        : "\"spec_lock_to_accountid\" = \"76561198000000002\"");
-            }
-            if (command.StartsWith("echo AFX_RENDER_SLOT_", StringComparison.Ordinal))
-            {
-                await writer.WriteLineAsync(command["echo ".Length..]);
+                await writer.WriteLineAsync("\"spec_lock_to_accountid\" = \"39734273\"");
             }
             if (command == "echo AFX_RENDER_POV_VERIFY_END")
             {
