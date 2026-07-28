@@ -29,6 +29,12 @@ public sealed class RuleBasedHighlightDetector : IHighlightDetector
 
         IEnumerable<IGrouping<(int Round, string Player), KillEvent>> groups = analysis.Kills
             .Where(IsEligibleKill)
+            .Where(kill =>
+                options.TargetPlayerId is null ||
+                string.Equals(
+                    kill.KillerPlayerId,
+                    options.TargetPlayerId,
+                    StringComparison.Ordinal))
             .GroupBy(kill => (kill.RoundNumber, kill.KillerPlayerId!));
         foreach (IGrouping<(int Round, string Player), KillEvent> group in groups)
         {

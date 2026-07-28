@@ -57,6 +57,18 @@ public sealed partial class AnalysisPipeline(
             analysis.Players.Count,
             analysis.Rounds.Count,
             analysis.Kills.Count);
+        if (detectionOptions.TargetPlayerId is not null &&
+            !analysis.Players.Any(player =>
+                string.Equals(
+                    player.PlayerId,
+                    detectionOptions.TargetPlayerId,
+                    StringComparison.Ordinal)))
+        {
+            throw Error(
+                "PLAYER_NOT_FOUND",
+                $"Player {detectionOptions.TargetPlayerId} was not found in the demo.",
+                AnalysisStage.ValidatingAnalysis);
+        }
 
         Stopwatch detectionWatch = Stopwatch.StartNew();
         IReadOnlyList<HighlightCandidate> candidates = detector.Detect(analysis, detectionOptions);
@@ -72,6 +84,7 @@ public sealed partial class AnalysisPipeline(
             analysis.Demo.FileName,
             generatedAt,
             new HighlightOptionsDocument(
+                detectionOptions.TargetPlayerId,
                 detectionOptions.MaximumGapBetweenKillsSeconds,
                 detectionOptions.PreRollSeconds,
                 detectionOptions.PostRollSeconds),
@@ -114,7 +127,13 @@ public sealed partial class AnalysisPipeline(
                 best.EndTick);
         }
 
-        await WriteDetectorLogAsync(output, analysis, candidates, best, cancellationToken);
+        await WriteDetectorLogAsync(
+            output,
+            analysis,
+            detectionOptions.TargetPlayerId,
+            candidates,
+            best,
+            cancellationToken);
         return new AnalysisArtifacts(analysisPath, highlightsPath, bestPath, renderJobPath, best);
     }
 
@@ -143,6 +162,7 @@ public sealed partial class AnalysisPipeline(
     private static async Task WriteDetectorLogAsync(
         string output,
         DemoAnalysis analysis,
+        string? targetPlayerId,
         IReadOnlyList<HighlightCandidate> candidates,
         HighlightCandidate? best,
         CancellationToken cancellationToken)
@@ -155,6 +175,7 @@ public sealed partial class AnalysisPipeline(
             $"players={analysis.Players.Count}",
             $"rounds={analysis.Rounds.Count}",
             $"kills={analysis.Kills.Count}",
+            $"targetPlayerId={targetPlayerId ?? "<all>"}",
             $"candidates={candidates.Count}",
             best is null
                 ? "result=NO_HIGHLIGHTS_FOUND"

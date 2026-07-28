@@ -130,8 +130,12 @@ Complete Stage 2 pipeline:
 dotnet .\src\Cs2Highlight.Cli\bin\Release\net8.0\cs2-highlight.dll analyze `
   --demo "D:\demos\match.dem" `
   --output "D:\analysis\match-001" `
+  --steam-id "76561198000000001" `
   --parser-path ".\artifacts\demo-parser\demo-parser.exe"
 ```
+
+Pass `--steam-id` to detect and select highlights only for that player. Without
+it, the pipeline selects the highest-scoring highlight across the whole match.
 
 The output directory must be empty. Successful analysis creates:
 

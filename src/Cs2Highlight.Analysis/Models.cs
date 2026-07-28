@@ -82,6 +82,7 @@ public sealed record HighlightCandidate(
 
 public sealed class HighlightDetectionOptions
 {
+    public string? TargetPlayerId { get; init; }
     public double MaximumGapBetweenKillsSeconds { get; init; } = 6;
     public double MaximumSequenceDurationSeconds { get; init; } = 12;
     public double PreRollSeconds { get; init; } = 3;
@@ -114,6 +115,7 @@ public sealed record HighlightsDocument(
     IReadOnlyList<HighlightCandidate> Candidates);
 
 public sealed record HighlightOptionsDocument(
+    string? TargetPlayerId,
     double MaximumGapBetweenKillsSeconds,
     double PreRollSeconds,
     double PostRollSeconds);

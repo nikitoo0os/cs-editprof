@@ -17,7 +17,8 @@ internal static class Program
         {
             Console.Error.WriteLine(
                 "Usage: cs2-highlight analyze --demo <match.dem> --output <directory> " +
-                "[--parser-path <demo-parser.exe>] [--pre-roll 3] [--post-roll 3]");
+                "[--steam-id <SteamID64>] [--parser-path <demo-parser.exe>] " +
+                "[--pre-roll 3] [--post-roll 3]");
             return 2;
         }
         CliOptions options = parsedOptions;
@@ -49,6 +50,7 @@ internal static class Program
                 options.OutputDirectory,
                 new HighlightDetectionOptions
                 {
+                    TargetPlayerId = options.SteamId,
                     PreRollSeconds = options.PreRoll,
                     PostRollSeconds = options.PostRoll
                 },
@@ -80,6 +82,7 @@ internal static class Program
             return exception.Error.Code switch
             {
                 "DEMO_NOT_FOUND" or "PARSER_NOT_FOUND" => 10,
+                "PLAYER_NOT_FOUND" => 11,
                 "PARSER_TIMEOUT" => 21,
                 "PARSER_FAILED" => 22,
                 "NO_HIGHLIGHTS_FOUND" => 20,
@@ -114,6 +117,12 @@ internal static class Program
         string parserPath = values.GetValueOrDefault(
             "parser-path",
             Path.Combine(AppContext.BaseDirectory, "tools", "demo-parser.exe"));
+        string? steamId = values.GetValueOrDefault("steam-id");
+        if (steamId is not null &&
+            (steamId.Length != 17 || !steamId.All(char.IsAsciiDigit)))
+        {
+            return false;
+        }
         if (!TryNumber(values, "width", 1920, int.TryParse, out int width) ||
             !TryNumber(values, "height", 1080, int.TryParse, out int height) ||
             !TryNumber(values, "fps", 60, int.TryParse, out int fps) ||
@@ -123,7 +132,17 @@ internal static class Program
         {
             return false;
         }
-        options = new CliOptions(demo, output, parserPath, width, height, fps, fov, preRoll, postRoll);
+        options = new CliOptions(
+            demo,
+            output,
+            parserPath,
+            steamId,
+            width,
+            height,
+            fps,
+            fov,
+            preRoll,
+            postRoll);
         return true;
     }
 
@@ -148,6 +167,7 @@ internal static class Program
         string DemoPath,
         string OutputDirectory,
         string ParserPath,
+        string? SteamId,
         int Width,
         int Height,
         int Fps,

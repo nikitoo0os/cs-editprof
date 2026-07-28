@@ -54,6 +54,24 @@ public sealed class HighlightDetectorTests
     }
 
     [Fact]
+    public void FiltersCandidatesToRequestedPlayer()
+    {
+        DemoAnalysis analysis = Analysis(
+        [
+            Kill(1, 100, "p1", "v1"),
+            Kill(2, 120, "p1", "v2"),
+            Kill(3, 200, "p2", "v3"),
+            Kill(4, 220, "p2", "v4")
+        ]);
+
+        HighlightCandidate result = Assert.Single(detector.Detect(
+            analysis,
+            new HighlightDetectionOptions { TargetPlayerId = "p2" }));
+
+        Assert.Equal("p2", result.PlayerId);
+    }
+
+    [Fact]
     public void ExcludesMissingKillerSuicideAndTeamkill()
     {
         DemoAnalysis analysis = Analysis(
