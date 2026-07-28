@@ -123,6 +123,7 @@ public sealed class GenerationWorker(
             demos = await db.GenerationDemos.Where(value => value.Generation.PublicId == publicId)
                 .OrderBy(value => value.UploadOrder).ToListAsync(cancellationToken);
         int succeeded = 0;
+        string? firstFailure = null;
         for (int index = 0; index < demos.Count; index++)
         {
             GenerationDemo demo = demos[index];
@@ -171,6 +172,7 @@ public sealed class GenerationWorker(
             catch (Exception exception) when (
                 pipelineOptions.DemoFailurePolicy == DemoFailurePolicy.SkipInvalidDemo)
             {
+                firstFailure ??= $"{demo.OriginalFileName}: {exception.Message}";
                 await MarkDemoFailedAsync(demo.Id, exception.Message, cancellationToken);
             }
             await PublishAsync(
@@ -181,7 +183,10 @@ public sealed class GenerationWorker(
         }
         if (succeeded == 0)
         {
-            await FailAsync(publicId, "ALL_DEMOS_INVALID", "No demo was analyzed successfully.", cancellationToken);
+            string message = firstFailure is null
+                ? "No demo was analyzed successfully."
+                : $"No demo was analyzed successfully. First error: {firstFailure}";
+            await FailAsync(publicId, "ALL_DEMOS_INVALID", message, cancellationToken);
             return;
         }
         await SetStatusAsync(
