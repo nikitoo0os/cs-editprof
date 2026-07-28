@@ -141,7 +141,9 @@ public sealed class NetConsoleDemoController(
         [
             "NETWORK_DISCONNECT_MESSAGE_PARSE_ERROR",
             "Failed to parse message",
-            "Demo playback finished"
+            "Demo playback finished",
+            "Starting recording ... FAILED",
+            "AFXERROR:"
         ];
 
         private readonly TcpClient client;

@@ -6,9 +6,9 @@ namespace Cs2Highlight.RenderAgent.UnitTests;
 public sealed class Source2ScriptGeneratorTests
 {
     [Fact]
-    public void EscapesQuotesAndBackslashes()
+    public void EscapesQuotesAndNormalizesPathSeparators()
     {
-        Assert.Equal("C:\\\\demo\\\\\\\"name.dem", Source2ScriptGenerator.EscapeCfg("C:\\demo\\\"name.dem"));
+        Assert.Equal("C:/demo/\\\"name.dem", Source2ScriptGenerator.EscapeCfg("C:\\demo\\\"name.dem"));
     }
 
     [Theory]
@@ -76,11 +76,19 @@ public sealed class Source2ScriptGeneratorTests
             workspace.Output);
         try
         {
-            GeneratedRenderScript script = await new Source2ScriptGenerator()
+            RenderEnvironmentOptions environment = new()
+            {
+                FfmpegExecutablePath = @"D:\Tools\FFmpeg\bin\ffmpeg.exe"
+            };
+            GeneratedRenderScript script = await new Source2ScriptGenerator(environment)
                 .GenerateAsync(job, workspace, CancellationToken.None);
             string cfg = await File.ReadAllTextAsync(script.Path);
 
             Assert.Contains("playdemo", cfg);
+            Assert.Contains("settings add ffmpegEx cs2HighlightFfmpeg", cfg);
+            Assert.Contains("{QUOTE}D:/Tools/FFmpeg/bin/ffmpeg.exe{QUOTE}", cfg);
+            Assert.Contains("{QUOTE}{AFX_STREAM_PATH}/video.mp4{QUOTE}", cfg);
+            Assert.DoesNotContain(@"\\", cfg);
             Assert.DoesNotContain("demo_gototick", cfg);
             Assert.DoesNotContain("addAtTick", cfg);
             Assert.DoesNotContain("spec_player", cfg);
