@@ -144,6 +144,7 @@ public sealed class NetConsoleDemoController(
                 line.Contains(steamIdText, StringComparison.Ordinal) ||
                 line.Contains(accountIdText, StringComparison.Ordinal)))
         {
+            await connection.SendAsync("quit", cancellationToken);
             throw new InvalidOperationException(
                 $"CS2 selected a different POV. Expected SteamID64 {steamIdText}; " +
                 $"spec_lock_to_accountid output: {string.Join(" | ", output)}");
