@@ -192,6 +192,15 @@ For parser failures, inspect structured stderr and `logs/demo-parser.log`.
 Local real demos belong under `tools/demo-parser/testdata/local/` and must not
 be committed.
 
+If `proxy.golang.org` fails because a network filter only supports obsolete TLS,
+`build-demo-parser.ps1` automatically retries module downloads directly through
+Git. The dependencies remain pinned by `go.mod` and verified against `go.sum`.
+The fallback can also be requested explicitly:
+
+```powershell
+.\scripts\build-demo-parser.ps1 -Direct
+```
+
 After one successful job, run consecutive acceptance jobs without rebooting:
 
 ```powershell
