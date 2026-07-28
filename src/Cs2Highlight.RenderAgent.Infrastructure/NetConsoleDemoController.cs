@@ -11,6 +11,10 @@ public sealed class NetConsoleDemoController(
     RenderEnvironmentOptions options,
     IStateJournal stateJournal) : IDemoController
 {
+    private static readonly Regex SeekFinishedTickPattern = new(
+        @"Demo Skipping finished at tick\s+(?<tick>\d+)",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant |
+        RegexOptions.IgnoreCase);
     private const string NetConReadyMarker = "AFX_RENDER_NETCON_READY";
     private const string SeekFinishedMarker = "Demo Skipping finished at tick";
     private const string StartReadyMarker = "AFX_RENDER_START_READY";
@@ -190,6 +194,7 @@ public sealed class NetConsoleDemoController(
     {
         DateTimeOffset deadline = DateTimeOffset.UtcNow.Add(timeout);
         TimeoutException? lastTimeout = null;
+        long? lastReportedTick = null;
         while (DateTimeOffset.UtcNow < deadline)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -202,13 +207,34 @@ public sealed class NetConsoleDemoController(
             TimeSpan remaining = deadline - DateTimeOffset.UtcNow;
             try
             {
-                await connection.WaitForAsync(
+                IReadOnlyList<string> output =
+                    await connection.ReadThroughAsync(
                     SeekFinishedMarker,
                     remaining < TimeSpan.FromSeconds(5)
                         ? remaining
                         : TimeSpan.FromSeconds(5),
                     cancellationToken);
-                return;
+                lastReportedTick = output
+                    .Select(line => SeekFinishedTickPattern.Match(line))
+                    .Where(match => match.Success)
+                    .Select(match => long.TryParse(
+                        match.Groups["tick"].Value,
+                        NumberStyles.None,
+                        CultureInfo.InvariantCulture,
+                        out long tick)
+                            ? tick
+                            : (long?)null)
+                    .LastOrDefault(tick => tick.HasValue);
+                if (lastReportedTick is long actualTick &&
+                    Math.Abs(actualTick - warmupTick) <= 2)
+                {
+                    return;
+                }
+                await connection.SendAsync(
+                    string.Create(
+                        CultureInfo.InvariantCulture,
+                        $"echo AFX_RENDER_SEEK_RETRY expected={warmupTick} actual={lastReportedTick?.ToString(CultureInfo.InvariantCulture) ?? "unknown"}"),
+                    cancellationToken);
             }
             catch (TimeoutException exception)
             {
@@ -217,7 +243,8 @@ public sealed class NetConsoleDemoController(
             }
         }
         throw new TimeoutException(
-            $"Demo did not accept seek to warmup tick {warmupTick} before timeout.",
+            $"Demo did not confirm seek to warmup tick {warmupTick} before timeout. " +
+            $"Last reported tick: {lastReportedTick?.ToString(CultureInfo.InvariantCulture) ?? "none"}.",
             lastTimeout);
     }
 

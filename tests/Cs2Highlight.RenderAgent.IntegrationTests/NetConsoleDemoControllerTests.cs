@@ -66,6 +66,7 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         await server;
 
         Assert.Contains("demo_gototick 70", commands);
+        Assert.True(commands.Count(command => command == "demo_gototick 70") >= 2);
         Assert.Contains(commands, command =>
             command.Contains("addAtTick 100", StringComparison.Ordinal) &&
             command.Contains("AFX_RENDER_START_READY", StringComparison.Ordinal));
@@ -97,6 +98,7 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             NewLine = "\n"
         };
         bool warmedUp = false;
+        int seekAttempts = 0;
         while (true)
         {
             string? command = await reader.ReadLineAsync();
@@ -111,7 +113,12 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             }
             if (command.StartsWith("demo_gototick ", StringComparison.Ordinal))
             {
-                await writer.WriteLineAsync("[Demo] Demo Skipping finished at tick 100");
+                seekAttempts++;
+                string requestedTick = command.Split(' ', 2)[1];
+                await writer.WriteLineAsync(
+                    seekAttempts == 1
+                        ? "[Demo] Demo Skipping finished at tick 0"
+                        : $"[Demo] Demo Skipping finished at tick {requestedTick}");
             }
             if (command == "spec_lock_to_accountid")
             {
