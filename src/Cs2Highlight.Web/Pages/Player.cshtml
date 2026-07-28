@@ -1,0 +1,28 @@
+@page "/generations/{publicId}/player"
+@model PlayerModel
+@{ ViewData["Title"] = "Выбор игрока"; }
+<section class="card">
+<h1>Выберите игрока</h1>
+<form method="post" asp-antiforgery="true">
+@foreach (var player in Model.Players) {
+  <label class="card">
+    <input type="radio" asp-for="SteamId" value="@player.SteamId" required />
+    <strong>@player.DisplayName</strong><br />
+    <span class="muted">SteamID: @player.SteamId · Матчей: @player.DemoCount · Убийств: @player.TotalKills · Моментов: @player.CandidateCount</span>
+  </label>
+}
+<div class="grid">
+  <label>Лучших моментов
+    <select asp-for="MaximumHighlights"><option>3</option><option>5</option><option>10</option></select>
+  </label>
+  <label>Формат
+    <select asp-for="AspectRatio"><option value="16:9">16:9 — 1920×1080</option><option value="9:16">9:16 — 1080×1920</option></select>
+  </label>
+  <label>Порядок
+    <select asp-for="OutputOrder"><option value="Chronological">По хронологии</option><option value="ScoreDescending">По score</option></select>
+  </label>
+  <label>Минимальный score <input asp-for="MinimumScore" type="number" min="0" max="1000" step="1" /></label>
+</div>
+<button type="submit">Продолжить к оплате</button>
+</form>
+</section>

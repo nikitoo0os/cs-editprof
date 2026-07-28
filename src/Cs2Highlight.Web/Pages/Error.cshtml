@@ -1,0 +1,14 @@
+@page
+@model ErrorModel
+@{
+    ViewData["Title"] = "Ошибка";
+}
+<section class="card">
+  <h1>Не удалось выполнить запрос</h1>
+  <p>Повторите попытку. Если ошибка повторяется, сохраните идентификатор запроса для диагностики.</p>
+  @if (Model.ShowRequestId)
+  {
+    <p><strong>Request ID:</strong> <code>@Model.RequestId</code></p>
+  }
+  <p><a class="button" asp-page="/Index">На главную</a></p>
+</section>

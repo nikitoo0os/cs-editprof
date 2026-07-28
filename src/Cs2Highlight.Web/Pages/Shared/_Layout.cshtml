@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>@ViewData["Title"] — CS2 Highlights</title>
+    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+</head>
+<body>
+<header><a href="/">CS2 Highlight Generator</a><span>Одна генерация — $1.00</span></header>
+<main>@RenderBody()</main>
+@await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

@@ -1,0 +1,13 @@
+@page "/generations/{publicId}/checkout"
+@model CheckoutModel
+@{ ViewData["Title"] = "Оплата"; }
+<section class="card">
+<h1>Проверка заказа</h1>
+<div class="grid">
+ <p>Игрок: <strong>@Model.Generation.SelectedPlayerName</strong><br /><span class="muted">@Model.Generation.SelectedSteamId</span></p>
+ <p>Лучших моментов: @Model.Generation.MaximumHighlights</p>
+ <p>Формат: @Model.Generation.Width×@Model.Generation.Height, @Model.Generation.Fps FPS</p>
+ <p>Итого: <strong>$1.00 USD</strong></p>
+</div>
+<form method="post" asp-antiforgery="true"><button type="submit">Оплатить $1</button></form>
+</section>

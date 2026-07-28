@@ -59,6 +59,44 @@ dotnet build -c Release
 dotnet test -c Release --no-build
 ```
 
+## Stage 4: Web multi-demo generation
+
+`Cs2Highlight.Web` adds a persisted Razor Pages workflow:
+
+```text
+multi-file upload → analysis → SteamID selection → $1 test checkout
+→ global Top N → sequential Stage 3 render → FFmpeg → one final MP4
+```
+
+SQLite is the source of truth. Uploads are streamed outside `wwwroot`, duplicate
+demos are skipped by SHA-256, successful payments are idempotent, background
+work resumes from persisted Stage 2/3 artifacts, and progress is sent through
+SignalR with HTTP polling as a fallback. The final endpoint supports HTTP Range
+and download; opaque generation URLs currently act as bearer secrets.
+
+Configure machine-local paths:
+
+```powershell
+Copy-Item .\examples\appsettings.web.example.json `
+  .\src\Cs2Highlight.Web\appsettings.local.json
+notepad .\src\Cs2Highlight.Web\appsettings.local.json
+```
+
+Build the parser and solution, verify the render-agent environment, then start:
+
+```powershell
+.\scripts\build-demo-parser.ps1
+dotnet build .\Cs2Highlight.RenderPoC.sln -c Release
+$env:ASPNETCORE_URLS = "http://127.0.0.1:5080"
+dotnet run --project .\src\Cs2Highlight.Web -c Release --no-build
+```
+
+See [Stage 4 Web acceptance](docs/STAGE4_WEB_E2E.md) for the real two-demo,
+restart, Range, browser playback, download and evidence checklist. Stage 4 is
+not considered closed until that real HLAE/CS2/FFmpeg run succeeds on the
+installed render machine. The current compositor uses normalized cuts; the
+persisted `Fade` option is not yet applied.
+
 ## Configure
 
 Copy `examples/appsettings.example.json` to `src/Cs2Highlight.RenderAgent/appsettings.local.json`. Local settings are git-ignored and copied beside the executable during build. Fill in executable paths. `HlaeArguments` contains optional extra CS2 launch flags; required isolation and safety flags are added by the application. Keep `AutomationVerified=false` until the manual checklist in `docs/MANUAL_E2E.md` passes.

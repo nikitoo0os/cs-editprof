@@ -1,0 +1,13 @@
+@page
+@model IndexModel
+@{ ViewData["Title"] = "Загрузка демок"; }
+<section class="card">
+  <h1>Соберите лучшие моменты из нескольких матчей</h1>
+  <p class="muted">Загрузите до @Model.MaximumFiles CS2-файлов .dem. После анализа выберите игрока и оплатите тестовые $1.00.</p>
+  <form method="post" enctype="multipart/form-data" asp-antiforgery="true" asp-page-handler="Upload">
+    <label for="demos">Демо-файлы</label>
+    <input id="demos" type="file" name="DemoFiles" accept=".dem" multiple required />
+    <p><button type="submit">Загрузить и проанализировать</button></p>
+  </form>
+  @if (Model.Error is not null) { <p class="error">@Model.Error</p> }
+</section>

@@ -1,0 +1,34 @@
+@page "/generations/{publicId}"
+@model GenerationModel
+@{ ViewData["Title"] = "Статус генерации"; }
+<section class="card" data-public-id="@Model.Generation.PublicId">
+  <h1>@Model.Generation.CurrentStage</h1>
+  <p>Статус: <strong id="status">@Model.Generation.Status</strong></p>
+  <div class="progress"><div id="bar" style="width:@Model.Generation.ProgressPercent%"></div></div>
+  <p id="stage">@Model.Generation.ProgressPercent%</p>
+  <div class="grid">
+    <p>Демок: @Model.DemoCount</p><p>Игроков: @Model.PlayerCount</p><p>Моментов: @Model.HighlightCount</p>
+  </div>
+  @if (Model.Generation.Status == GenerationStatus.AwaitingPlayerSelection) {
+    <a class="button" asp-page="/Player" asp-route-publicId="@Model.Generation.PublicId">Выбрать игрока</a>
+  }
+  @if (Model.Generation.Status is GenerationStatus.Completed or GenerationStatus.CompletedWithWarnings) {
+    <h2>Готовое видео</h2>
+    <video controls preload="metadata" src="/generations/@Model.Generation.PublicId/video"></video>
+    <p><a class="button" href="/generations/@Model.Generation.PublicId/video?download=true">Скачать MP4</a></p>
+  }
+  @if (Model.Generation.ErrorCode is not null) { <p class="error">@Model.Generation.ErrorCode: @Model.Generation.ErrorMessage</p> }
+  @if (Model.Generation.Status is not (GenerationStatus.Completed or GenerationStatus.CompletedWithWarnings or GenerationStatus.Cancelled or GenerationStatus.Failed or GenerationStatus.Expired)) {
+    <form method="post" asp-page-handler="Cancel" asp-antiforgery="true"><button type="submit">Отменить</button></form>
+  }
+</section>
+@section Scripts {
+<script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js"></script>
+<script>
+const root=document.querySelector('[data-public-id]'),id=root.dataset.publicId;
+const c=new signalR.HubConnectionBuilder().withUrl('/hubs/generations').withAutomaticReconnect().build();
+c.on('progress',p=>{document.querySelector('#status').textContent=p.status;document.querySelector('#stage').textContent=p.stage;document.querySelector('#bar').style.width=p.progressPercent+'%';if(p.progressPercent===100)location.reload();});
+c.start().then(()=>c.invoke('Subscribe',id));
+setInterval(()=>{if(document.visibilityState==='visible'&&document.querySelector('#bar').style.width!=='100%')location.reload()},15000);
+</script>
+}

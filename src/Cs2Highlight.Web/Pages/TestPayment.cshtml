@@ -1,0 +1,12 @@
+@page "/generations/{publicId}/test-payment"
+@model TestPaymentModel
+@{ ViewData["Title"] = "Тестовая оплата"; }
+<section class="card">
+<h1>Тестовая оплата</h1>
+<p>Сумма: <strong>$1.00 USD</strong></p>
+<p class="muted">Реального списания денег не происходит.</p>
+<form method="post" asp-antiforgery="true">
+ <button name="decision" value="success">Успешная оплата</button>
+ <button name="decision" value="decline">Отклонить платёж</button>
+</form>
+</section>
