@@ -141,6 +141,10 @@ public sealed class GenerationWorker(
                     succeeded++;
                     continue;
                 }
+                string interrupted = $"{output}.interrupted-{timeProvider.GetUtcNow():yyyyMMddHHmmssfff}";
+                storage.EnsureWithinRoot(interrupted);
+                Directory.Move(output, interrupted);
+                Directory.CreateDirectory(output);
             }
             try
             {
