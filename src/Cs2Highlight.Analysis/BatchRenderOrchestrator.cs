@@ -21,6 +21,8 @@ public sealed class BatchRenderOrchestrator(
         string statePath = Path.Combine(root, "batch-state.json");
         string reportPath = Path.Combine(root, "batch-report.json");
         string summaryPath = Path.Combine(root, "batch-summary.txt");
+        string logPath = Path.Combine(root, "logs", "batch-render.log");
+        Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
         DateTimeOffset now = timeProvider.GetUtcNow();
         BatchRenderState state = existingState is null
             ? new BatchRenderState(
@@ -53,6 +55,10 @@ public sealed class BatchRenderOrchestrator(
             UpdatedAt = now
         };
         await stateStore.SaveAsync(statePath, state, cancellationToken);
+        await LogAsync(
+            logPath,
+            $"BatchId={plan.BatchId} status=Running items={plan.Items.Count} demo={plan.DemoPath} steamId={plan.Player.SteamId}",
+            cancellationToken);
 
         try
         {
@@ -88,6 +94,10 @@ public sealed class BatchRenderOrchestrator(
                         UpdatedAt = timeProvider.GetUtcNow()
                     };
                     await stateStore.SaveAsync(statePath, state, cancellationToken);
+                    await LogAsync(
+                        logPath,
+                        $"Starting item={item.Index}/{plan.Items.Count} itemId={item.ItemId} attempt={attempt}/{1 + plan.Options.MaxRetries}",
+                        cancellationToken);
                     invocation = await renderAgent.RenderAsync(item.RenderJobPath, attempt, cancellationToken);
                     if (invocation.Error is null && invocation.Result?.Success == true)
                     {
@@ -100,6 +110,10 @@ public sealed class BatchRenderOrchestrator(
                             OutputSizeBytes = invocation.Result.OutputSizeBytes,
                             DurationMilliseconds = invocation.Result.DurationMilliseconds
                         };
+                        await LogAsync(
+                            logPath,
+                            $"Succeeded item={item.Index} attempt={attempt} pid={invocation.ProcessId} exitCode={invocation.ExitCode} durationMs={invocation.Result.DurationMilliseconds} output={invocation.Result.OutputFile}",
+                            cancellationToken);
                         break;
                     }
                     BatchItemError error = invocation.Error ??
@@ -112,10 +126,18 @@ public sealed class BatchRenderOrchestrator(
                         DurationMilliseconds = invocation.Result?.DurationMilliseconds,
                         Error = error
                     };
+                    await LogAsync(
+                        logPath,
+                        $"Failed item={item.Index} attempt={attempt} pid={invocation.ProcessId} exitCode={invocation.ExitCode} error={error.Code} retryable={error.Retryable}",
+                        cancellationToken);
                     if (!error.Retryable || attempt >= 1 + plan.Options.MaxRetries)
                     {
                         break;
                     }
+                    await LogAsync(
+                        logPath,
+                        $"Retrying item={item.Index} nextAttempt={attempt + 1}",
+                        cancellationToken);
                 }
 
                 state = Replace(state, stateIndex, itemState) with
@@ -136,6 +158,7 @@ public sealed class BatchRenderOrchestrator(
                     await stateStore.SaveAsync(statePath, state, cancellationToken);
                     BatchRenderReport failed = BuildReport(plan, state);
                     await SaveReportAsync(reportPath, summaryPath, plan, failed, cancellationToken);
+                    await LogAsync(logPath, "Batch stopped by fail-fast policy.", cancellationToken);
                     return new BatchExecutionResult(state, failed, 42);
                 }
             }
@@ -161,6 +184,7 @@ public sealed class BatchRenderOrchestrator(
             await stateStore.SaveAsync(statePath, state, CancellationToken.None);
             BatchRenderReport cancelled = BuildReport(plan, state);
             await SaveReportAsync(reportPath, summaryPath, plan, cancelled, CancellationToken.None);
+            await LogAsync(logPath, "Batch cancelled.", CancellationToken.None);
             return new BatchExecutionResult(state, cancelled, 70);
         }
 
@@ -176,6 +200,10 @@ public sealed class BatchRenderOrchestrator(
         await stateStore.SaveAsync(statePath, state, cancellationToken);
         BatchRenderReport report = BuildReport(plan, state);
         await SaveReportAsync(reportPath, summaryPath, plan, report, cancellationToken);
+        await LogAsync(
+            logPath,
+            $"Batch completed status={state.Status} succeeded={report.Summary.Succeeded} failed={report.Summary.Failed} retries={report.Summary.Retries} durationMs={report.DurationMilliseconds}",
+            cancellationToken);
         return new BatchExecutionResult(state, report, hasErrors ? 41 : 0);
     }
 
@@ -334,6 +362,17 @@ public sealed class BatchRenderOrchestrator(
                 $"[{item.Status.ToString().ToUpperInvariant()}] {item.Index:D2} Round {item.RoundNumber} {item.HighlightType} {item.StartTick}-{item.EndTick} {item.Error?.Code}");
         }
         await File.WriteAllTextAsync(summaryPath, text.ToString(), Encoding.UTF8, cancellationToken);
+    }
+
+    private async Task LogAsync(
+        string path,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        string line = string.Create(
+            CultureInfo.InvariantCulture,
+            $"[{timeProvider.GetUtcNow():O}] {message}{Environment.NewLine}");
+        await File.AppendAllTextAsync(path, line, Encoding.UTF8, cancellationToken);
     }
 
     private static void ValidatePlan(BatchRenderPlan plan)
