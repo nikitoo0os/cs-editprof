@@ -64,9 +64,8 @@ public sealed class GenerationWorker(
     private async Task<bool> ProcessNextAsync(CancellationToken cancellationToken)
     {
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        Generation? generation = await db.Generations
-            .OrderBy(value => value.CreatedAt)
-            .FirstOrDefaultAsync(value =>
+        Generation[] pending = await db.Generations
+            .Where(value =>
                 value.Status == GenerationStatus.QueuedForAnalysis ||
                 value.Status == GenerationStatus.Analyzing ||
                 value.Status == GenerationStatus.QueuedForGeneration ||
@@ -74,8 +73,12 @@ public sealed class GenerationWorker(
                 value.Status == GenerationStatus.RenderingClips ||
                 value.Status == GenerationStatus.ComposingVideo ||
                 value.Status == GenerationStatus.VerifyingOutput ||
-                value.Status == GenerationStatus.Cancelling,
-                cancellationToken);
+                value.Status == GenerationStatus.Cancelling)
+            .ToArrayAsync(cancellationToken);
+        Generation? generation = pending
+            .OrderBy(value => value.CreatedAt)
+            .ThenBy(value => value.Id)
+            .FirstOrDefault();
         if (generation is null) return false;
         if (generation.Status == GenerationStatus.Cancelling)
         {

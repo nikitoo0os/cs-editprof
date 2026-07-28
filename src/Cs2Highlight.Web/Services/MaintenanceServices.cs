@@ -93,30 +93,38 @@ public sealed class GenerationCleanupService(
     {
         DateTimeOffset now = timeProvider.GetUtcNow();
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        Generation[] readyForDeletion = await db.Generations
-            .Where(value => value.Status == GenerationStatus.Expired &&
+        Generation[] readyForDeletion = (await db.Generations
+                .Where(value => value.Status == GenerationStatus.Expired)
+                .ToArrayAsync(cancellationToken))
+            .Where(value =>
                 value.UpdatedAt < now.AddMinutes(-Math.Max(1, options.CleanupIntervalMinutes)))
-            .ToArrayAsync(cancellationToken);
+            .ToArray();
         foreach (Generation generation in readyForDeletion)
         {
             string root = storage.GenerationRoot(generation.PublicId);
             storage.EnsureWithinRoot(root);
             if (Directory.Exists(root)) Directory.Delete(root, true);
         }
-        Generation[] expired = await db.Generations.Where(value =>
-            (value.Status == GenerationStatus.Draft &&
-             value.UpdatedAt < now.AddHours(-options.DraftGenerationHours)) ||
-            (value.Status == GenerationStatus.AwaitingPayment &&
-             value.UpdatedAt < now.AddHours(-options.UnpaidGenerationHours)) ||
-            (value.Status == GenerationStatus.Completed &&
-             value.UpdatedAt < now.AddDays(-options.CompletedGenerationDays)) ||
-            (value.Status == GenerationStatus.CompletedWithWarnings &&
-             value.UpdatedAt < now.AddDays(-options.CompletedGenerationDays)) ||
-            (value.Status == GenerationStatus.Failed &&
-             value.UpdatedAt < now.AddDays(-options.FailedGenerationDays)) ||
-            (value.Status == GenerationStatus.Cancelled &&
-             value.UpdatedAt < now.AddDays(-options.CancelledGenerationDays)))
+        Generation[] expirationCandidates = await db.Generations.Where(value =>
+                value.Status == GenerationStatus.Draft ||
+                value.Status == GenerationStatus.AwaitingPayment ||
+                value.Status == GenerationStatus.Completed ||
+                value.Status == GenerationStatus.CompletedWithWarnings ||
+                value.Status == GenerationStatus.Failed ||
+                value.Status == GenerationStatus.Cancelled)
             .ToArrayAsync(cancellationToken);
+        Generation[] expired = expirationCandidates.Where(value =>
+                (value.Status == GenerationStatus.Draft &&
+                 value.UpdatedAt < now.AddHours(-options.DraftGenerationHours)) ||
+                (value.Status == GenerationStatus.AwaitingPayment &&
+                 value.UpdatedAt < now.AddHours(-options.UnpaidGenerationHours)) ||
+                (value.Status is GenerationStatus.Completed or GenerationStatus.CompletedWithWarnings &&
+                 value.UpdatedAt < now.AddDays(-options.CompletedGenerationDays)) ||
+                (value.Status == GenerationStatus.Failed &&
+                 value.UpdatedAt < now.AddDays(-options.FailedGenerationDays)) ||
+                (value.Status == GenerationStatus.Cancelled &&
+                 value.UpdatedAt < now.AddDays(-options.CancelledGenerationDays)))
+            .ToArray();
         foreach (Generation generation in expired)
         {
             generation.Status = GenerationStatus.Expired;
