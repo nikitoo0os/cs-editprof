@@ -15,6 +15,10 @@ public sealed class NetConsoleDemoController(
         @"Demo Skipping finished at tick\s+(?<tick>\d+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant |
         RegexOptions.IgnoreCase);
+    private static readonly Regex ActiveGameLoopPattern = new(
+        @"@\s*Current\s*:\s*game\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant |
+        RegexOptions.IgnoreCase);
     private const string NetConReadyMarker = "AFX_RENDER_NETCON_READY";
     private const string DemoStatusEndMarker = "AFX_RENDER_DEMO_STATUS_END";
     private const string SeekFinishedMarker = "Demo Skipping finished at tick";
@@ -323,8 +327,11 @@ public sealed class NetConsoleDemoController(
                         ? remaining
                         : TimeSpan.FromSeconds(2),
                     cancellationToken);
-                if (output.Any(line =>
-                        line.Contains("Connected [DEMO]", StringComparison.OrdinalIgnoreCase)))
+                bool demoConnected = output.Any(line =>
+                    line.Contains("Connected [DEMO]", StringComparison.OrdinalIgnoreCase));
+                bool gameLoopActive = output.Any(line =>
+                    ActiveGameLoopPattern.IsMatch(line));
+                if (demoConnected && gameLoopActive)
                 {
                     return;
                 }
@@ -337,7 +344,8 @@ public sealed class NetConsoleDemoController(
         }
 
         throw new TimeoutException(
-            "CS2 console became ready, but the requested demo did not reach the connected DEMO state.",
+            "CS2 console became ready, but the requested demo did not reach both " +
+            "Connected [DEMO] and the active game loop.",
             lastTimeout);
     }
 

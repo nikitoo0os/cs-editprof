@@ -75,6 +75,7 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             commands.FindIndex(command => command == "demo_gototick 70"));
         Assert.True(commands.Count(command =>
             command == "echo AFX_RENDER_NETCON_READY") >= 2);
+        Assert.True(commands.Count(command => command == "status") >= 2);
         Assert.True(commands.Count(command => command == "demo_gototick 70") >= 2);
         Assert.Contains(commands, command =>
             command.Contains("addAtTick 100", StringComparison.Ordinal) &&
@@ -108,6 +109,7 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         };
         bool warmedUp = false;
         int readinessAttempts = 0;
+        int demoStatusAttempts = 0;
         int seekAttempts = 0;
         while (true)
         {
@@ -127,7 +129,12 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             }
             if (command == "status")
             {
+                demoStatusAttempts++;
                 await writer.WriteLineAsync("Client: Connected [DEMO]");
+                await writer.WriteLineAsync(
+                    demoStatusAttempts == 1
+                        ? "@ Current  :  levelload"
+                        : "@ Current  :  game");
             }
             if (command == "echo AFX_RENDER_DEMO_STATUS_END")
             {
