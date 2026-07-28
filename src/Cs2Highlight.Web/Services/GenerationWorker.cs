@@ -5,7 +5,6 @@ using Cs2Highlight.Web.Domain;
 using Cs2Highlight.Web.Hubs;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Cs2Highlight.Web.Services;
 
@@ -19,6 +18,7 @@ public sealed class GenerationWorker(
     IHighlightCompilationService compilationService,
     IHubContext<GenerationHub> hub,
     TimeProvider timeProvider,
+    ILoggerFactory loggerFactory,
     ILogger<GenerationWorker> logger) : BackgroundService
 {
     private static readonly Action<ILogger, Exception?> LogIterationFailure =
@@ -124,6 +124,12 @@ public sealed class GenerationWorker(
         {
             GenerationDemo demo = demos[index];
             if (demo.AnalysisStatus == DemoAnalysisStatus.Succeeded) { succeeded++; continue; }
+            await SetStatusAsync(
+                publicId,
+                GenerationStatus.Analyzing,
+                12 + (int)(12d * index / Math.Max(1, demos.Count)),
+                $"Analyzing demo {index + 1}/{demos.Count}: {demo.OriginalFileName}",
+                cancellationToken);
             string output = storage.EnsureDirectory(publicId, "analysis", $"demo-{demo.UploadOrder:D3}");
             if (Directory.EnumerateFileSystemEntries(output).Any())
             {
@@ -144,7 +150,7 @@ public sealed class GenerationWorker(
                     new BestHighlightSelector(),
                     new RenderJobBuilder(),
                     timeProvider,
-                    NullLogger<AnalysisPipeline>.Instance);
+                    loggerFactory.CreateLogger<AnalysisPipeline>());
                 AnalysisArtifacts artifacts = await analysisPipeline.RunAsync(
                     demo.StoredPath,
                     output,
