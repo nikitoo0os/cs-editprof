@@ -18,7 +18,11 @@ The official AfxHookSource2 documentation confirms:
 
 Sources: [AfxHookSource2](https://github.com/advancedfx/advancedfx/wiki/AfxHookSource2), [Source2 commands](https://github.com/advancedfx/advancedfx/wiki/Source2%3ACommands), and [Source2 mirv_streams](https://github.com/advancedfx/advancedfx/wiki/Source2%3Amirv_streams).
 
-The unattended HLAE executable arguments and CS2 commands `playdemo`, `demo_gototick`, and `spec_player` remain operator-verified inputs. The application refuses to run when `AutomationVerified=false`.
+The unattended HLAE custom-loader CLI is confirmed from the upstream HLAE source:
+`-noConfig -customLoader -autoStart -noGui -hookDllPath ... -programPath ... -cmdLine ... -addEnv ...`.
+The launcher always forces `-insecure`, uses an isolated `USRLOCALCSGO`, and injects `AfxHookSource2.dll` only into the CS2 process it creates. Normal CS2 launches through Steam are untouched.
+
+The CS2 commands `playdemo`, `demo_gototick`, and `spec_player` remain operator-verified inputs. The application refuses to run when `AutomationVerified=false`.
 
 ## Requirements
 
@@ -41,7 +45,7 @@ dotnet test -c Release --no-build
 
 ## Configure
 
-Copy `examples/appsettings.example.json` to `src/Cs2Highlight.RenderAgent/appsettings.local.json`. Local settings are git-ignored. Fill in executable paths and the exact HLAE arguments verified for the installed version. Keep `AutomationVerified=false` until the manual checklist in `docs/MANUAL_E2E.md` passes.
+Copy `examples/appsettings.example.json` to `src/Cs2Highlight.RenderAgent/appsettings.local.json`. Local settings are git-ignored and copied beside the executable during build. Fill in executable paths. `HlaeArguments` contains optional extra CS2 launch flags; required isolation and safety flags are added by the application. Keep `AutomationVerified=false` until the manual checklist in `docs/MANUAL_E2E.md` passes.
 
 Environment variables with prefix `CS2RENDER_` may override configuration. Do not commit machine-local absolute paths.
 

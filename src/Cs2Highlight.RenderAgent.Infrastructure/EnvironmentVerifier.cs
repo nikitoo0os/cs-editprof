@@ -12,6 +12,7 @@ public sealed class EnvironmentVerifier(RenderEnvironmentOptions options) : IEnv
         [
             Check("Windows", RuntimeInformation.IsOSPlatform(OSPlatform.Windows), RuntimeInformation.OSDescription),
             FileCheck("HLAE", options.HlaeExecutablePath),
+            FileCheck("AfxHookSource2", GetHookPath(options.HlaeExecutablePath)),
             FileCheck("CS2", options.Cs2ExecutablePath),
             FileCheck("Steam", options.SteamExecutablePath),
             Check("AutomationVerified", options.AutomationVerified,
@@ -35,6 +36,11 @@ public sealed class EnvironmentVerifier(RenderEnvironmentOptions options) : IEnv
     private static EnvironmentCheck FileCheck(string name, string path) =>
         Check(name, !string.IsNullOrWhiteSpace(path) && File.Exists(path),
             string.IsNullOrWhiteSpace(path) ? "Path is not configured." : path);
+
+    private static string GetHookPath(string hlaeExecutablePath) =>
+        string.IsNullOrWhiteSpace(hlaeExecutablePath)
+            ? string.Empty
+            : HlaeLauncher.GetHookDllPath(hlaeExecutablePath);
 
     private static EnvironmentCheck CheckDirectory(string name, string path)
     {

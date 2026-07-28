@@ -14,7 +14,9 @@ public sealed class Source2ScriptGenerator : IRenderScriptGenerator
         string player = EscapeCfg(job.Player.SteamId ?? job.Player.Name ?? throw new InvalidOperationException("Missing player selector."));
         string demo = EscapeCfg(workspace.PreparedDemoPath);
         string raw = EscapeCfg(workspace.Raw);
-        string path = Path.Combine(workspace.Config, "render.cfg");
+        string cfgDirectory = Path.Combine(workspace.Config, "cfg");
+        Directory.CreateDirectory(cfgDirectory);
+        string path = Path.Combine(cfgDirectory, "render.cfg");
         StringBuilder cfg = new();
         cfg.AppendLine("// Generated for AfxHookSource2. Validate against the installed HLAE and CS2 builds.");
         cfg.AppendLine("mirv_cmd clear");
@@ -28,10 +30,10 @@ public sealed class Source2ScriptGenerator : IRenderScriptGenerator
         cfg.AppendLine(CultureInfo.InvariantCulture, $"mirv_cmd addAtTick {job.Segment.EndTick} \"mirv_streams record end; demo_pause\"");
         cfg.AppendLine(CultureInfo.InvariantCulture, $"demo_gototick {job.Segment.StartTick}");
         await File.WriteAllTextAsync(path, cfg.ToString(), new UTF8Encoding(false), cancellationToken);
-        return new GeneratedRenderScript(path,
+        return new GeneratedRenderScript(path, job.Video.Width, job.Video.Height,
         [
             "playdemo, demo_gototick, and spec_player must be manually checked against the installed CS2 build.",
-            "The generated CFG does not prove HLAE can ingest it unattended; verify HlaeArguments before enabling automation."
+            "The HLAE custom-loader CLI is source-confirmed; demo loading, seeking, and POV commands still require an installed-build E2E check."
         ]);
     }
 

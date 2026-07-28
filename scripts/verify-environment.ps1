@@ -7,9 +7,15 @@ param(
 $ErrorActionPreference = 'Stop'
 $settings = Get-Content -Raw -LiteralPath $SettingsPath | ConvertFrom-Json
 $environment = $settings.RenderEnvironment
+$hookPath = if ([string]::IsNullOrWhiteSpace($environment.HlaeExecutablePath)) {
+    ''
+} else {
+    Join-Path (Split-Path -Parent $environment.HlaeExecutablePath) 'x64\AfxHookSource2.dll'
+}
 $checks = [ordered]@{
     Windows = $IsWindows -or $env:OS -eq 'Windows_NT'
     HLAE = Test-Path -LiteralPath $environment.HlaeExecutablePath -PathType Leaf
+    AfxHookSource2 = -not [string]::IsNullOrWhiteSpace($hookPath) -and (Test-Path -LiteralPath $hookPath -PathType Leaf)
     CS2 = Test-Path -LiteralPath $environment.Cs2ExecutablePath -PathType Leaf
     Steam = Test-Path -LiteralPath $environment.SteamExecutablePath -PathType Leaf
     WorkingRootConfigured = -not [string]::IsNullOrWhiteSpace($environment.WorkingRoot)

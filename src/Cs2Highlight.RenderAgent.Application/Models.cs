@@ -95,7 +95,7 @@ public sealed record RenderWorkspace(
     string State,
     string PreparedDemoPath);
 
-public sealed record GeneratedRenderScript(string Path, IReadOnlyList<string> Warnings);
+public sealed record GeneratedRenderScript(string Path, int Width, int Height, IReadOnlyList<string> Warnings);
 
 public sealed record ProcessRequest(
     string FileName,
