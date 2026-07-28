@@ -167,22 +167,20 @@ public sealed class NetConsoleDemoController(
         await connection.SendAsync("echo AFX_RENDER_RECORDING_START", cancellationToken);
         await connection.SendAsync("demo_resume", cancellationToken);
 
-        if (hasSafeTailMarker)
+        IReadOnlyList<string> recordingOutput = await connection.ReadThroughAsync(
+            RecordingEndMarker,
+            TimeSpan.FromSeconds(job.TimeoutSeconds),
+            cancellationToken);
+        if (hasSafeTailMarker &&
+            recordingOutput.Any(line =>
+                line.Contains(SafeTailMarker, StringComparison.Ordinal)))
         {
-            await connection.WaitForAsync(
-                SafeTailMarker,
-                TimeSpan.FromSeconds(job.TimeoutSeconds),
-                cancellationToken);
             await stateJournal.WriteAsync(
                 workspace,
                 RenderState.RecordingSafeTail,
                 $"Last kill reached; preserving recording tail through tick {job.Segment.EndTick}.",
                 cancellationToken);
         }
-        await connection.WaitForAsync(
-            RecordingEndMarker,
-            TimeSpan.FromSeconds(job.TimeoutSeconds),
-            cancellationToken);
         await stateJournal.WriteAsync(
             workspace,
             RenderState.StoppingRecording,

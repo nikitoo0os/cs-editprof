@@ -169,8 +169,8 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
                     await writer.WriteLineAsync("AFX_RENDER_START_READY");
                     continue;
                 }
-                await writer.WriteLineAsync("AFX_RENDER_SAFE_TAIL");
                 await writer.WriteLineAsync("AFX_RENDER_RECORDING_END");
+                await writer.WriteLineAsync("AFX_RENDER_SAFE_TAIL");
                 return;
             }
         }
