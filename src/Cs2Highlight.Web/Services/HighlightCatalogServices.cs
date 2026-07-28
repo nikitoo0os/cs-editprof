@@ -137,11 +137,8 @@ public sealed class HighlightSelectionService(
             selected.Sum(value => value.EstimatedDurationMilliseconds) -
             transitionOverlap);
         generation.EffectPreset = preset;
-        long[] demoIds = selected.Select(value => value.GenerationDemoId).Distinct().ToArray();
         Dictionary<long, int> tickRates = await db.GenerationDemos
-            .Where(value =>
-                value.GenerationId == generation.Id &&
-                demoIds.Contains(value.Id))
+            .Where(value => value.GenerationId == generation.Id)
             .ToDictionaryAsync(
                 value => value.Id,
                 value => value.TickRate ?? 64,
