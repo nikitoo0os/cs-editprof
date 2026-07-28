@@ -3,7 +3,10 @@
 Automated tests do not prove clean CS2 pixels, musical alignment, browser
 playback or acceptable sound. Run this checklist on the Windows render machine.
 
-1. Build `demo-parser`, `music-analyzer` and the Release solution.
+1. Install Python 3.11 and build `demo-parser`, `music-analyzer` and the
+   Release solution. Use
+   `.\scripts\build-music-analyzer.ps1 -PythonVersion 3.11`; do not package it
+   with Python 3.12+.
 2. Verify HLAE/CS2/FFmpeg and use two real demos.
 3. Select one SteamID, at least one Solo and one multikill.
 4. Upload a rights-confirmed MP3/WAV/FLAC with a clearly audible accent.

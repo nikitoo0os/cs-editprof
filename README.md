@@ -78,8 +78,14 @@ reported with warnings rather than claimed as semantic certainty.
 Build the local analyzer with Python 3.10 or 3.11:
 
 ```powershell
-.\scripts\build-music-analyzer.ps1
+winget install -e --id Python.Python.3.11
+.\scripts\build-music-analyzer.ps1 -PythonVersion 3.11
 ```
+
+The build script deliberately does not use Python 3.12+ because the pinned
+Stage 6 analyzer and PyInstaller stack is qualified on Python 3.10/3.11. It
+creates a version-specific `.venv-py311` directory, so an older incompatible
+virtual environment cannot be reused accidentally.
 
 The deterministic planner uses a bounded beam search over musical anchors,
 highlight importance and allowed speed adjustment. It persists
