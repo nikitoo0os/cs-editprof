@@ -59,6 +59,40 @@ dotnet build -c Release
 dotnet test -c Release --no-build
 ```
 
+## Stage 6: music-driven automatic movie
+
+Stage 6 adds safe clip tails and a music-driven path without changing the
+existing Stage 1 `RenderJob` required fields. New jobs include optional tick
+metadata. The Render Agent seeks to a three-second warmup point, advances to
+the real start tick while recording is stopped, reapplies the versioned
+`capture-gameplay-clean.v2` profile, records through `SafeEnd`, and journals
+the safe-tail state.
+
+After highlight selection, Web now requires a streamed MP3/WAV/FLAC/M4A/AAC
+upload and explicit rights confirmation. FFprobe validates an audio stream and
+FFmpeg decodes a sample before the background `music-analyzer` runs. The
+analyzer contract contains BPM, beats, estimated downbeats, onsets, sections
+and probable strong musical accents. Downbeats and drops are estimates and are
+reported with warnings rather than claimed as semantic certainty.
+
+Build the local analyzer with Python 3.10 or 3.11:
+
+```powershell
+.\scripts\build-music-analyzer.ps1
+```
+
+The deterministic planner uses a bounded beam search over musical anchors,
+highlight importance and allowed speed adjustment. It persists
+`music-edit-plan.json` before rendering. FFmpeg applies the bounded base speed
+to video and gameplay audio, a single selected color preset, mixes music with
+gameplay audio, and applies a final limiter.
+
+The implementation and automated contracts are not a claim of a completed
+music-driven E2E. Smooth piecewise local ramps, pixel-level loading-screen and
+lower-overlay verification, measured loudness/alignment reports, full
+Playwright flow and real visual/audio acceptance remain subject to
+[Stage 6 real E2E](docs/STAGE6_E2E.md).
+
 ## Stage 5: highlight catalog, clean capture and effects
 
 Stage 5 extends the persisted Web flow without replacing Stages 1–4:
@@ -81,7 +115,7 @@ selection, trusted local weapon icons and explicit swap markers. Only stable
 highlight IDs are posted; the server reloads ticks, scores and weapon data from
 SQLite. Selection becomes immutable when it enters checkout.
 
-`CaptureUiProfile.Gameplay` uses the versioned `capture-clean.v1` adapter before
+`CaptureUiProfile.Gameplay` uses the versioned `capture-gameplay-clean.v2` adapter before
 demo load, after load, after seek and immediately before recording. It keeps
 the gameplay HUD and killfeed while requesting CS2 to close automation UI.
 Those commands still require visual verification against the installed

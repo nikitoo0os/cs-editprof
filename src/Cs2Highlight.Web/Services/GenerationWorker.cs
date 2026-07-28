@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Cs2Highlight.Analysis;
+using Cs2Highlight.Music;
 using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
 using Cs2Highlight.Web.Hubs;
@@ -15,6 +16,9 @@ public sealed class GenerationWorker(
     GenerationStorage storage,
     PipelineOptions pipelineOptions,
     GlobalHighlightSelector globalSelector,
+    IMusicAnalyzerClient musicAnalyzer,
+    IMusicalAnchorBuilder musicalAnchorBuilder,
+    IMusicEditPlanner musicEditPlanner,
     IEffectPlanner effectPlanner,
     IHighlightCompilationService compilationService,
     IHubContext<GenerationHub> hub,
@@ -69,6 +73,7 @@ public sealed class GenerationWorker(
             .Where(value =>
                 value.Status == GenerationStatus.QueuedForAnalysis ||
                 value.Status == GenerationStatus.Analyzing ||
+                value.Status == GenerationStatus.AnalyzingMusic ||
                 value.Status == GenerationStatus.QueuedForGeneration ||
                 value.Status == GenerationStatus.PreparingRenderPlan ||
                 value.Status == GenerationStatus.SelectingHighlights ||
@@ -96,6 +101,8 @@ public sealed class GenerationWorker(
         {
             if (generation.Status is GenerationStatus.QueuedForAnalysis or GenerationStatus.Analyzing)
                 await AnalyzeAsync(generation.PublicId, generationCancellation.Token);
+            else if (generation.Status == GenerationStatus.AnalyzingMusic)
+                await AnalyzeMusicAsync(generation.PublicId, generationCancellation.Token);
             else
                 await GenerateAsync(generation.PublicId, generationCancellation.Token);
         }
@@ -113,6 +120,99 @@ public sealed class GenerationWorker(
             cancellations.Complete(generation.PublicId);
         }
         return true;
+    }
+
+    private async Task AnalyzeMusicAsync(
+        string publicId,
+        CancellationToken cancellationToken)
+    {
+        await SetStatusAsync(
+            publicId, GenerationStatus.AnalyzingMusic, 28,
+            "Analyzing music rhythm and strong accents", cancellationToken);
+        await using GenerationDbContext db =
+            await dbFactory.CreateDbContextAsync(cancellationToken);
+        Generation generation = await db.Generations.SingleAsync(
+            value => value.PublicId == publicId, cancellationToken);
+        GenerationMusic music = await db.GenerationMusic.SingleAsync(
+            value => value.GenerationId == generation.Id, cancellationToken);
+        if (!music.RightsConfirmed)
+        {
+            await FailAsync(
+                publicId,
+                "MUSIC_RIGHTS_CONFIRMATION_REQUIRED",
+                "Music rights confirmation is required.",
+                cancellationToken);
+            return;
+        }
+        string analysisDirectory =
+            storage.EnsureDirectory(publicId, "analysis", "music");
+        string logDirectory = storage.EnsureDirectory(publicId, "logs");
+        string analysisPath = Path.Combine(analysisDirectory, "music-analysis.json");
+        MusicAnalysis analysis;
+        if (File.Exists(analysisPath))
+        {
+            analysis = await ReadJsonAsync<MusicAnalysis>(
+                analysisPath, cancellationToken);
+        }
+        else
+        {
+            analysis = await musicAnalyzer.AnalyzeAsync(
+                music.StoredPath,
+                analysisPath,
+                Path.Combine(logDirectory, "music-analyzer.log"),
+                cancellationToken);
+        }
+        music.DurationMilliseconds =
+            (long)Math.Round(analysis.Audio.DurationSeconds * 1000);
+        music.SampleRate = analysis.Audio.SampleRate;
+        music.Channels = analysis.Audio.Channels;
+        music.TempoBpm = analysis.Audio.TempoBpm;
+        music.TempoConfidence = analysis.Audio.TempoConfidence;
+        music.AnalyzerName = analysis.Analyzer.Name;
+        music.AnalyzerVersion = analysis.Analyzer.Version;
+        music.AnalysisSchemaVersion = analysis.SchemaVersion;
+        if (!await db.GenerationMusicAnchors.AnyAsync(
+                value => value.GenerationId == generation.Id,
+                cancellationToken))
+        {
+            foreach (MusicalAnchor anchor in musicalAnchorBuilder.Build(analysis))
+            {
+                db.GenerationMusicAnchors.Add(new GenerationMusicAnchor
+                {
+                    GenerationId = generation.Id,
+                    AnchorId = anchor.Id,
+                    Type = anchor.Type,
+                    TimeMilliseconds = (long)Math.Round(anchor.TimeSeconds * 1000),
+                    Strength = anchor.Strength,
+                    Confidence = anchor.Confidence
+                });
+            }
+        }
+        GenerationArtifact artifact = new()
+        {
+            GenerationId = generation.Id,
+            Type = ArtifactType.MusicAnalysis,
+            FileName = "music-analysis.json",
+            StoredPath = analysisPath,
+            ContentType = "application/json",
+            FileSizeBytes = new FileInfo(analysisPath).Length,
+            CreatedAt = timeProvider.GetUtcNow()
+        };
+        db.GenerationArtifacts.Add(artifact);
+        GenerationStateMachine.Transition(
+            generation,
+            GenerationStatus.AwaitingMovieConfiguration,
+            timeProvider.GetUtcNow());
+        generation.ProgressPercent = Math.Max(generation.ProgressPercent, 35);
+        await db.SaveChangesAsync(cancellationToken);
+        music.AnalysisArtifactId = artifact.Id;
+        await db.SaveChangesAsync(cancellationToken);
+        await PublishAsync(
+            publicId,
+            GenerationStatus.AwaitingMovieConfiguration,
+            35,
+            "Music analysis completed",
+            cancellationToken);
     }
 
     private async Task AnalyzeAsync(string publicId, CancellationToken cancellationToken)
@@ -233,6 +333,14 @@ public sealed class GenerationWorker(
                     EndTick = item.EndTick,
                     FirstKillTick = item.FirstKillTick,
                     LastKillTick = item.LastKillTick,
+                    TickRate = item.TickRate > 0 ? item.TickRate : analysis.Demo.TickRate,
+                    RoundStartTick = item.RoundStartTick,
+                    PrimaryKillTick = item.PrimaryKillTick > 0
+                        ? item.PrimaryKillTick
+                        : item.LastKillTick,
+                    SafeEndTick = item.SafeEndTick > 0
+                        ? item.SafeEndTick
+                        : item.EndTick,
                     KillCount = item.KillCount,
                     HeadshotCount = item.HeadshotCount,
                     CombatScore = item.CombatScore,
@@ -440,18 +548,36 @@ public sealed class GenerationWorker(
             await FailAsync(publicId, "NO_CLIPS_RENDERED", "No selected clip rendered successfully.", cancellationToken);
             return;
         }
+        MusicMovieContext? musicContext = await GetOrCreateMusicEditPlanAsync(
+            publicId,
+            renderedSelection,
+            cancellationToken);
+        if (musicContext is not null)
+        {
+            await SetStatusAsync(
+                publicId, GenerationStatus.VerifyingClips, 85,
+                "Verifying safe clip boundaries", cancellationToken);
+            await SetStatusAsync(
+                publicId, GenerationStatus.PlanningMusicEdit, 86,
+                "Synchronizing highlights with musical accents", cancellationToken);
+            await SetStatusAsync(
+                publicId, GenerationStatus.ApplyingTimeWarp, 87,
+                "Applying bounded gameplay time warp", cancellationToken);
+        }
         if (snapshot.Status is not (
             GenerationStatus.ComposingVideo or
             GenerationStatus.VerifyingOutput))
             await SetStatusAsync(
                 publicId, GenerationStatus.ApplyingEffects, 85,
                 "Applying effects and normalizing clips", cancellationToken);
-        GenerationStatus compilationStatus = snapshot.Status switch
-        {
-            GenerationStatus.ComposingVideo => GenerationStatus.ComposingVideo,
-            GenerationStatus.VerifyingOutput => GenerationStatus.VerifyingOutput,
-            _ => GenerationStatus.ApplyingEffects
-        };
+        GenerationStatus compilationStatus = musicContext is not null
+            ? GenerationStatus.ApplyingColorGrade
+            : snapshot.Status switch
+            {
+                GenerationStatus.ComposingVideo => GenerationStatus.ComposingVideo,
+                GenerationStatus.VerifyingOutput => GenerationStatus.VerifyingOutput,
+                _ => GenerationStatus.ApplyingEffects
+            };
         string output = storage.EnsureDirectory(publicId, "output");
         Progress<CompilationProgress> progress = new(value =>
             _ = PublishAsync(
@@ -465,6 +591,18 @@ public sealed class GenerationWorker(
                 renderedSelection,
                 snapshot.EffectPreset,
                 cancellationToken);
+        if (musicContext is not null)
+        {
+            await SetStatusAsync(
+                publicId, GenerationStatus.ComposingVideo, 88,
+                "Composing music-driven video timeline", cancellationToken);
+            await SetStatusAsync(
+                publicId, GenerationStatus.MixingAudio, 92,
+                "Mixing music and gameplay audio", cancellationToken);
+            await SetStatusAsync(
+                publicId, GenerationStatus.ApplyingColorGrade, 96,
+                "Applying consistent color grade", cancellationToken);
+        }
         CompilationResult compilation = await compilationService.ComposeAsync(
             new CompilationRequest(
                 clips,
@@ -472,7 +610,10 @@ public sealed class GenerationWorker(
                 snapshot.Width,
                 snapshot.Height,
                 snapshot.Fps,
-                EffectPlans: effectPlans),
+                EffectPlans: effectPlans,
+                MusicEditPlan: musicContext?.Plan,
+                MusicPath: musicContext?.MusicPath,
+                MovieSettings: musicContext?.Settings),
             progress,
             cancellationToken);
         if (!compilation.Success || compilation.OutputFile is null)
@@ -482,7 +623,8 @@ public sealed class GenerationWorker(
                 compilation.Error ?? "Compilation failed.", cancellationToken);
             return;
         }
-        if (snapshot.Status != GenerationStatus.VerifyingOutput)
+        if (musicContext is null &&
+            snapshot.Status != GenerationStatus.VerifyingOutput)
             await SetStatusAsync(
                 publicId, GenerationStatus.ComposingVideo, 97,
                 "Final composition completed", cancellationToken);
@@ -490,6 +632,132 @@ public sealed class GenerationWorker(
             publicId, GenerationStatus.VerifyingOutput, 98,
             "Verifying output", cancellationToken);
         await CompleteAsync(publicId, selected.Count, clips.Length, compilation, cancellationToken);
+    }
+
+    private async Task<MusicMovieContext?> GetOrCreateMusicEditPlanAsync(
+        string publicId,
+        GlobalHighlightCandidate[] selected,
+        CancellationToken cancellationToken)
+    {
+        await using GenerationDbContext db =
+            await dbFactory.CreateDbContextAsync(cancellationToken);
+        Generation generation = await db.Generations.SingleAsync(
+            value => value.PublicId == publicId, cancellationToken);
+        GenerationMusic? music = await db.GenerationMusic.SingleOrDefaultAsync(
+            value => value.GenerationId == generation.Id, cancellationToken);
+        GenerationMovieSettings? settings =
+            await db.GenerationMovieSettings.SingleOrDefaultAsync(
+                value => value.GenerationId == generation.Id, cancellationToken);
+        if (music is null || settings is null)
+            return null;
+        if (!music.RightsConfirmed || settings.LockedAt is null ||
+            music.AnalysisArtifactId is null)
+            throw new InvalidOperationException("MUSIC_PLAN_NOT_LOCKED");
+        GenerationArtifact analysisArtifact = await db.GenerationArtifacts.SingleAsync(
+            value => value.Id == music.AnalysisArtifactId.Value &&
+                value.GenerationId == generation.Id,
+            cancellationToken);
+        MusicAnalysis analysis = await ReadJsonAsync<MusicAnalysis>(
+            analysisArtifact.StoredPath, cancellationToken);
+        string planDirectory = storage.EnsureDirectory(publicId, "plan");
+        string planPath = Path.Combine(planDirectory, "music-edit-plan.json");
+        MusicEditPlan plan;
+        if (File.Exists(planPath))
+        {
+            plan = await ReadJsonAsync<MusicEditPlan>(planPath, cancellationToken);
+        }
+        else
+        {
+            List<SelectedHighlight> inputs = [];
+            for (int index = 0; index < selected.Length; index++)
+            {
+                GlobalHighlightCandidate candidate = selected[index];
+                GenerationHighlight stored = await db.GenerationHighlights.SingleAsync(
+                    value =>
+                        value.GenerationId == generation.Id &&
+                        value.GenerationDemoId == candidate.SourceDemoId &&
+                        value.HighlightId == candidate.Highlight.Id,
+                    cancellationToken);
+                int tickRate = stored.TickRate > 0 ? stored.TickRate : 64;
+                double Seconds(long tick) => tick / (double)tickRate;
+                SafeClipBounds bounds = new(
+                    Seconds(stored.StartTick),
+                    Seconds(stored.StartTick),
+                    Seconds(stored.PrimaryKillTick > 0
+                        ? stored.PrimaryKillTick
+                        : stored.LastKillTick),
+                    Seconds(stored.LastKillTick),
+                    Seconds(stored.SafeEndTick > 0
+                        ? stored.SafeEndTick
+                        : stored.EndTick),
+                    Seconds(stored.EndTick));
+                inputs.Add(new SelectedHighlight(
+                    stored.HighlightId,
+                    candidate.Highlight,
+                    bounds,
+                    stored.SelectionOrder ?? index + 1));
+            }
+            plan = musicEditPlanner.Create(
+                publicId,
+                music.StoredPath,
+                analysis,
+                inputs,
+                new MusicEditOptions
+                {
+                    Style = settings.MovieStyle,
+                    SyncIntensity = settings.SyncIntensity
+                });
+            string temporary = planPath + ".tmp";
+            await File.WriteAllTextAsync(
+                temporary,
+                JsonSerializer.Serialize(plan, JsonOptions),
+                cancellationToken);
+            File.Move(temporary, planPath);
+            Dictionary<string, GenerationHighlight> highlights =
+                await db.GenerationHighlights
+                    .Where(value => value.GenerationId == generation.Id)
+                    .ToDictionaryAsync(
+                        value => value.HighlightId,
+                        StringComparer.Ordinal,
+                        cancellationToken);
+            foreach (MusicEditSegment segment in plan.Segments)
+            {
+                GenerationHighlight highlight = highlights[segment.HighlightId];
+                db.GenerationEditSegments.Add(new GenerationEditSegment
+                {
+                    GenerationId = generation.Id,
+                    GenerationHighlightId = highlight.Id,
+                    Sequence = segment.Index,
+                    MusicalAnchorId = segment.TargetMusicAnchor?.Id,
+                    OutputStartMilliseconds =
+                        (long)Math.Round(segment.OutputStartSeconds * 1000),
+                    PrimaryKillOutputMilliseconds =
+                        (long)Math.Round(segment.PrimaryKillOutputTimeSeconds * 1000),
+                    BaseSpeedFactor = segment.TimeWarp.BaseSpeedFactor,
+                    TimeWarpPlanJson = JsonSerializer.Serialize(
+                        segment.TimeWarp, JsonOptions),
+                    TransitionIn = segment.TransitionIn,
+                    TransitionOut = segment.TransitionOut,
+                    MatchScore = segment.ScoreBreakdown.Total,
+                    ScoreBreakdownJson = JsonSerializer.Serialize(
+                        segment.ScoreBreakdown, JsonOptions),
+                    WarningsJson = JsonSerializer.Serialize(
+                        segment.Warnings, JsonOptions)
+                });
+            }
+            db.GenerationArtifacts.Add(new GenerationArtifact
+            {
+                GenerationId = generation.Id,
+                Type = ArtifactType.MusicEditPlan,
+                FileName = "music-edit-plan.json",
+                StoredPath = planPath,
+                ContentType = "application/json",
+                FileSizeBytes = new FileInfo(planPath).Length,
+                CreatedAt = timeProvider.GetUtcNow()
+            });
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        return new MusicMovieContext(plan, music.StoredPath, settings);
     }
 
     private async Task<IReadOnlyList<HighlightEffectPlan>> GetOrCreateEffectPlansAsync(
@@ -553,6 +821,11 @@ public sealed class GenerationWorker(
         await db.SaveChangesAsync(cancellationToken);
         return result;
     }
+
+    private sealed record MusicMovieContext(
+        MusicEditPlan Plan,
+        string MusicPath,
+        GenerationMovieSettings Settings);
 
     private async Task PersistSelectionAndPlanAsync(
         Generation generation,
@@ -666,6 +939,10 @@ public sealed class GenerationWorker(
             value.AnalysisStatus is DemoAnalysisStatus.Skipped or DemoAnalysisStatus.Failed);
         string compilationResultPath = Path.Combine(
             storage.EnsureDirectory(publicId, "output"), "compilation-result.json");
+        string audioMixResultPath = Path.Combine(
+            storage.EnsureDirectory(publicId, "output"), "audio-mix-result.json");
+        string alignmentResultPath = Path.Combine(
+            storage.EnsureDirectory(publicId, "output"), "music-alignment-result.json");
         await File.WriteAllTextAsync(
             reportPath,
             JsonSerializer.Serialize(new
@@ -695,6 +972,14 @@ public sealed class GenerationWorker(
             await AddArtifactAsync(
                 db, generation.Id, ArtifactType.CompilationResult,
                 compilationResultPath, cancellationToken);
+        if (File.Exists(audioMixResultPath))
+            await AddArtifactAsync(
+                db, generation.Id, ArtifactType.AudioMixResult,
+                audioMixResultPath, cancellationToken);
+        if (File.Exists(alignmentResultPath))
+            await AddArtifactAsync(
+                db, generation.Id, ArtifactType.MusicAlignmentResult,
+                alignmentResultPath, cancellationToken);
         await AddArtifactAsync(
             db, generation.Id, ArtifactType.GenerationReport, reportPath, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
@@ -817,6 +1102,14 @@ public sealed class GenerationWorker(
             BeautyScore = value.BeautyScore,
             Kills = kills,
             WeaponSequence = sequence,
+            TickRate = value.TickRate,
+            RoundStartTick = value.RoundStartTick,
+            PrimaryKillTick = value.PrimaryKillTick > 0
+                ? value.PrimaryKillTick
+                : value.LastKillTick,
+            SafeEndTick = value.SafeEndTick > 0
+                ? value.SafeEndTick
+                : value.EndTick,
             EstimatedDurationMilliseconds = value.EstimatedDurationMilliseconds
         };
     }

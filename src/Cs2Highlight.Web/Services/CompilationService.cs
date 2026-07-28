@@ -3,6 +3,8 @@ using System.ComponentModel;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using Cs2Highlight.Music;
+using Cs2Highlight.Web.Domain;
 
 namespace Cs2Highlight.Web.Services;
 
@@ -13,7 +15,10 @@ public sealed record CompilationRequest(
     int Height,
     int Fps,
     int MinimumOutputBytes = 1024,
-    IReadOnlyList<HighlightEffectPlan>? EffectPlans = null);
+    IReadOnlyList<HighlightEffectPlan>? EffectPlans = null,
+    MusicEditPlan? MusicEditPlan = null,
+    string? MusicPath = null,
+    GenerationMovieSettings? MovieSettings = null);
 public sealed record CompilationProgress(int Percent, string Stage);
 public sealed record CompilationVideo(int Width, int Height, int Fps, string Codec);
 public sealed record CompilationAudio(string? Codec, int? SampleRate);
@@ -144,12 +149,25 @@ public sealed class FfmpegHighlightCompilationService(
                 metadata.DurationSeconds,
                 effectPlan,
                 new VideoOutputOptions(request.Width, request.Height, request.Fps));
+            double speed = request.MusicEditPlan is not null &&
+                index < request.MusicEditPlan.Segments.Count
+                    ? request.MusicEditPlan.Segments[index].TimeWarp.BaseSpeedFactor
+                    : 1;
+            string videoFilters = graph.Video;
+            string audioFilters = graph.Audio;
+            if (Math.Abs(speed - 1) > 0.0001)
+            {
+                videoFilters += FormattableString.Invariant($",setpts=PTS/{speed:0.######}");
+                audioFilters += FormattableString.Invariant($",atempo={speed:0.######}");
+            }
+            if (request.MovieSettings is not null)
+                videoFilters += "," + FfmpegMovieFilterBuilder.Color(request.MovieSettings.ColorGradePreset);
             arguments.AddRange(
             [
                 "-map", "0:v:0",
                 "-map", metadata.HasAudio ? "0:a:0" : "1:a:0",
-                "-vf", graph.Video,
-                "-af", graph.Audio,
+                "-vf", videoFilters,
+                "-af", audioFilters,
                 "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                 "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
                 "-shortest", "-movflags", "+faststart", temporaryTarget
@@ -194,19 +212,64 @@ public sealed class FfmpegHighlightCompilationService(
             Environment.NewLine,
             normalized.Select(path => $"file '{path.Replace("'", "'\\''", StringComparison.Ordinal)}'"));
         await File.WriteAllTextAsync(concatFile, concat, Utf8WithoutBom, cancellationToken);
-        progress?.Report(new CompilationProgress(75, "Composing final video"));
+        progress?.Report(new CompilationProgress(75, "Composing gameplay timeline"));
         string temporary = Path.Combine(outputDirectory, "final-highlights.tmp.mp4");
         string final = Path.Combine(outputDirectory, "final-highlights.mp4");
+        string gameplay = Path.Combine(normalizedDirectory, "gameplay-timeline.mp4");
         if (File.Exists(temporary)) File.Delete(temporary);
-        ProcessResult composition = await RunAsync(
+        if (File.Exists(gameplay)) File.Delete(gameplay);
+        ProcessResult concatResult = await RunAsync(
             options.FfmpegPath,
             ["-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0",
-             "-i", concatFile, "-c", "copy", "-movflags", "+faststart", temporary],
+             "-i", concatFile, "-c", "copy", gameplay],
             cancellationToken);
         await WriteProcessLogAsync(
             Path.Combine(outputDirectory, "composition.ffmpeg.log"),
-            composition,
+            concatResult,
             cancellationToken);
+        if (concatResult.ExitCode != 0)
+        {
+            if (File.Exists(gameplay)) File.Delete(gameplay);
+            return Failure($"COMPILATION_FAILED: {concatResult.Error}", request.ClipPaths.Count, skipped, watch.ElapsedMilliseconds);
+        }
+        ProcessResult composition;
+        if (request.MusicPath is not null && request.MovieSettings is not null)
+        {
+            progress?.Report(new CompilationProgress(85, "Mixing music and gameplay audio"));
+            string mix = FfmpegMovieFilterBuilder.AudioMix(request.MovieSettings);
+            composition = await RunAsync(
+                options.FfmpegPath,
+                ["-y", "-hide_banner", "-loglevel", "error",
+                 "-i", gameplay, "-i", request.MusicPath,
+                 "-filter_complex", mix,
+                 "-map", "0:v:0", "-map", "[mixed]",
+                 "-c:v", "copy", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "256k",
+                 "-shortest", "-movflags", "+faststart", temporary],
+                cancellationToken);
+            await WriteProcessLogAsync(
+                Path.Combine(outputDirectory, "ffmpeg-mix.log"),
+                composition,
+                cancellationToken);
+            await File.WriteAllTextAsync(
+                Path.Combine(outputDirectory, "audio-mix-result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    request.MovieSettings.MusicGainDb,
+                    gameplayGainDb = request.MovieSettings.GameplayGainDb,
+                    limiter = true,
+                    outputTruePeakDb = -1.0
+                }, JsonOptions),
+                cancellationToken);
+        }
+        else
+        {
+            composition = await RunAsync(
+                options.FfmpegPath,
+                ["-y", "-hide_banner", "-loglevel", "error",
+                 "-i", gameplay, "-c", "copy", "-movflags", "+faststart", temporary],
+                cancellationToken);
+        }
         if (composition.ExitCode != 0)
         {
             if (File.Exists(temporary)) File.Delete(temporary);
@@ -220,6 +283,42 @@ public sealed class FfmpegHighlightCompilationService(
             file.Length < request.MinimumOutputBytes)
             return Failure("FINAL_VIDEO_INVALID", request.ClipPaths.Count, skipped, watch.ElapsedMilliseconds);
         File.Move(temporary, final, true);
+        if (request.MusicEditPlan is not null)
+        {
+            var alignment = request.MusicEditPlan.Segments
+                .Where(value => value.TargetMusicAnchor is not null)
+                .Select(value =>
+                {
+                    double actual = Math.Round(
+                        value.PrimaryKillOutputTimeSeconds * request.Fps,
+                        MidpointRounding.AwayFromZero) / request.Fps;
+                    double error = Math.Abs(
+                        actual - value.TargetMusicAnchor!.TimeSeconds) * 1000;
+                    return new
+                    {
+                        value.HighlightId,
+                        plannedAnchorTime = value.TargetMusicAnchor.TimeSeconds,
+                        actualKillOutputTime = actual,
+                        alignmentErrorMilliseconds = error
+                    };
+                })
+                .ToArray();
+            await File.WriteAllTextAsync(
+                Path.Combine(outputDirectory, "music-alignment-result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    measurement = "frame-timebase projection",
+                    segments = alignment,
+                    maximumAlignmentErrorMilliseconds =
+                        alignment.Select(value => value.alignmentErrorMilliseconds)
+                            .DefaultIfEmpty(0).Max(),
+                    averageAlignmentErrorMilliseconds =
+                        alignment.Select(value => value.alignmentErrorMilliseconds)
+                            .DefaultIfEmpty(0).Average()
+                }, JsonOptions),
+                cancellationToken);
+        }
         CompilationResult result = new(
             "1.1", true, final, normalized.Count, skipped, watch.ElapsedMilliseconds,
             new FileInfo(final).Length,
@@ -362,6 +461,37 @@ public sealed class FfmpegHighlightCompilationService(
         public int? AudioSampleRate { get; init; }
         public string? Error { get; init; }
     }
+}
+
+public static class FfmpegMovieFilterBuilder
+{
+    public static string Color(ColorGradePreset preset) => preset switch
+    {
+        ColorGradePreset.None => "null",
+        ColorGradePreset.Natural => "eq=contrast=1.02:saturation=1.03",
+        ColorGradePreset.Competitive => "eq=contrast=1.08:saturation=1.08:brightness=0.01",
+        ColorGradePreset.CinematicCool =>
+            "colorbalance=bs=.05:gs=.01:rh=.02,curves=preset=medium_contrast",
+        ColorGradePreset.CinematicWarm =>
+            "colorbalance=rs=.04:gh=.01:bh=-.02,curves=preset=medium_contrast",
+        ColorGradePreset.HighContrast => "eq=contrast=1.16:saturation=1.04",
+        ColorGradePreset.Neon => "eq=contrast=1.08:saturation=1.18,colorbalance=bs=.03:rh=.03",
+        _ => throw new ArgumentOutOfRangeException(nameof(preset), preset, null)
+    };
+
+    public static string AudioMix(GenerationMovieSettings settings)
+    {
+        string musicVolume = Db(settings.MusicGainDb);
+        string gameplayVolume = Db(settings.GameplayGainDb);
+        return
+            $"[0:a:0]aresample=48000,volume={gameplayVolume}[game];" +
+            $"[1:a:0]aresample=48000,volume={musicVolume}[music];" +
+            "[music][game]amix=inputs=2:duration=shortest:normalize=0," +
+            "alimiter=limit=0.891251:attack=5:release=50[mixed]";
+    }
+
+    private static string Db(double value) =>
+        FormattableString.Invariant($"{Math.Clamp(value, -60, 12):0.###}dB");
 }
 
 public static class FfmpegEffectFilterBuilder

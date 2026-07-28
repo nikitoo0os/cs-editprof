@@ -33,6 +33,7 @@ public sealed class GenerationReadinessHealthCheck(
                 ["minimumFreeDiskSpaceBytes"] = uploadOptions.MinimumFreeDiskSpaceBytes,
                 ["freeDiskSpace"] = drive.AvailableFreeSpace >= uploadOptions.MinimumFreeDiskSpaceBytes,
                 ["demoParser"] = ResolveExecutable(pipeline.DemoParserPath) is not null,
+                ["musicAnalyzer"] = ResolveExecutable(pipeline.MusicAnalyzerPath) is not null,
                 ["renderAgent"] = ResolveExecutable(pipeline.RenderAgentPath) is not null,
                 ["ffmpeg"] = ResolveExecutable(pipeline.FfmpegPath) is not null,
                 ["ffprobe"] = ResolveExecutable(pipeline.FfprobePath) is not null

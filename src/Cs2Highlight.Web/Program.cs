@@ -26,12 +26,15 @@ UploadOptions uploadOptions = builder.Configuration.GetSection("Uploads").Get<Up
 StorageOptions storageOptions = builder.Configuration.GetSection("Storage").Get<StorageOptions>() ?? new();
 PipelineOptions pipelineOptions = builder.Configuration.GetSection("Pipeline").Get<PipelineOptions>() ?? new();
 RetentionOptions retentionOptions = builder.Configuration.GetSection("Retention").Get<RetentionOptions>() ?? new();
+MusicUploadOptions musicUploadOptions =
+    builder.Configuration.GetSection("MusicUploads").Get<MusicUploadOptions>() ?? new();
 RecommendedSelectionOptions selectionOptions =
     builder.Configuration.GetSection("RecommendedSelection").Get<RecommendedSelectionOptions>() ?? new();
 builder.Services.AddSingleton(uploadOptions);
 builder.Services.AddSingleton(storageOptions);
 builder.Services.AddSingleton(pipelineOptions);
 builder.Services.AddSingleton(retentionOptions);
+builder.Services.AddSingleton(musicUploadOptions);
 builder.Services.AddSingleton(selectionOptions);
 builder.Services.Configure<FormOptions>(options =>
 {
@@ -42,6 +45,13 @@ builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = uploadOptions.MaximumTotalSizeBytes);
 builder.Services.AddSingleton<GenerationStorage>();
 builder.Services.AddSingleton<DemoUploadService>();
+builder.Services.AddSingleton<IMusicMediaValidator, FfprobeMusicMediaValidator>();
+builder.Services.AddSingleton<MusicUploadService>();
+builder.Services.AddSingleton<IMusicAnalyzerClient, ProcessMusicAnalyzerClient>();
+builder.Services.AddSingleton<Cs2Highlight.Music.IMusicalAnchorBuilder, Cs2Highlight.Music.MusicalAnchorBuilder>();
+builder.Services.AddSingleton<Cs2Highlight.Music.IHighlightImportanceCalculator, Cs2Highlight.Music.HighlightImportanceCalculator>();
+builder.Services.AddSingleton<Cs2Highlight.Music.ITimeWarpPlanner, Cs2Highlight.Music.TimeWarpPlanner>();
+builder.Services.AddSingleton<Cs2Highlight.Music.IMusicEditPlanner, Cs2Highlight.Music.MusicEditPlanner>();
 builder.Services.AddSingleton<GenerationWakeSignal>();
 builder.Services.AddSingleton<GenerationCancellationRegistry>();
 builder.Services.AddSingleton<GlobalHighlightSelector>();
@@ -140,6 +150,9 @@ app.MapGet("/api/generations/{publicId}", async (
             $"/generations/{publicId}/player",
         GenerationStatus.AwaitingHighlightSelection =>
             $"/generations/{publicId}/highlights",
+        GenerationStatus.AwaitingMusicUpload or
+        GenerationStatus.AwaitingMovieConfiguration =>
+            $"/generations/{publicId}/music",
         _ => null
     };
     return Results.Ok(new

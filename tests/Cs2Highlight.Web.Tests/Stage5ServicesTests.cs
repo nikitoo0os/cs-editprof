@@ -5,6 +5,7 @@ using Cs2Highlight.Web.Domain;
 using Cs2Highlight.Web.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Cs2Highlight.Music;
 
 namespace Cs2Highlight.Web.Tests;
 
@@ -75,6 +76,38 @@ public sealed class Stage5ServicesTests
         Assert.Contains("loudnorm", audio);
     }
 
+    [Theory]
+    [InlineData(ColorGradePreset.None, "null")]
+    [InlineData(ColorGradePreset.Natural, "eq=contrast=1.02")]
+    [InlineData(ColorGradePreset.Competitive, "contrast=1.08")]
+    [InlineData(ColorGradePreset.CinematicCool, "colorbalance")]
+    [InlineData(ColorGradePreset.CinematicWarm, "curves")]
+    [InlineData(ColorGradePreset.HighContrast, "contrast=1.16")]
+    [InlineData(ColorGradePreset.Neon, "saturation=1.18")]
+    public void ColorGradeUsesTrustedPresetOnly(
+        ColorGradePreset preset,
+        string expected)
+    {
+        Assert.Contains(expected, FfmpegMovieFilterBuilder.Color(preset));
+    }
+
+    [Fact]
+    public void AudioMixUsesConfiguredGainsAndLimiter()
+    {
+        GenerationMovieSettings settings = new()
+        {
+            MusicGainDb = -3,
+            GameplayGainDb = -16
+        };
+
+        string graph = FfmpegMovieFilterBuilder.AudioMix(settings);
+
+        Assert.Contains("volume=-3dB", graph);
+        Assert.Contains("volume=-16dB", graph);
+        Assert.Contains("amix=", graph);
+        Assert.Contains("alimiter=limit=0.891251", graph);
+    }
+
     [Fact]
     public async Task SelectionDeduplicatesIdsPersistsDurationAndLocksAfterward()
     {
@@ -119,7 +152,7 @@ public sealed class Stage5ServicesTests
             Generation saved = await db.Generations
                 .Include(value => value.Highlights)
                 .SingleAsync();
-            Assert.Equal(GenerationStatus.AwaitingPayment, saved.Status);
+            Assert.Equal(GenerationStatus.AwaitingMusicUpload, saved.Status);
             Assert.Equal(EffectPreset.Dynamic, saved.EffectPreset);
             Assert.Equal(5, saved.MaximumHighlights);
             Assert.Equal(11700, saved.EstimatedDurationMilliseconds);

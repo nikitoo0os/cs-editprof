@@ -29,14 +29,23 @@ public sealed class DomainTests
         GenerationStateMachine.Transition(generation, GenerationStatus.AwaitingPlayerSelection, now);
         GenerationStateMachine.Transition(
             generation, GenerationStatus.AwaitingHighlightSelection, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.AwaitingMusicUpload, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.AnalyzingMusic, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.AwaitingMovieConfiguration, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.ValidatingMoviePlan, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.AwaitingPayment, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.PaymentProcessing, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.Paid, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.QueuedForGeneration, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.PreparingRenderPlan, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.RenderingClips, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.VerifyingClips, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.PlanningMusicEdit, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.ApplyingTimeWarp, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.ApplyingEffects, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.ComposingVideo, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.MixingAudio, now);
+        GenerationStateMachine.Transition(generation, GenerationStatus.ApplyingColorGrade, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.VerifyingOutput, now);
         GenerationStateMachine.Transition(generation, GenerationStatus.Completed, now);
 

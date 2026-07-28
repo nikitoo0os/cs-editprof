@@ -48,6 +48,9 @@ public sealed class GenerationModel(
             return StatusCode(StatusCodes.Status409Conflict);
         if (generation.Status is GenerationStatus.RenderingClips or GenerationStatus.ComposingVideo
             or GenerationStatus.ApplyingEffects or GenerationStatus.Analyzing
+            or GenerationStatus.AnalyzingMusic or GenerationStatus.VerifyingClips
+            or GenerationStatus.PlanningMusicEdit or GenerationStatus.ApplyingTimeWarp
+            or GenerationStatus.MixingAudio or GenerationStatus.ApplyingColorGrade
             or GenerationStatus.BuildingHighlightCatalog
             or GenerationStatus.PreparingRenderPlan or GenerationStatus.SelectingHighlights
             or GenerationStatus.QueuedForGeneration)

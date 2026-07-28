@@ -1,6 +1,7 @@
 using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
 using Cs2Highlight.Web.Services;
+using Cs2Highlight.Music;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 
@@ -27,15 +28,7 @@ public sealed class PaymentTests : IAsyncLifetime, IDisposable
         string publicId = Guid.NewGuid().ToString("N");
         await using (GenerationDbContext db = await factory.CreateDbContextAsync())
         {
-            db.Generations.Add(new Generation
-            {
-                PublicId = publicId,
-                Status = GenerationStatus.AwaitingPayment,
-                CurrentStage = "AwaitingPayment",
-                CreatedAt = DateTimeOffset.UtcNow,
-                UpdatedAt = DateTimeOffset.UtcNow
-            });
-            await db.SaveChangesAsync();
+            await AddPayableGenerationAsync(db, publicId);
         }
         GenerationWakeSignal wake = new();
         PaymentService service = new(factory, new TestPaymentProvider(), TimeProvider.System, wake);
@@ -60,15 +53,7 @@ public sealed class PaymentTests : IAsyncLifetime, IDisposable
         string publicId = Guid.NewGuid().ToString("N");
         await using (GenerationDbContext db = await factory.CreateDbContextAsync())
         {
-            db.Generations.Add(new Generation
-            {
-                PublicId = publicId,
-                Status = GenerationStatus.AwaitingPayment,
-                CurrentStage = "AwaitingPayment",
-                CreatedAt = DateTimeOffset.UtcNow,
-                UpdatedAt = DateTimeOffset.UtcNow
-            });
-            await db.SaveChangesAsync();
+            await AddPayableGenerationAsync(db, publicId);
         }
         await new PaymentService(
             factory, new TestPaymentProvider(), TimeProvider.System, new GenerationWakeSignal())
@@ -87,6 +72,58 @@ public sealed class PaymentTests : IAsyncLifetime, IDisposable
 
     public async Task DisposeAsync() => await connection.DisposeAsync();
     public void Dispose() => connection.Dispose();
+
+    private static async Task AddPayableGenerationAsync(
+        GenerationDbContext db,
+        string publicId)
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        Generation generation = new()
+        {
+            PublicId = publicId,
+            Status = GenerationStatus.AwaitingPayment,
+            CurrentStage = "AwaitingPayment",
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        db.Generations.Add(generation);
+        await db.SaveChangesAsync();
+        GenerationArtifact artifact = new()
+        {
+            GenerationId = generation.Id,
+            Type = ArtifactType.MusicAnalysis,
+            FileName = "music-analysis.json",
+            StoredPath = "music-analysis.json",
+            FileSizeBytes = 1,
+            CreatedAt = now
+        };
+        db.GenerationArtifacts.Add(artifact);
+        await db.SaveChangesAsync();
+        db.GenerationMusic.Add(new GenerationMusic
+        {
+            GenerationId = generation.Id,
+            OriginalFileName = "music.wav",
+            StoredPath = "music.wav",
+            FileSizeBytes = 1,
+            Sha256 = new string('a', 64),
+            DurationMilliseconds = 30_000,
+            SampleRate = 48_000,
+            Channels = 2,
+            AnalysisArtifactId = artifact.Id,
+            RightsConfirmed = true,
+            RightsConfirmedAt = now,
+            CreatedAt = now
+        });
+        db.GenerationMovieSettings.Add(new GenerationMovieSettings
+        {
+            GenerationId = generation.Id,
+            MovieStyle = MovieStyle.Dynamic,
+            SyncIntensity = MusicSyncIntensity.Expressive,
+            ColorGradePreset = ColorGradePreset.Natural,
+            CreatedAt = now
+        });
+        await db.SaveChangesAsync();
+    }
 
     private sealed class TestDbFactory(DbContextOptions<GenerationDbContext> options)
         : IDbContextFactory<GenerationDbContext>

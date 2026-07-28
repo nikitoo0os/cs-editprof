@@ -1,0 +1,251 @@
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text.Json;
+using Cs2Highlight.Music;
+using Microsoft.AspNetCore.Http;
+
+namespace Cs2Highlight.Web.Services;
+
+public sealed class MusicUploadOptions
+{
+    public long MaximumFileSizeBytes { get; set; } = 209_715_200;
+    public double MinimumDurationSeconds { get; set; } = 15;
+    public double MaximumDurationSeconds { get; set; } = 600;
+    public long MinimumFreeDiskSpaceBytes { get; set; } = 2_147_483_648;
+    public string[] AllowedExtensions { get; set; } =
+        [".mp3", ".wav", ".flac", ".m4a", ".aac"];
+}
+
+public sealed record MusicMediaMetadata(
+    double DurationSeconds,
+    int SampleRate,
+    int Channels,
+    string Codec);
+
+public sealed record StoredMusicUpload(
+    string OriginalFileName,
+    string StoredPath,
+    long Size,
+    string Sha256,
+    string ContentType,
+    MusicMediaMetadata Metadata);
+
+public interface IMusicMediaValidator
+{
+    Task<MusicMediaMetadata> ValidateAsync(string path, CancellationToken cancellationToken);
+}
+
+public sealed class FfprobeMusicMediaValidator(
+    PipelineOptions pipeline,
+    MusicUploadOptions options) : IMusicMediaValidator
+{
+    public async Task<MusicMediaMetadata> ValidateAsync(
+        string path,
+        CancellationToken cancellationToken)
+    {
+        ProcessResult probe = await RunAsync(
+            pipeline.FfprobePath,
+            ["-v", "error", "-show_entries",
+             "format=duration:stream=codec_type,codec_name,sample_rate,channels",
+             "-of", "json", path],
+            cancellationToken);
+        if (probe.ExitCode != 0)
+            throw new InvalidOperationException("MUSIC_FFPROBE_FAILED");
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(probe.Output);
+            JsonElement audio = document.RootElement.GetProperty("streams")
+                .EnumerateArray()
+                .First(value => value.GetProperty("codec_type").GetString() == "audio");
+            double duration = double.Parse(
+                document.RootElement.GetProperty("format").GetProperty("duration").GetString()!,
+                CultureInfo.InvariantCulture);
+            if (duration < options.MinimumDurationSeconds)
+                throw new InvalidOperationException("MUSIC_TOO_SHORT");
+            if (duration > options.MaximumDurationSeconds)
+                throw new InvalidOperationException("MUSIC_TOO_LONG");
+            int sampleRate = int.Parse(audio.GetProperty("sample_rate").GetString()!, CultureInfo.InvariantCulture);
+            int channels = audio.GetProperty("channels").GetInt32();
+            string codec = audio.GetProperty("codec_name").GetString() ?? "unknown";
+            ProcessResult decode = await RunAsync(
+                pipeline.FfmpegPath,
+                ["-v", "error", "-t", "3", "-i", path, "-map", "0:a:0", "-f", "null", "-"],
+                cancellationToken);
+            if (decode.ExitCode != 0)
+                throw new InvalidOperationException("MUSIC_DECODING_FAILED");
+            return new MusicMediaMetadata(duration, sampleRate, channels, codec);
+        }
+        catch (InvalidOperationException) { throw; }
+        catch (Exception exception) when (
+            exception is JsonException or KeyNotFoundException or FormatException)
+        {
+            throw new InvalidOperationException("MUSIC_NO_AUDIO_STREAM", exception);
+        }
+    }
+
+    private static async Task<ProcessResult> RunAsync(
+        string executable,
+        IReadOnlyList<string> arguments,
+        CancellationToken cancellationToken)
+    {
+        ProcessStartInfo start = new()
+        {
+            FileName = executable,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (string argument in arguments) start.ArgumentList.Add(argument);
+        using Process process = new() { StartInfo = start };
+        try
+        {
+            if (!process.Start()) throw new InvalidOperationException("MEDIA_PROCESS_START_FAILED");
+        }
+        catch (Exception exception) when (
+            exception is Win32Exception or IOException or UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException("MEDIA_PROCESS_START_FAILED", exception);
+        }
+        Task<string> output = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        Task<string> error = process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken);
+        string stderr = await error;
+        return new ProcessResult(
+            process.ExitCode,
+            await output,
+            stderr.Length > 16_384 ? stderr[..16_384] : stderr);
+    }
+
+    private sealed record ProcessResult(int ExitCode, string Output, string Error);
+}
+
+public sealed class MusicUploadService(
+    GenerationStorage storage,
+    MusicUploadOptions options,
+    IMusicMediaValidator mediaValidator)
+{
+    public async Task<StoredMusicUpload> SaveAsync(
+        string publicId,
+        IFormFile file,
+        bool rightsConfirmed,
+        CancellationToken cancellationToken)
+    {
+        if (!rightsConfirmed) throw new InvalidOperationException("MUSIC_RIGHTS_CONFIRMATION_REQUIRED");
+        if (file.Length <= 0) throw new InvalidOperationException("MUSIC_FILE_EMPTY");
+        if (file.Length > options.MaximumFileSizeBytes)
+            throw new InvalidOperationException("MUSIC_FILE_TOO_LARGE");
+        string extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+        if (!options.AllowedExtensions.Contains(extension, StringComparer.OrdinalIgnoreCase))
+            throw new InvalidOperationException("MUSIC_UNSUPPORTED_FORMAT");
+        string directory = storage.EnsureDirectory(publicId, "uploads", "music");
+        DriveInfo drive = new(Path.GetPathRoot(directory)!);
+        if (drive.AvailableFreeSpace < options.MinimumFreeDiskSpaceBytes)
+            throw new InvalidOperationException("INSUFFICIENT_DISK_SPACE");
+        string temporary = Path.Combine(directory, $".upload-{Guid.NewGuid():N}.tmp");
+        string destination = Path.Combine(directory, $"track{extension}");
+        try
+        {
+            using IncrementalHash hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            await using Stream input = file.OpenReadStream();
+            await using FileStream output = new(
+                temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+                128 * 1024, FileOptions.Asynchronous | FileOptions.SequentialScan);
+            byte[] buffer = new byte[128 * 1024];
+            long written = 0;
+            while (true)
+            {
+                int read = await input.ReadAsync(buffer, cancellationToken);
+                if (read == 0) break;
+                written += read;
+                if (written > options.MaximumFileSizeBytes)
+                    throw new InvalidOperationException("MUSIC_FILE_TOO_LARGE");
+                hash.AppendData(buffer.AsSpan(0, read));
+                await output.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+            }
+            await output.FlushAsync(cancellationToken);
+            await output.DisposeAsync();
+            await input.DisposeAsync();
+            string sha256 = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+            MusicMediaMetadata metadata =
+                await mediaValidator.ValidateAsync(temporary, cancellationToken);
+            if (File.Exists(destination))
+                throw new InvalidOperationException("MUSIC_ALREADY_UPLOADED");
+            File.Move(temporary, destination);
+            return new StoredMusicUpload(
+                Path.GetFileName(file.FileName),
+                destination,
+                written,
+                sha256,
+                string.IsNullOrWhiteSpace(file.ContentType)
+                    ? "application/octet-stream"
+                    : file.ContentType[..Math.Min(128, file.ContentType.Length)],
+                metadata);
+        }
+        finally
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+        }
+    }
+}
+
+public interface IMusicAnalyzerClient
+{
+    Task<MusicAnalysis> AnalyzeAsync(
+        string inputPath,
+        string outputPath,
+        string logPath,
+        CancellationToken cancellationToken);
+}
+
+public sealed class ProcessMusicAnalyzerClient(PipelineOptions pipeline) : IMusicAnalyzerClient
+{
+    private static readonly JsonSerializerOptions JsonOptions =
+        new(JsonSerializerDefaults.Web);
+
+    public async Task<MusicAnalysis> AnalyzeAsync(
+        string inputPath,
+        string outputPath,
+        string logPath,
+        CancellationToken cancellationToken)
+    {
+        ProcessStartInfo start = new()
+        {
+            FileName = Path.GetFullPath(pipeline.MusicAnalyzerPath),
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (string argument in new[]
+        {
+            "analyze", "--input", inputPath, "--output", outputPath, "--pretty"
+        })
+            start.ArgumentList.Add(argument);
+        using Process process = new() { StartInfo = start };
+        if (!process.Start()) throw new InvalidOperationException("MUSIC_ANALYZER_START_FAILED");
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync(cancellationToken);
+        Task<string> stderr = process.StandardError.ReadToEndAsync(cancellationToken);
+        await process.WaitForExitAsync(cancellationToken);
+        string output = await stdout;
+        string error = await stderr;
+        await File.WriteAllTextAsync(
+            logPath,
+            $"exitCode={process.ExitCode}\nstdout:\n{output}\nstderr:\n{error}",
+            cancellationToken);
+        if (process.ExitCode != 0)
+            throw new InvalidOperationException($"MUSIC_ANALYSIS_FAILED: {error}");
+        await using FileStream stream = File.OpenRead(outputPath);
+        MusicAnalysis analysis =
+            await JsonSerializer.DeserializeAsync<MusicAnalysis>(
+                stream, JsonOptions, cancellationToken) ??
+            throw new InvalidOperationException("MUSIC_ANALYSIS_INVALID");
+        if (analysis.SchemaVersion != "1.0" ||
+            analysis.Beats.Zip(analysis.Beats.Skip(1))
+                .Any(pair => pair.First.TimeSeconds > pair.Second.TimeSeconds))
+            throw new InvalidOperationException("MUSIC_ANALYSIS_INVALID");
+        return analysis;
+    }
+}

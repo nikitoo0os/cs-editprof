@@ -17,7 +17,7 @@
   WeaponFire and killer health. `oneTap` is a best-effort WeaponFire-derived
   value. Reliable last-enemy and reaction-time signals are unavailable, remain
   unset, emit parser warnings and receive no BeautyScore.
-- The `capture-clean.v1` command adapter and effect filter graphs have automated
+- The `capture-gameplay-clean.v2` command adapter and effect filter graphs have automated
   tests, but clean captured pixels and visual effect timing still require the
   real Stage 5 checklist on the installed CS2/HLAE/FFmpeg versions.
 - Process ownership cleanup is limited to the process tree started by `ProcessSupervisor`; no broad name-based killing is performed.

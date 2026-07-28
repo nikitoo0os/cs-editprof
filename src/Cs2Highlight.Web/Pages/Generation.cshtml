@@ -33,6 +33,14 @@
          asp-page="/Highlights"
          asp-route-publicId="@Model.Generation.PublicId">Выбрать моменты</a>
     }
+    else if (Model.Generation.Status is
+      GenerationStatus.AwaitingMusicUpload or
+      GenerationStatus.AwaitingMovieConfiguration)
+    {
+      <a class="button"
+         asp-page="/Music"
+         asp-route-publicId="@Model.Generation.PublicId">Музыка и стиль</a>
+    }
   </div>
 
   <div id="video-result" hidden="@(!completed)">

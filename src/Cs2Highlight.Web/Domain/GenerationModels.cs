@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
+using Cs2Highlight.Music;
 
 namespace Cs2Highlight.Web.Domain;
 
@@ -8,9 +9,11 @@ public enum GenerationStatus
 {
     Draft, Uploading, Uploaded, QueuedForAnalysis, Analyzing,
     BuildingHighlightCatalog, AwaitingPlayerSelection, AwaitingHighlightSelection,
+    AwaitingMusicUpload, AnalyzingMusic, AwaitingMovieConfiguration, ValidatingMoviePlan,
     AwaitingPayment, PaymentProcessing, Paid,
     QueuedForGeneration, PreparingRenderPlan, SelectingHighlights,
-    RenderingClips, ApplyingEffects, ComposingVideo,
+    RenderingClips, VerifyingClips, PlanningMusicEdit, ApplyingTimeWarp,
+    ApplyingEffects, ComposingVideo, MixingAudio, ApplyingColorGrade,
     VerifyingOutput, Completed, CompletedWithWarnings, Cancelling, Cancelled,
     Failed, Expired
 }
@@ -31,7 +34,9 @@ public enum EffectPreset { None, Clean, Dynamic }
 public enum ArtifactType
 {
     UploadedDemo, DemoAnalysis, Highlights, GenerationPlan, BatchPlan, BatchState,
-    BatchReport, IntermediateClip, CompilationResult, GenerationReport, FinalVideo, Log
+    BatchReport, IntermediateClip, CompilationResult, GenerationReport, FinalVideo, Log,
+    MusicUpload, MusicAnalysis, MusicEditPlan, ProcessedClip, AudioMixResult,
+    MusicAlignmentResult, ColorGradeResult
 }
 
 public sealed class Generation
@@ -73,8 +78,84 @@ public sealed class Generation
     public List<GenerationHighlight> Highlights { get; set; } = [];
     public List<GenerationArtifact> Artifacts { get; set; } = [];
     public List<GenerationEffectPlan> EffectPlans { get; set; } = [];
+    public GenerationMusic? Music { get; set; }
+    public GenerationMovieSettings? MovieSettings { get; set; }
+    public List<GenerationMusicAnchor> MusicAnchors { get; set; } = [];
+    public List<GenerationEditSegment> EditSegments { get; set; } = [];
     public List<Payment> Payments { get; set; } = [];
     public List<GenerationEvent> Events { get; set; } = [];
+}
+
+public sealed class GenerationMusic
+{
+    public long Id { get; set; }
+    public long GenerationId { get; set; }
+    public Generation Generation { get; set; } = null!;
+    [MaxLength(260)] public string OriginalFileName { get; set; } = string.Empty;
+    [MaxLength(1024)] public string StoredPath { get; set; } = string.Empty;
+    public long FileSizeBytes { get; set; }
+    [MaxLength(64)] public string Sha256 { get; set; } = string.Empty;
+    [MaxLength(128)] public string ContentType { get; set; } = "application/octet-stream";
+    public long DurationMilliseconds { get; set; }
+    public int SampleRate { get; set; }
+    public int Channels { get; set; }
+    public double? TempoBpm { get; set; }
+    public double? TempoConfidence { get; set; }
+    [MaxLength(64)] public string? AnalyzerName { get; set; }
+    [MaxLength(32)] public string? AnalyzerVersion { get; set; }
+    [MaxLength(16)] public string? AnalysisSchemaVersion { get; set; }
+    public long? AnalysisArtifactId { get; set; }
+    public bool RightsConfirmed { get; set; }
+    public DateTimeOffset? RightsConfirmedAt { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+public sealed class GenerationMovieSettings
+{
+    public long Id { get; set; }
+    public long GenerationId { get; set; }
+    public Generation Generation { get; set; } = null!;
+    public MovieStyle MovieStyle { get; set; } = MovieStyle.Dynamic;
+    public MusicSyncIntensity SyncIntensity { get; set; } = MusicSyncIntensity.Expressive;
+    public ColorGradePreset ColorGradePreset { get; set; } = ColorGradePreset.Natural;
+    public double MusicGainDb { get; set; } = -3;
+    public double GameplayGainDb { get; set; } = -16;
+    [MaxLength(32)] public string TransitionPreference { get; set; } = "Automatic";
+    public MusicDurationPolicy MusicDurationPolicy { get; set; } = MusicDurationPolicy.TrimMusicToVideo;
+    public DateTimeOffset CreatedAt { get; set; }
+    public DateTimeOffset? LockedAt { get; set; }
+}
+
+public sealed class GenerationMusicAnchor
+{
+    public long Id { get; set; }
+    public long GenerationId { get; set; }
+    public Generation Generation { get; set; } = null!;
+    [MaxLength(64)] public string AnchorId { get; set; } = string.Empty;
+    public MusicalAnchorType Type { get; set; }
+    public long TimeMilliseconds { get; set; }
+    public double Strength { get; set; }
+    public double Confidence { get; set; }
+}
+
+public sealed class GenerationEditSegment
+{
+    public long Id { get; set; }
+    public long GenerationId { get; set; }
+    public Generation Generation { get; set; } = null!;
+    public long GenerationHighlightId { get; set; }
+    public GenerationHighlight Highlight { get; set; } = null!;
+    public int Sequence { get; set; }
+    [MaxLength(64)] public string? MusicalAnchorId { get; set; }
+    public long OutputStartMilliseconds { get; set; }
+    public long PrimaryKillOutputMilliseconds { get; set; }
+    public double BaseSpeedFactor { get; set; }
+    public string TimeWarpPlanJson { get; set; } = "{}";
+    [MaxLength(32)] public string TransitionIn { get; set; } = "Cut";
+    [MaxLength(32)] public string TransitionOut { get; set; } = "Cut";
+    public double MatchScore { get; set; }
+    public string ScoreBreakdownJson { get; set; } = "{}";
+    public string WarningsJson { get; set; } = "[]";
 }
 
 public sealed class GenerationDemo
@@ -124,6 +205,10 @@ public sealed class GenerationHighlight
     public long EndTick { get; set; }
     public long FirstKillTick { get; set; }
     public long LastKillTick { get; set; }
+    public int TickRate { get; set; }
+    public long? RoundStartTick { get; set; }
+    public long PrimaryKillTick { get; set; }
+    public long SafeEndTick { get; set; }
     public int KillCount { get; set; }
     public int HeadshotCount { get; set; }
     public double CombatScore { get; set; }

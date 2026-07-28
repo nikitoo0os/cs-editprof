@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nikitoo0os/cs-editprof/contracts/music-analysis.schema.json",
+  "title": "Stage 6 MusicAnalysis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "analyzer", "audio", "beats", "downbeats", "onsets", "sections", "dropCandidates", "warnings"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "analyzer": {
+      "type": "object",
+      "required": ["name", "version", "engine"],
+      "properties": {
+        "name": { "type": "string" },
+        "version": { "type": "string" },
+        "engine": { "type": "string" }
+      }
+    },
+    "audio": {
+      "type": "object",
+      "required": ["fileName", "durationSeconds", "sampleRate", "channels", "tempoBpm", "tempoConfidence", "integratedLoudnessLufs"],
+      "properties": {
+        "fileName": { "type": "string" },
+        "durationSeconds": { "type": "number", "exclusiveMinimum": 0 },
+        "sampleRate": { "type": "integer", "minimum": 1 },
+        "channels": { "type": "integer", "minimum": 1 },
+        "tempoBpm": { "type": ["number", "null"] },
+        "tempoConfidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "integratedLoudnessLufs": { "type": ["number", "null"] }
+      }
+    },
+    "beats": { "$ref": "#/$defs/beats" },
+    "downbeats": { "$ref": "#/$defs/beats" },
+    "onsets": { "type": "array", "items": { "type": "object" } },
+    "sections": { "type": "array", "items": { "type": "object" } },
+    "dropCandidates": { "type": "array", "items": { "type": "object" } },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  },
+  "$defs": {
+    "beats": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["index", "timeSeconds", "strength", "confidence"],
+        "properties": {
+          "index": { "type": "integer", "minimum": 1 },
+          "timeSeconds": { "type": "number", "minimum": 0 },
+          "strength": { "type": "number", "minimum": 0, "maximum": 1 },
+          "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+        }
+      }
+    }
+  }
+}

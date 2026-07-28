@@ -69,6 +69,15 @@ public sealed class PaymentService(
         if (existing is not null) return existing;
         if (generation.Status != GenerationStatus.AwaitingPayment)
             throw new InvalidOperationException("Generation is not awaiting payment.");
+        GenerationMusic? music = await db.GenerationMusic.SingleOrDefaultAsync(
+            value => value.GenerationId == generation.Id, cancellationToken);
+        GenerationMovieSettings? movieSettings =
+            await db.GenerationMovieSettings.SingleOrDefaultAsync(
+                value => value.GenerationId == generation.Id, cancellationToken);
+        if (music is null || !music.RightsConfirmed || music.AnalysisArtifactId is null)
+            throw new InvalidOperationException("MUSIC_NOT_READY");
+        if (movieSettings is null)
+            throw new InvalidOperationException("MOVIE_SETTINGS_REQUIRED");
         PaymentSessionResult session = await provider.CreateSessionAsync(
             new PaymentRequest(publicId, 100, "USD", key), cancellationToken);
         if (!session.Success) throw new InvalidOperationException(session.ErrorCode);
@@ -120,6 +129,11 @@ public sealed class PaymentService(
             payment.SucceededAt = now;
             generation.PaymentStatus = PaymentStatus.Succeeded;
             generation.PaidAt = now;
+            GenerationMovieSettings settings =
+                await db.GenerationMovieSettings.SingleAsync(
+                    value => value.GenerationId == generation.Id,
+                    cancellationToken);
+            settings.LockedAt ??= now;
             GenerationStateMachine.Transition(generation, GenerationStatus.Paid, now);
             GenerationStateMachine.Transition(generation, GenerationStatus.QueuedForGeneration, now);
         }

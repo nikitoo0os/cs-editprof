@@ -1,0 +1,52 @@
+@page "/generations/{publicId}/music"
+@model MusicModel
+@{
+  ViewData["Title"] = "Музыка и стиль";
+}
+<section class="card">
+  <h1>Музыка и стиль мувика</h1>
+  <div asp-validation-summary="All" class="error"></div>
+
+  @if (Model.Generation.Status == GenerationStatus.AwaitingMusicUpload)
+  {
+    <form method="post" asp-page-handler="Upload" enctype="multipart/form-data">
+      <label asp-for="MusicFile">Музыкальный трек</label>
+      <input asp-for="MusicFile" type="file" accept=".mp3,.wav,.flac,.m4a,.aac" required />
+      <label class="rights-confirmation">
+        <input asp-for="RightsConfirmed" type="checkbox" required />
+        Я подтверждаю, что имею право использовать загруженный аудиофайл для создания этого видео.
+      </label>
+      <p class="muted">Это подтверждение пользователя, а не юридическая проверка лицензии.</p>
+      <button type="submit">Проанализировать музыку</button>
+    </form>
+  }
+  else if (Model.Generation.Status == GenerationStatus.AnalyzingMusic)
+  {
+    <p>Анализируем ритм и вероятные сильные музыкальные акценты…</p>
+    <a class="button" asp-page="/Generation" asp-route-publicId="@Model.Generation.PublicId">Статус</a>
+  }
+  else if (Model.Generation.Status == GenerationStatus.AwaitingMovieConfiguration && Model.Music is not null)
+  {
+    <div class="grid">
+      <p>Длительность: @TimeSpan.FromMilliseconds(Model.Music.DurationMilliseconds).ToString(@"m\:ss")</p>
+      <p>BPM: @(Model.Music.TempoBpm?.ToString("0.#") ?? "не определён")</p>
+      <p>Beats: @Model.BeatCount</p>
+      <p>Сильных акцентов: @Model.StrongAnchorCount</p>
+      <p>Вероятных сильных музыкальных акцентов: @Model.DropCount</p>
+    </div>
+    <form method="post" asp-page-handler="Configure">
+      <label asp-for="MovieStyle">Стиль монтажа</label>
+      <select asp-for="MovieStyle" asp-items="Html.GetEnumSelectList<MovieStyle>()"></select>
+      <label asp-for="SyncIntensity">Синхронизация с музыкой</label>
+      <select asp-for="SyncIntensity" asp-items="Html.GetEnumSelectList<MusicSyncIntensity>()"></select>
+      <label asp-for="ColorGrade">Цвет</label>
+      <select asp-for="ColorGrade" asp-items="Html.GetEnumSelectList<ColorGradePreset>()"></select>
+      <label asp-for="GameplayGainPercent">Игровой звук: <span id="gameplay-value">@Model.GameplayGainPercent</span>%</label>
+      <input asp-for="GameplayGainPercent" type="range" min="0" max="100" />
+      <label asp-for="MusicGainPercent">Музыка: <span id="music-value">@Model.MusicGainPercent</span>%</label>
+      <input asp-for="MusicGainPercent" type="range" min="0" max="100" />
+      <p>Оценочная длительность: @Model.EstimatedDurationText</p>
+      <button type="submit">Продолжить к оплате</button>
+    </form>
+  }
+</section>

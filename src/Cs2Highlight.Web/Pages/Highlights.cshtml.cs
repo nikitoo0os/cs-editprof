@@ -72,7 +72,7 @@ public sealed class HighlightsModel(
         {
             await selections.SaveSelectionAsync(
                 publicId, HighlightIds, EffectPreset, cancellationToken);
-            return RedirectToPage("/Checkout", new { publicId });
+            return RedirectToPage("/Music", new { publicId });
         }
         catch (InvalidOperationException exception)
         {

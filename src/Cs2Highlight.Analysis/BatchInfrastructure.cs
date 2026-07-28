@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Cs2Highlight.RenderAgent.Application;
@@ -107,6 +108,12 @@ public sealed class ProcessRenderAgentClient(string renderAgentPath) : IRenderAg
         startInfo.ArgumentList.Add("render");
         startInfo.ArgumentList.Add("--job");
         startInfo.ArgumentList.Add(Path.GetFullPath(renderJobPath));
+        if (attempt > 1)
+        {
+            startInfo.Environment[
+                "CS2RENDER_RenderEnvironment__Warmup__WarmupGameSeconds"] =
+                (3 + (attempt - 1) * 2).ToString(CultureInfo.InvariantCulture);
+        }
         using Process process = new() { StartInfo = startInfo };
         try
         {

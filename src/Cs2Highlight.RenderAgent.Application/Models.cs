@@ -60,6 +60,10 @@ public sealed class RenderEnvironmentOptions
     public long MinimumOutputBytes { get; set; } = 1024;
     public bool KillProcessTreeOnFailure { get; set; } = true;
     public RenderWarmupOptions Warmup { get; set; } = new();
+    public bool EnableClipStartQualityGate { get; set; } = true;
+    public double ClipStartSampleSeconds { get; set; } = 2;
+    public double ClipStartBlackDurationSeconds { get; set; } = 0.75;
+    public double ClipStartFreezeDurationSeconds { get; set; } = 1;
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]

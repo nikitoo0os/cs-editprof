@@ -76,4 +76,16 @@ public sealed class SafeClipBoundsTests
 
         Assert.Equal(expected, result);
     }
+
+    [Theory]
+    [InlineData("[blackdetect] black_start:0 black_end:1.2", true)]
+    [InlineData("[freezedetect] freeze_start:0", true)]
+    [InlineData("[blackdetect] black_start:3.2 black_end:4", false)]
+    [InlineData("normal ffmpeg output", false)]
+    public void ClipStartQualityRecognizesOnlyOpeningDefects(
+        string diagnostic,
+        bool expected)
+    {
+        Assert.Equal(expected, RenderOutputWatcher.HasStartDefect(diagnostic));
+    }
 }

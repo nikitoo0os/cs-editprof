@@ -79,6 +79,13 @@ public static partial class RenderJobValidator
         {
             errors.Add("RenderEnvironment warmup values are outside supported limits.");
         }
+        if (environment.EnableClipStartQualityGate &&
+            (environment.ClipStartSampleSeconds <= 0 ||
+             environment.ClipStartBlackDurationSeconds <= 0 ||
+             environment.ClipStartFreezeDurationSeconds <= 0))
+        {
+            errors.Add("RenderEnvironment clip-start quality values must be positive.");
+        }
 
         ValidateOutput(job.OutputDirectory, environment.Cs2ExecutablePath, errors);
         return new ValidationReport(errors);

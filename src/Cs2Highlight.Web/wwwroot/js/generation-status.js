@@ -27,7 +27,9 @@
   const actionLabel = status =>
     status === "AwaitingPlayerSelection"
       ? "Выбрать игрока"
-      : "Выбрать моменты";
+      : status === "AwaitingHighlightSelection"
+        ? "Выбрать моменты"
+        : "Музыка и стиль";
 
   function render(state) {
     elements.status.textContent = state.status;

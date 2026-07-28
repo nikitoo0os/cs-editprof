@@ -160,7 +160,7 @@ public sealed class HighlightSelectionService(
             });
         }
         GenerationStateMachine.Transition(
-            generation, GenerationStatus.AwaitingPayment, timeProvider.GetUtcNow());
+            generation, GenerationStatus.AwaitingMusicUpload, timeProvider.GetUtcNow());
         generation.ProgressPercent = Math.Max(generation.ProgressPercent, 30);
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);

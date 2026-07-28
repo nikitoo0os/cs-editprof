@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/nikitoo0os/cs-editprof/contracts/music-edit-plan.schema.json",
+  "title": "Stage 6 MusicEditPlan",
+  "type": "object",
+  "required": ["schemaVersion", "generationId", "musicFile", "musicDurationSeconds", "style", "syncIntensity", "segments", "warnings"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "generationId": { "type": "string" },
+    "musicFile": { "type": "string" },
+    "musicDurationSeconds": { "type": "number", "exclusiveMinimum": 0 },
+    "style": { "enum": ["Clean", "Dynamic", "Cinematic"] },
+    "syncIntensity": { "enum": ["Soft", "Expressive", "Aggressive"] },
+    "segments": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["index", "highlightId", "highlightType", "highlightImportance", "sourceStartSeconds", "sourceEndSeconds", "primaryKillSourceTimeSeconds", "targetMusicAnchor", "outputStartSeconds", "primaryKillOutputTimeSeconds", "timeWarp", "transitionIn", "transitionOut", "scoreBreakdown", "warnings"]
+      }
+    },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  }
+}
