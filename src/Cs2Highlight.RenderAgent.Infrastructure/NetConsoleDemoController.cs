@@ -11,7 +11,7 @@ public sealed class NetConsoleDemoController(
     RenderEnvironmentOptions options,
     IStateJournal stateJournal) : IDemoController
 {
-    private const string DemoReadyMarker = "CGameRules - paused on tick";
+    private const string NetConReadyMarker = "AFX_RENDER_NETCON_READY";
     private const string SeekFinishedMarker = "Demo Skipping finished at tick";
     private const string StartReadyMarker = "AFX_RENDER_START_READY";
     private const string SafeTailMarker = "AFX_RENDER_SAFE_TAIL";
@@ -31,11 +31,14 @@ public sealed class NetConsoleDemoController(
         await stateJournal.WriteAsync(
             workspace,
             RenderState.LoadingDemo,
-            "Connected to CS2 NetCon; waiting for demo initialization.",
+            "Connected to CS2 NetCon; performing active readiness handshake.",
+            cancellationToken);
+        await connection.SendAsync(
+            $"echo {NetConReadyMarker}",
             cancellationToken);
         await connection.WaitForAsync(
-            DemoReadyMarker,
-            TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
+            NetConReadyMarker,
+            TimeSpan.FromSeconds(5),
             cancellationToken);
         await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
 
@@ -45,12 +48,9 @@ public sealed class NetConsoleDemoController(
             RenderState.SeekingToWarmup,
             $"Demo initialized; seeking to warmup tick {warmupTick}.",
             cancellationToken);
-        await connection.SendAsync("demo_pause", cancellationToken);
-        await connection.SendAsync(
-            string.Create(CultureInfo.InvariantCulture, $"demo_gototick {warmupTick}"),
-            cancellationToken);
-        await connection.WaitForAsync(
-            SeekFinishedMarker,
+        await SeekToWarmupAsync(
+            connection,
+            warmupTick,
             TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
             cancellationToken);
         await connection.SendAsync("demo_pause", cancellationToken);
@@ -180,6 +180,45 @@ public sealed class NetConsoleDemoController(
             MidpointRounding.AwayFromZero);
         long lowerBound = Math.Max(0, segment.RoundStartTick ?? 0);
         return Math.Max(lowerBound, segment.StartTick - warmupTicks);
+    }
+
+    private static async Task SeekToWarmupAsync(
+        NetConsoleConnection connection,
+        long warmupTick,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.Add(timeout);
+        TimeoutException? lastTimeout = null;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await connection.SendAsync("demo_pause", cancellationToken);
+            await connection.SendAsync(
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"demo_gototick {warmupTick}"),
+                cancellationToken);
+            TimeSpan remaining = deadline - DateTimeOffset.UtcNow;
+            try
+            {
+                await connection.WaitForAsync(
+                    SeekFinishedMarker,
+                    remaining < TimeSpan.FromSeconds(5)
+                        ? remaining
+                        : TimeSpan.FromSeconds(5),
+                    cancellationToken);
+                return;
+            }
+            catch (TimeoutException exception)
+            {
+                lastTimeout = exception;
+                await Task.Delay(250, cancellationToken);
+            }
+        }
+        throw new TimeoutException(
+            $"Demo did not accept seek to warmup tick {warmupTick} before timeout.",
+            lastTimeout);
     }
 
     private sealed class NetConCaptureUiController(

@@ -96,8 +96,6 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             AutoFlush = true,
             NewLine = "\n"
         };
-        await writer.WriteLineAsync("CGameRules - paused on tick 1");
-
         bool warmedUp = false;
         while (true)
         {
@@ -107,6 +105,10 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
                 return;
             }
             commands.Add(command);
+            if (command == "echo AFX_RENDER_NETCON_READY")
+            {
+                await writer.WriteLineAsync("AFX_RENDER_NETCON_READY");
+            }
             if (command.StartsWith("demo_gototick ", StringComparison.Ordinal))
             {
                 await writer.WriteLineAsync("[Demo] Demo Skipping finished at tick 100");
