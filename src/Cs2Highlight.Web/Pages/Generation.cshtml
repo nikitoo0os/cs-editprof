@@ -26,9 +26,11 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js"></script>
 <script>
 const root=document.querySelector('[data-public-id]'),id=root.dataset.publicId;
-const c=new signalR.HubConnectionBuilder().withUrl('/hubs/generations').withAutomaticReconnect().build();
-c.on('progress',p=>{document.querySelector('#status').textContent=p.status;document.querySelector('#stage').textContent=p.stage;document.querySelector('#bar').style.width=p.progressPercent+'%';if(p.progressPercent===100)location.reload();});
-c.start().then(()=>c.invoke('Subscribe',id));
 setInterval(()=>{if(document.visibilityState==='visible'&&document.querySelector('#bar').style.width!=='100%')location.reload()},15000);
+if(window.signalR){
+  const c=new signalR.HubConnectionBuilder().withUrl('/hubs/generations').withAutomaticReconnect().build();
+  c.on('progress',p=>{document.querySelector('#status').textContent=p.status;document.querySelector('#stage').textContent=p.stage;document.querySelector('#bar').style.width=p.progressPercent+'%';if(p.progressPercent===100)location.reload();});
+  c.start().then(()=>c.invoke('Subscribe',id)).catch(()=>{});
+}
 </script>
 }

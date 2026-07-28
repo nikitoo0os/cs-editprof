@@ -279,6 +279,7 @@ public sealed class GenerationWorker(
             snapshot = await db.Generations
                 .Include(value => value.Demos)
                 .Include(value => value.Highlights)
+                .AsSplitQuery()
                 .SingleAsync(value => value.PublicId == publicId, cancellationToken);
         if (snapshot.PaymentStatus != PaymentStatus.Succeeded)
         {
@@ -496,6 +497,7 @@ public sealed class GenerationWorker(
         Generation generation = await db.Generations
             .Include(value => value.Demos)
             .Include(value => value.Highlights)
+            .AsSplitQuery()
             .SingleAsync(value => value.PublicId == publicId, cancellationToken);
         DateTimeOffset now = timeProvider.GetUtcNow();
         GenerationStatus status = included < planned

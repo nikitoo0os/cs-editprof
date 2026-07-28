@@ -77,7 +77,8 @@ app.Use(async (context, next) =>
         "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; media-src 'self'; connect-src 'self' ws: wss:";
     await next();
 });
-app.UseHttpsRedirection();
+if (app.Configuration.GetValue("HttpsRedirection:Enabled", false))
+    app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
 app.UseRateLimiter();
