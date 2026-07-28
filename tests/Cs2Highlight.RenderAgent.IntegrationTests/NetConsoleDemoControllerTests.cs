@@ -53,7 +53,8 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         await server;
 
         Assert.Contains("demo_gototick 100", commands);
-        Assert.Contains("spec_player \"Player One\"", commands);
+        Assert.Contains("mirv_cvar_unhide_all", commands);
+        Assert.Contains("spec_lock_to_accountid 76561198000000001", commands);
         Assert.Contains("mirv_streams record start", commands);
         Assert.Contains("demo_resume", commands);
         Assert.Contains(commands, command =>

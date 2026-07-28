@@ -30,8 +30,9 @@ The unattended HLAE custom-loader CLI is confirmed from the upstream HLAE source
 The launcher always forces `-insecure`, uses an isolated `USRLOCALCSGO`, and injects `AfxHookSource2.dll` only into the CS2 process it creates. Normal CS2 launches through Steam are untouched.
 
 The launcher also enables local NetCon with `-afxFixNetCon`. The agent waits
-for actual demo initialization before sending `demo_gototick`, selects the
-POV, starts recording, schedules the stop command at `endTick`, and then
+for actual demo initialization before sending `demo_gototick`, locks the POV
+to `player.steamId` with `spec_lock_to_accountid`, starts recording, schedules
+the stop command at `endTick`, and then
 gracefully quits the isolated CS2 process. The application refuses to run when
 `AutomationVerified=false`.
 

@@ -24,9 +24,12 @@ public static partial class RenderJobValidator
             errors.Add("demoPath must reference an existing .dem file.");
         }
 
-        if (string.IsNullOrWhiteSpace(job.Player?.Name))
+        const ulong individualSteamId64Base = 76561197960265728UL;
+        if (!ulong.TryParse(job.Player?.SteamId, out ulong steamId64) ||
+            steamId64 < individualSteamId64Base ||
+            steamId64 > individualSteamId64Base + uint.MaxValue)
         {
-            errors.Add("player.name is required for deterministic CS2 spec_player POV selection.");
+            errors.Add("player.steamId must be a valid individual SteamID64 for deterministic CS2 POV selection.");
         }
 
         if (job.Player?.SteamId is { Length: > 32 } || job.Player?.Name is { Length: > 128 })

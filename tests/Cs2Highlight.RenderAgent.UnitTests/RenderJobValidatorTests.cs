@@ -37,16 +37,29 @@ public sealed class RenderJobValidatorTests : IDisposable
     }
 
     [Fact]
-    public void MissingPlayerNameIsReported()
+    public void MissingPlayerSteamIdIsReported()
     {
         RenderJob job = ValidJob() with
         {
-            Player = new PlayerSelector("76561198000000001", null)
+            Player = new PlayerSelector(null, "Player")
         };
 
         ValidationReport result = RenderJobValidator.Validate(job, new RenderEnvironmentOptions());
 
-        Assert.Contains(result.Errors, error => error.Contains("player.name", StringComparison.Ordinal));
+        Assert.Contains(result.Errors, error => error.Contains("player.steamId", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void InvalidPlayerSteamIdIsReported()
+    {
+        RenderJob job = ValidJob() with
+        {
+            Player = new PlayerSelector("123", "Player")
+        };
+
+        ValidationReport result = RenderJobValidator.Validate(job, new RenderEnvironmentOptions());
+
+        Assert.Contains(result.Errors, error => error.Contains("valid individual SteamID64", StringComparison.Ordinal));
     }
 
     private RenderJob ValidJob() => new(

@@ -49,13 +49,16 @@ public sealed class NetConsoleDemoController(
             cancellationToken);
         await connection.SendAsync("demo_pause", cancellationToken);
 
-        string player = SelectPlayer(job.Player);
+        ulong steamId64 = GetSteamId64(job.Player);
         await stateJournal.WriteAsync(
             workspace,
             RenderState.SelectingPlayer,
-            $"Seek completed; selecting POV player '{player}'.",
+            $"Seek completed; locking POV to SteamID64 {steamId64}.",
             cancellationToken);
-        await connection.SendAsync($"spec_player \"{EscapeCommandArgument(player)}\"", cancellationToken);
+        await connection.SendAsync("mirv_cvar_unhide_all", cancellationToken);
+        await connection.SendAsync(
+            string.Create(CultureInfo.InvariantCulture, $"spec_lock_to_accountid {steamId64}"),
+            cancellationToken);
         await connection.SendAsync("spec_mode 4", cancellationToken);
         await connection.SendAsync(
             string.Create(
@@ -91,11 +94,23 @@ public sealed class NetConsoleDemoController(
         await connection.SendAsync("quit", cancellationToken);
     }
 
-    public static string SelectPlayer(PlayerSelector player) =>
-        !string.IsNullOrWhiteSpace(player.Name)
-            ? player.Name
-            : throw new InvalidOperationException(
-                "player.name is required because CS2 spec_player accepts a player name or observer slot, not SteamID64.");
+    public static ulong GetSteamId64(PlayerSelector player)
+    {
+        const ulong individualSteamId64Base = 76561197960265728UL;
+        if (!ulong.TryParse(
+                player.SteamId,
+                NumberStyles.None,
+                CultureInfo.InvariantCulture,
+                out ulong steamId64) ||
+            steamId64 < individualSteamId64Base ||
+            steamId64 > individualSteamId64Base + uint.MaxValue)
+        {
+            throw new InvalidOperationException(
+                "player.steamId must be a valid individual SteamID64.");
+        }
+
+        return steamId64;
+    }
 
     public static string EscapeCommandArgument(string value)
     {

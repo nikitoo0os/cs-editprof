@@ -6,11 +6,22 @@ namespace Cs2Highlight.RenderAgent.UnitTests;
 public sealed class NetConsoleDemoControllerTests
 {
     [Fact]
-    public void PrefersPlayerNameBecauseSpecPlayerAcceptsNameOrSlot()
+    public void AcceptsIndividualSteamId64()
     {
-        PlayerSelector player = new("76561198000000001", "Player One");
+        PlayerSelector player = new("76561199031052443", "Player One");
 
-        Assert.Equal("Player One", NetConsoleDemoController.SelectPlayer(player));
+        Assert.Equal(76561199031052443UL, NetConsoleDemoController.GetSteamId64(player));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not-a-steam-id")]
+    [InlineData("123")]
+    public void RejectsInvalidSteamId64(string? steamId)
+    {
+        Assert.Throws<InvalidOperationException>(
+            () => NetConsoleDemoController.GetSteamId64(new PlayerSelector(steamId, "Player")));
     }
 
     [Fact]
