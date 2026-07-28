@@ -502,9 +502,8 @@ public sealed class GenerationWorker(
             await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation generation = await db.Generations
             .SingleAsync(value => value.PublicId == publicId, cancellationToken);
-        long[] demoIds = selected.Select(value => value.SourceDemoId).Distinct().ToArray();
         Dictionary<long, int> tickRates = await db.GenerationDemos
-            .Where(value => value.GenerationId == generation.Id && demoIds.Contains(value.Id))
+            .Where(value => value.GenerationId == generation.Id)
             .ToDictionaryAsync(
                 value => value.Id,
                 value => value.TickRate ?? 64,

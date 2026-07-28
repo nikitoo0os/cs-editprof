@@ -18,8 +18,10 @@ builder.Services.AddRazorPages(options =>
 });
 builder.Services.AddSignalR();
 builder.Services.AddDbContextFactory<GenerationDbContext>(options =>
-    options.UseSqlite(builder.Configuration.GetConnectionString("GenerationDb") ??
-        "Data Source=storage/generations.db"));
+    options.UseSqlite(
+        builder.Configuration.GetConnectionString("GenerationDb") ??
+            "Data Source=storage/generations.db",
+        sqlite => sqlite.UseQuerySplittingBehavior(QuerySplittingBehavior.SplitQuery)));
 UploadOptions uploadOptions = builder.Configuration.GetSection("Uploads").Get<UploadOptions>() ?? new();
 StorageOptions storageOptions = builder.Configuration.GetSection("Storage").Get<StorageOptions>() ?? new();
 PipelineOptions pipelineOptions = builder.Configuration.GetSection("Pipeline").Get<PipelineOptions>() ?? new();
