@@ -1,0 +1,65 @@
+{
+  "schemaVersion": "1.0",
+  "batchId": "match730-003824860121607963181-0-player-76561199031052443",
+  "success": true,
+  "status": "Completed",
+  "demoPath": "D:/Steam/steamapps/common/Counter-Strike Global Offensive/game/csgo/replays/match730_003824860121607963181_0486400461_186.dem",
+  "player": {
+    "steamId": "76561199031052443",
+    "name": "Я экспонат ты мой фанат"
+  },
+  "startedAt": "2026-07-28T17:13:00.7087612+00:00",
+  "completedAt": "2026-07-28T17:14:15.910028+00:00",
+  "durationMilliseconds": 75201,
+  "metrics": {
+    "inputCandidates": 2,
+    "playerCandidates": 2,
+    "filteredCandidates": 2,
+    "resolvedCandidates": 2
+  },
+  "summary": {
+    "total": 2,
+    "succeeded": 2,
+    "failed": 0,
+    "skipped": 0,
+    "cancelled": 0,
+    "retries": 0,
+    "totalOutputSizeBytes": 31429981,
+    "averageRenderMilliseconds": 37427.5,
+    "minimumRenderMilliseconds": 34514,
+    "maximumRenderMilliseconds": 40341
+  },
+  "items": [
+    {
+      "index": 1,
+      "itemId": "r06-doublekill-30214-30585",
+      "highlightType": "DoubleKill",
+      "roundNumber": 6,
+      "startTick": 30022,
+      "endTick": 30777,
+      "score": 54,
+      "status": "Succeeded",
+      "attempts": 1,
+      "outputFile": "D:/Cs2Highlights/batches/e2e-001/jobs/highlight-001-r06-doublekill/raw-highlight.mp4",
+      "renderResultPath": "D:/Cs2Highlights/batches/e2e-001/jobs/highlight-001-r06-doublekill/render-result.json",
+      "durationMilliseconds": 40341,
+      "error": null
+    },
+    {
+      "index": 2,
+      "itemId": "r17-doublekill-95159-95388",
+      "highlightType": "DoubleKill",
+      "roundNumber": 17,
+      "startTick": 94967,
+      "endTick": 95498,
+      "score": 50,
+      "status": "Succeeded",
+      "attempts": 1,
+      "outputFile": "D:/Cs2Highlights/batches/e2e-001/jobs/highlight-002-r17-doublekill/raw-highlight.mp4",
+      "renderResultPath": "D:/Cs2Highlights/batches/e2e-001/jobs/highlight-002-r17-doublekill/render-result.json",
+      "durationMilliseconds": 34514,
+      "error": null
+    }
+  ],
+  "warnings": []
+}

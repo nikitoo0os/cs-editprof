@@ -263,10 +263,13 @@ Troubleshooting:
   `.\scripts\kill-render-processes.ps1` before resuming.
 - Only one batch/HLAE/CS2 instance is supported per interactive Windows session.
 - Unit and controlled integration coverage does not replace installed-machine
-  E2E. As of 2026-07-28, this repository has **zero locally verified real batch
-  clips** because this development machine lacks the installed HLAE/CS2
-  environment. Stage 3 must not be declared complete until the remote render
-  machine creates at least two MP4 files sequentially and its report is reviewed.
+  E2E. Stage 3 completed its real render-machine E2E on 2026-07-28 using
+  `match730_003824860121607963181_0486400461_186.dem` (`de_dust2`) and SteamID
+  `76561199031052443`. Two DoubleKill items rendered sequentially with two
+  independent MP4 files: 21,181,914 and 10,248,067 bytes. The batch completed in
+  75,201 ms with 2 succeeded, 0 failed, and 0 retries. The checked-in report is
+  `examples/batch-report.real-e2e.json`. Failure isolation and idempotent resume
+  remain covered by controlled integration tests.
 
 ### Detection and scoring
 
