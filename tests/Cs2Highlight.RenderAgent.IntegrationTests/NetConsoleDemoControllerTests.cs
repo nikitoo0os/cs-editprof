@@ -28,7 +28,13 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         {
             NetConPort = port,
             ProcessStartupTimeoutSeconds = 3,
-            DemoLoadTimeoutSeconds = 3
+            DemoLoadTimeoutSeconds = 3,
+            Warmup = new RenderWarmupOptions
+            {
+                WarmupGameSeconds = 3,
+                MinimumWallClockStabilizationSeconds = 0,
+                MaximumGameplayReadyWaitSeconds = 3
+            }
         };
         RenderWorkspace workspace = new(
             root,
@@ -43,7 +49,14 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             "test",
             workspace.PreparedDemoPath,
             new PlayerSelector("76561198000000001", "Player One"),
-            new RenderSegment(100, 200),
+            new RenderSegment(100, 200)
+            {
+                TickRate = 10,
+                RoundStartTick = 0,
+                PrimaryKillTick = 150,
+                LastKillTick = 150,
+                SafeEndTick = 200
+            },
             new VideoSettings(1920, 1080, 60, 90),
             workspace.Output,
             10);
@@ -52,7 +65,10 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         await controller.ControlAsync(job, workspace, CancellationToken.None);
         await server;
 
-        Assert.Contains("demo_gototick 100", commands);
+        Assert.Contains("demo_gototick 70", commands);
+        Assert.Contains(commands, command =>
+            command.Contains("addAtTick 100", StringComparison.Ordinal) &&
+            command.Contains("AFX_RENDER_START_READY", StringComparison.Ordinal));
         Assert.Contains("mirv_cvar_unhide_all", commands);
         Assert.Contains("spec_mode 1", commands);
         Assert.Contains("spec_lock_to_accountid 39734273", commands);
@@ -60,8 +76,11 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             command.StartsWith("spec_player ", StringComparison.Ordinal));
         Assert.Contains("mirv_streams record start", commands);
         Assert.Contains("demo_resume", commands);
-        Assert.Equal(3, commands.Count(command => command == "cl_drawhud 1"));
-        Assert.Equal(3, commands.Count(command => command == "hideconsole"));
+        Assert.Equal(4, commands.Count(command => command == "cl_drawhud 1"));
+        Assert.Equal(4, commands.Count(command => command == "hideconsole"));
+        Assert.Contains(commands, command =>
+            command.Contains("addAtTick 150", StringComparison.Ordinal) &&
+            command.Contains("AFX_RENDER_SAFE_TAIL", StringComparison.Ordinal));
         Assert.Contains(commands, command =>
             command.Contains("addAtTick 200", StringComparison.Ordinal) &&
             command.Contains("mirv_streams record end", StringComparison.Ordinal));
@@ -79,6 +98,7 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         };
         await writer.WriteLineAsync("CGameRules - paused on tick 1");
 
+        bool warmedUp = false;
         while (true)
         {
             string? command = await reader.ReadLineAsync();
@@ -105,6 +125,13 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             }
             if (command == "demo_resume")
             {
+                if (!warmedUp)
+                {
+                    warmedUp = true;
+                    await writer.WriteLineAsync("AFX_RENDER_START_READY");
+                    continue;
+                }
+                await writer.WriteLineAsync("AFX_RENDER_SAFE_TAIL");
                 await writer.WriteLineAsync("AFX_RENDER_RECORDING_END");
                 return;
             }

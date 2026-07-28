@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\Cs2Highlight.Analysis\Cs2Highlight.Analysis.csproj" />
+    <ProjectReference Include="..\..\src\Cs2Highlight.Music\Cs2Highlight.Music.csproj" />
     <ProjectReference Include="..\..\src\Cs2Highlight.RenderAgent.Application\Cs2Highlight.RenderAgent.Application.csproj" />
     <ProjectReference Include="..\..\src\Cs2Highlight.RenderAgent.Infrastructure\Cs2Highlight.RenderAgent.Infrastructure.csproj" />
   </ItemGroup>

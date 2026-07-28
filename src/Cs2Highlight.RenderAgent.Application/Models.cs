@@ -23,8 +23,23 @@ public enum CaptureUiProfile
 }
 
 public sealed record PlayerSelector(string? SteamId, string? Name);
-public sealed record RenderSegment(long StartTick, long EndTick);
+public sealed record RenderSegment(long StartTick, long EndTick)
+{
+    public int? TickRate { get; init; }
+    public long? RoundStartTick { get; init; }
+    public long? PrimaryKillTick { get; init; }
+    public long? LastKillTick { get; init; }
+    public long? SafeEndTick { get; init; }
+}
 public sealed record VideoSettings(int Width, int Height, int Fps, double Fov);
+
+public sealed class RenderWarmupOptions
+{
+    public double WarmupGameSeconds { get; set; } = 3;
+    public double MinimumWallClockStabilizationSeconds { get; set; } = 1;
+    public double MaximumGameplayReadyWaitSeconds { get; set; } = 15;
+    public bool ReapplyCaptureProfileAfterWarmup { get; set; } = true;
+}
 
 public sealed class RenderEnvironmentOptions
 {
@@ -44,6 +59,7 @@ public sealed class RenderEnvironmentOptions
     public int OutputStableSeconds { get; set; } = 3;
     public long MinimumOutputBytes { get; set; } = 1024;
     public bool KillProcessTreeOnFailure { get; set; } = true;
+    public RenderWarmupOptions Warmup { get; set; } = new();
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -59,10 +75,16 @@ public enum RenderState
     WaitingForCs2,
     LoadingDemo,
     Seeking,
+    SeekingToWarmup,
+    WarmingUp,
+    WaitingForGameplayReady,
     SelectingPlayer,
     ApplyingCaptureProfile,
     VerifyingCaptureProfile,
+    StabilizingCaptureProfile,
+    AdvancingToStartTick,
     Recording,
+    RecordingSafeTail,
     StoppingRecording,
     VerifyingOutput,
     Completed,

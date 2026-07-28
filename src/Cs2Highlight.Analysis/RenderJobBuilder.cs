@@ -41,7 +41,18 @@ public sealed partial class RenderJobBuilder : IRenderJobBuilder
             jobId,
             Path.GetFullPath(demoPath),
             new PlayerSelector(highlight.PlayerId, highlight.PlayerName),
-            new RenderSegment(highlight.StartTick, highlight.EndTick),
+            new RenderSegment(highlight.StartTick, highlight.EndTick)
+            {
+                TickRate = highlight.TickRate > 0 ? highlight.TickRate : null,
+                RoundStartTick = highlight.RoundStartTick,
+                PrimaryKillTick = highlight.PrimaryKillTick > 0
+                    ? highlight.PrimaryKillTick
+                    : highlight.LastKillTick,
+                LastKillTick = highlight.LastKillTick,
+                SafeEndTick = highlight.SafeEndTick > 0
+                    ? highlight.SafeEndTick
+                    : highlight.EndTick
+            },
             new VideoSettings(options.Width, options.Height, options.Fps, options.Fov),
             outputDirectory,
             options.TimeoutSeconds);

@@ -1,8 +1,0 @@
-// capture-clean.v1 — Gameplay profile
-// Applied before demo load, after load/seek and immediately before recording.
-demo_timescale 1
-cl_drawhud 1
-cl_draw_only_deathnotices 0
-spec_show_xray 0
-gameui_hide
-hideconsole

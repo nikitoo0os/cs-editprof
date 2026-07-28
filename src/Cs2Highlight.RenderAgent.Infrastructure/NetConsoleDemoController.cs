@@ -13,6 +13,8 @@ public sealed class NetConsoleDemoController(
 {
     private const string DemoReadyMarker = "CGameRules - paused on tick";
     private const string SeekFinishedMarker = "Demo Skipping finished at tick";
+    private const string StartReadyMarker = "AFX_RENDER_START_READY";
+    private const string SafeTailMarker = "AFX_RENDER_SAFE_TAIL";
     private const string RecordingEndMarker = "AFX_RENDER_RECORDING_END";
 
     public async Task ControlAsync(
@@ -37,14 +39,15 @@ public sealed class NetConsoleDemoController(
             cancellationToken);
         await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
 
+        long warmupTick = ComputeWarmupTick(job.Segment, options.Warmup);
         await stateJournal.WriteAsync(
             workspace,
-            RenderState.Seeking,
-            $"Demo initialized; seeking to tick {job.Segment.StartTick}.",
+            RenderState.SeekingToWarmup,
+            $"Demo initialized; seeking to warmup tick {warmupTick}.",
             cancellationToken);
         await connection.SendAsync("demo_pause", cancellationToken);
         await connection.SendAsync(
-            string.Create(CultureInfo.InvariantCulture, $"demo_gototick {job.Segment.StartTick}"),
+            string.Create(CultureInfo.InvariantCulture, $"demo_gototick {warmupTick}"),
             cancellationToken);
         await connection.WaitForAsync(
             SeekFinishedMarker,
@@ -66,6 +69,37 @@ public sealed class NetConsoleDemoController(
             $"spec_lock_to_accountid {accountId.ToString(CultureInfo.InvariantCulture)}",
             cancellationToken);
         await VerifySelectedPlayerAsync(connection, steamId64, cancellationToken);
+        await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
+
+        if (warmupTick < job.Segment.StartTick)
+        {
+            await stateJournal.WriteAsync(
+                workspace,
+                RenderState.WarmingUp,
+                $"Advancing demo from warmup tick {warmupTick} to start tick {job.Segment.StartTick}.",
+                cancellationToken);
+            await connection.SendAsync(
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"mirv_cmd addAtTick {job.Segment.StartTick} \"demo_pause; echo {StartReadyMarker}\""),
+                cancellationToken);
+            await connection.SendAsync("demo_resume", cancellationToken);
+            await stateJournal.WriteAsync(
+                workspace,
+                RenderState.WaitingForGameplayReady,
+                "Waiting for advancing demo playback, stable POV and the actual start tick.",
+                cancellationToken);
+            await connection.WaitForAsync(
+                StartReadyMarker,
+                TimeSpan.FromSeconds(options.Warmup.MaximumGameplayReadyWaitSeconds),
+                cancellationToken);
+        }
+
+        await stateJournal.WriteAsync(
+            workspace,
+            RenderState.AdvancingToStartTick,
+            $"Actual recording start tick {job.Segment.StartTick} reached while recording is stopped.",
+            cancellationToken);
         await connection.SendAsync(
             string.Create(
                 CultureInfo.InvariantCulture,
@@ -76,10 +110,11 @@ public sealed class NetConsoleDemoController(
             RenderState.ApplyingCaptureProfile,
             $"Applying {job.CaptureUi} UI profile ({CaptureUiProfileAdapter.TemplateVersion}).",
             cancellationToken);
-        await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
+        if (options.Warmup.ReapplyCaptureProfileAfterWarmup)
+            await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
         await stateJournal.WriteAsync(
             workspace,
-            RenderState.VerifyingCaptureProfile,
+            RenderState.StabilizingCaptureProfile,
             "Capture profile commands applied; stabilizing before recording.",
             cancellationToken);
         const string captureMarker = "AFX_RENDER_CAPTURE_PROFILE_APPLIED";
@@ -88,7 +123,20 @@ public sealed class NetConsoleDemoController(
             captureMarker,
             TimeSpan.FromSeconds(5),
             cancellationToken);
-        await Task.Delay(TimeSpan.FromMilliseconds(250), cancellationToken);
+        await Task.Delay(
+            TimeSpan.FromSeconds(options.Warmup.MinimumWallClockStabilizationSeconds),
+            cancellationToken);
+        bool hasSafeTailMarker = job.Segment.LastKillTick is long lastKill &&
+            lastKill >= job.Segment.StartTick &&
+            lastKill < job.Segment.EndTick;
+        if (hasSafeTailMarker)
+        {
+            await connection.SendAsync(
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"mirv_cmd addAtTick {job.Segment.LastKillTick} \"echo {SafeTailMarker}\""),
+                cancellationToken);
+        }
         await stateJournal.WriteAsync(
             workspace,
             RenderState.Recording,
@@ -98,6 +146,18 @@ public sealed class NetConsoleDemoController(
         await connection.SendAsync("echo AFX_RENDER_RECORDING_START", cancellationToken);
         await connection.SendAsync("demo_resume", cancellationToken);
 
+        if (hasSafeTailMarker)
+        {
+            await connection.WaitForAsync(
+                SafeTailMarker,
+                TimeSpan.FromSeconds(job.TimeoutSeconds),
+                cancellationToken);
+            await stateJournal.WriteAsync(
+                workspace,
+                RenderState.RecordingSafeTail,
+                $"Last kill reached; preserving recording tail through tick {job.Segment.EndTick}.",
+                cancellationToken);
+        }
         await connection.WaitForAsync(
             RecordingEndMarker,
             TimeSpan.FromSeconds(job.TimeoutSeconds),
@@ -107,6 +167,19 @@ public sealed class NetConsoleDemoController(
             RenderState.StoppingRecording,
             $"Recording stopped at tick {job.Segment.EndTick}.",
             cancellationToken);
+    }
+
+    public static long ComputeWarmupTick(
+        RenderSegment segment,
+        RenderWarmupOptions warmup)
+    {
+        if (segment.TickRate is not int tickRate || tickRate <= 0)
+            return segment.StartTick;
+        long warmupTicks = (long)Math.Round(
+            Math.Max(0, warmup.WarmupGameSeconds) * tickRate,
+            MidpointRounding.AwayFromZero);
+        long lowerBound = Math.Max(0, segment.RoundStartTick ?? 0);
+        return Math.Max(lowerBound, segment.StartTick - warmupTicks);
     }
 
     private sealed class NetConCaptureUiController(

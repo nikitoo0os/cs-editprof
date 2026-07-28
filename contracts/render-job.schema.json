@@ -21,7 +21,12 @@
       "required": ["startTick", "endTick"],
       "properties": {
         "startTick": { "type": "integer", "minimum": 0 },
-        "endTick": { "type": "integer", "minimum": 1 }
+        "endTick": { "type": "integer", "minimum": 1 },
+        "tickRate": { "type": ["integer", "null"], "minimum": 1 },
+        "roundStartTick": { "type": ["integer", "null"], "minimum": 0 },
+        "primaryKillTick": { "type": ["integer", "null"], "minimum": 0 },
+        "lastKillTick": { "type": ["integer", "null"], "minimum": 0 },
+        "safeEndTick": { "type": ["integer", "null"], "minimum": 0 }
       }
     },
     "video": {

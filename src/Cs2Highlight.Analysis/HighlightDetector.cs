@@ -128,39 +128,6 @@ public sealed class RuleBasedHighlightDetector : IHighlightDetector
         IReadOnlyList<WeaponSequenceSegment> weaponSequence =
             WeaponCatalog.BuildSequence(descriptors, weapons);
         int headshots = sequence.Count(kill => kill.Headshot);
-        long startTick = Math.Max(
-            0,
-            first.Tick - SecondsToTicks(options.PreRollSeconds, analysis.Demo.TickRate));
-        long endTick = last.Tick +
-            SecondsToTicks(options.PostRollSeconds, analysis.Demo.TickRate);
-        bool roundEnding = descriptors.Any(value => value.RoundEndingKill) ||
-            (round is not null && last.Tick >= round.EndTick - analysis.Demo.TickRate);
-        bool clampStart = options.ClampStartToRoundBounds || options.ClampToRoundBounds;
-        bool clampEnd = options.ClampEndToRoundBounds || options.ClampToRoundBounds;
-        if (clampStart && round is not null)
-            startTick = Math.Max(startTick, round.StartTick);
-        if (round is not null)
-        {
-            long roundMaximum = round.EndTick +
-                SecondsToTicks(options.RoundEndHoldSeconds, analysis.Demo.TickRate);
-            if (roundEnding) endTick = Math.Max(endTick, roundMaximum);
-            if (clampEnd)
-                endTick = Math.Min(endTick, roundMaximum);
-        }
-        long minimumEnd = startTick +
-            SecondsToTicks(options.MinimumClipDurationSeconds, analysis.Demo.TickRate);
-        endTick = Math.Max(endTick, minimumEnd);
-        long maximumEnd = startTick +
-            SecondsToTicks(
-                Math.Max(
-                    options.MinimumClipDurationSeconds,
-                    options.MaximumClipDurationSeconds),
-                analysis.Demo.TickRate);
-        endTick = Math.Min(endTick, maximumEnd);
-        endTick = Math.Min(analysis.Demo.DurationTicks, endTick);
-        if (endTick <= startTick)
-            endTick = Math.Min(analysis.Demo.DurationTicks, startTick + 1);
-
         HighlightType type = sequence.Count switch
         {
             >= 5 => HighlightType.Ace,
@@ -169,6 +136,50 @@ public sealed class RuleBasedHighlightDetector : IHighlightDetector
             2 => HighlightType.DoubleKill,
             _ => HighlightType.SoloKill
         };
+        long startTick = Math.Max(
+            0,
+            first.Tick - SecondsToTicks(options.PreRollSeconds, analysis.Demo.TickRate));
+        bool roundEnding = descriptors.Any(value => value.RoundEndingKill) ||
+            (round is not null && last.Tick >= round.EndTick - analysis.Demo.TickRate);
+        bool clampStart = options.ClampStartToRoundBounds || options.ClampToRoundBounds;
+        if (clampStart && round is not null)
+            startTick = Math.Max(startTick, round.StartTick);
+        SafeClipTimingOptions safeOptions = options.SafeTiming;
+        double minimumDuration = Math.Max(
+            safeOptions.MinimumClipDurationSeconds,
+            options.MinimumClipDurationSeconds);
+        if (minimumDuration != safeOptions.MinimumClipDurationSeconds)
+        {
+            safeOptions = new SafeClipTimingOptions
+            {
+                SoloPostKillHoldSeconds = safeOptions.SoloPostKillHoldSeconds,
+                MultikillPostKillHoldSeconds = safeOptions.MultikillPostKillHoldSeconds,
+                RoundEndingPostKillHoldSeconds = Math.Max(
+                    safeOptions.RoundEndingPostKillHoldSeconds,
+                    options.RoundEndHoldSeconds),
+                MinimumClipDurationSeconds = minimumDuration,
+                DeathAnimationAllowanceSeconds = safeOptions.DeathAnimationAllowanceSeconds,
+                KillfeedAllowanceSeconds = safeOptions.KillfeedAllowanceSeconds,
+                AudioTailAllowanceSeconds = safeOptions.AudioTailAllowanceSeconds
+            };
+        }
+        (SafeClipBounds safeBounds, long safeEndTick, long endTick) =
+            SafeClipBoundsCalculator.Calculate(
+                new SafeClipTimingRequest(
+                    type,
+                    startTick,
+                    last.Tick,
+                    last.Tick,
+                    round?.EndTick,
+                    roundEnding,
+                    analysis.Demo.DurationTicks,
+                    analysis.Demo.TickRate,
+                    options.PostRollSeconds),
+                safeOptions,
+                options.MaximumClipDurationSeconds);
+        if (endTick <= startTick)
+            endTick = Math.Min(analysis.Demo.DurationTicks, startTick + 1);
+
         ScoreBreakdown score = Score(
             descriptors, round, first.KillerTeam, type, headshots,
             analysis.Demo.TickRate, options, weaponSequence);
@@ -202,6 +213,11 @@ public sealed class RuleBasedHighlightDetector : IHighlightDetector
             BeautyScore = score.BeautyScore,
             Kills = descriptors,
             WeaponSequence = weaponSequence,
+            TickRate = analysis.Demo.TickRate,
+            RoundStartTick = round?.StartTick,
+            PrimaryKillTick = last.Tick,
+            SafeEndTick = safeEndTick,
+            SafeBounds = safeBounds,
             EstimatedDurationMilliseconds = (long)Math.Round(
                 TicksToSeconds(endTick - startTick, analysis.Demo.TickRate) * 1000,
                 MidpointRounding.AwayFromZero)

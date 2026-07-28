@@ -1,0 +1,7 @@
+// capture-minimal-clean.v2 — diagnostic minimal-HUD profile.
+// This intentionally contains only commands already exercised by Stage 5.
+demo_timescale 1
+cl_drawhud 0
+spec_show_xray 0
+gameui_hide
+hideconsole

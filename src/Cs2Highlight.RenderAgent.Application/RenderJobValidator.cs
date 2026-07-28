@@ -40,6 +40,17 @@ public static partial class RenderJobValidator
         {
             errors.Add("segment requires startTick >= 0 and endTick > startTick.");
         }
+        else
+        {
+            if (job.Segment.TickRate is <= 0)
+                errors.Add("segment.tickRate must be positive when provided.");
+            if (job.Segment.RoundStartTick is < 0 ||
+                job.Segment.RoundStartTick > job.Segment.StartTick)
+                errors.Add("segment.roundStartTick must be between zero and startTick.");
+            if (job.Segment.SafeEndTick is long safeEnd &&
+                (safeEnd < job.Segment.StartTick || safeEnd > job.Segment.EndTick))
+                errors.Add("segment.safeEndTick must be between startTick and endTick.");
+        }
 
         if (job.Video is null || job.Video.Width is < 320 or > 7680 || job.Video.Height is < 240 or > 4320 ||
             job.Video.Fps is < 1 or > 1000 || job.Video.Fov is < 1 or > 179)
@@ -61,6 +72,12 @@ public static partial class RenderJobValidator
             environment.ProcessShutdownTimeoutSeconds < 1)
         {
             errors.Add("RenderEnvironment process and demo timeout values must be positive.");
+        }
+        if (environment.Warmup.WarmupGameSeconds < 0 ||
+            environment.Warmup.MinimumWallClockStabilizationSeconds < 0 ||
+            environment.Warmup.MaximumGameplayReadyWaitSeconds <= 0)
+        {
+            errors.Add("RenderEnvironment warmup values are outside supported limits.");
         }
 
         ValidateOutput(job.OutputDirectory, environment.Cs2ExecutablePath, errors);

@@ -1,0 +1,9 @@
+// capture-gameplay-clean.v2 — Gameplay profile.
+// This intentionally contains only commands already exercised by Stage 5.
+// Pixel-level cleanliness remains unverified until installed-build visual E2E.
+demo_timescale 1
+cl_drawhud 1
+cl_draw_only_deathnotices 0
+spec_show_xray 0
+gameui_hide
+hideconsole

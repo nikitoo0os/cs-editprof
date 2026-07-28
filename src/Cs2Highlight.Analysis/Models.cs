@@ -150,6 +150,11 @@ public sealed record HighlightCandidate(
     public IReadOnlyList<KillDescriptor> Kills { get; init; } = [];
     public IReadOnlyList<WeaponSequenceSegment> WeaponSequence { get; init; } = [];
     public long EstimatedDurationMilliseconds { get; init; }
+    public int TickRate { get; init; }
+    public long? RoundStartTick { get; init; }
+    public long PrimaryKillTick { get; init; }
+    public long SafeEndTick { get; init; }
+    public SafeClipBounds? SafeBounds { get; init; }
 }
 
 public sealed class HighlightDetectionOptions
@@ -171,7 +176,27 @@ public sealed class HighlightDetectionOptions
     public HighlightScoringOptions Scoring { get; init; } = new();
     public SoloKillDetectionOptions SoloKills { get; init; } = new();
     public BeautyScoringOptions BeautyScoring { get; init; } = new();
+    public SafeClipTimingOptions SafeTiming { get; init; } = new();
 }
+
+public sealed class SafeClipTimingOptions
+{
+    public double SoloPostKillHoldSeconds { get; init; } = 3.0;
+    public double MultikillPostKillHoldSeconds { get; init; } = 3.5;
+    public double RoundEndingPostKillHoldSeconds { get; init; } = 4.0;
+    public double MinimumClipDurationSeconds { get; init; } = 7.0;
+    public double DeathAnimationAllowanceSeconds { get; init; } = 0.5;
+    public double KillfeedAllowanceSeconds { get; init; } = 1.0;
+    public double AudioTailAllowanceSeconds { get; init; } = 0.3;
+}
+
+public sealed record SafeClipBounds(
+    double PlannedStartSeconds,
+    double SafeStartSeconds,
+    double PrimaryKillSeconds,
+    double LastKillSeconds,
+    double SafeEndSeconds,
+    double PlannedEndSeconds);
 
 public sealed class SoloKillDetectionOptions
 {
