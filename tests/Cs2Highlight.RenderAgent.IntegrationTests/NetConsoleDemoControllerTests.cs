@@ -66,6 +66,8 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         await server;
 
         Assert.Contains("demo_gototick 70", commands);
+        Assert.True(commands.Count(command =>
+            command == "echo AFX_RENDER_NETCON_READY") >= 2);
         Assert.True(commands.Count(command => command == "demo_gototick 70") >= 2);
         Assert.Contains(commands, command =>
             command.Contains("addAtTick 100", StringComparison.Ordinal) &&
@@ -98,6 +100,7 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             NewLine = "\n"
         };
         bool warmedUp = false;
+        int readinessAttempts = 0;
         int seekAttempts = 0;
         while (true)
         {
@@ -109,7 +112,11 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             commands.Add(command);
             if (command == "echo AFX_RENDER_NETCON_READY")
             {
-                await writer.WriteLineAsync("AFX_RENDER_NETCON_READY");
+                readinessAttempts++;
+                if (readinessAttempts >= 2)
+                {
+                    await writer.WriteLineAsync("AFX_RENDER_NETCON_READY");
+                }
             }
             if (command.StartsWith("demo_gototick ", StringComparison.Ordinal))
             {

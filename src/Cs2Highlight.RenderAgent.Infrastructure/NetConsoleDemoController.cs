@@ -37,12 +37,9 @@ public sealed class NetConsoleDemoController(
             RenderState.LoadingDemo,
             "Connected to CS2 NetCon; performing active readiness handshake.",
             cancellationToken);
-        await connection.SendAsync(
-            $"echo {NetConReadyMarker}",
-            cancellationToken);
-        await connection.WaitForAsync(
-            NetConReadyMarker,
-            TimeSpan.FromSeconds(5),
+        await WaitForNetConReadyAsync(
+            connection,
+            TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
             cancellationToken);
         await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
 
@@ -184,6 +181,45 @@ public sealed class NetConsoleDemoController(
             MidpointRounding.AwayFromZero);
         long lowerBound = Math.Max(0, segment.RoundStartTick ?? 0);
         return Math.Max(lowerBound, segment.StartTick - warmupTicks);
+    }
+
+    private static async Task WaitForNetConReadyAsync(
+        NetConsoleConnection connection,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.Add(timeout);
+        TimeoutException? lastTimeout = null;
+        int attempt = 0;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            attempt++;
+            await connection.SendAsync(
+                $"echo {NetConReadyMarker}",
+                cancellationToken);
+            TimeSpan remaining = deadline - DateTimeOffset.UtcNow;
+            try
+            {
+                await connection.WaitForAsync(
+                    NetConReadyMarker,
+                    remaining < TimeSpan.FromSeconds(1)
+                        ? remaining
+                        : TimeSpan.FromSeconds(1),
+                    cancellationToken);
+                return;
+            }
+            catch (TimeoutException exception)
+            {
+                lastTimeout = exception;
+            }
+        }
+
+        throw new TimeoutException(
+            $"CS2 accepted the NetCon connection but did not execute console commands " +
+            $"within {timeout.TotalSeconds.ToString(CultureInfo.InvariantCulture)} seconds " +
+            $"after {attempt.ToString(CultureInfo.InvariantCulture)} readiness attempts.",
+            lastTimeout);
     }
 
     private static async Task SeekToWarmupAsync(
