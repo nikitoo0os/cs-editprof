@@ -73,6 +73,10 @@ public static partial class RenderJobValidator
         {
             errors.Add("RenderEnvironment process and demo timeout values must be positive.");
         }
+        if (environment.DemoInitializationStabilizationSeconds < 0)
+        {
+            errors.Add("RenderEnvironment demo initialization stabilization must not be negative.");
+        }
         if (environment.Warmup.WarmupGameSeconds < 0 ||
             environment.Warmup.MinimumWallClockStabilizationSeconds < 0 ||
             environment.Warmup.MaximumGameplayReadyWaitSeconds <= 0)

@@ -55,7 +55,7 @@ public sealed class Source2ScriptGeneratorTests
     }
 
     [Fact]
-    public async Task StartupScriptLoadsDemoButDefersControlCommands()
+    public async Task StartupScriptConfiguresCaptureButDefersDemoPlaybackAndControl()
     {
         string root = Path.Combine(Path.GetTempPath(), $"source2-script-{Guid.NewGuid():N}");
         RenderWorkspace workspace = new(
@@ -84,7 +84,7 @@ public sealed class Source2ScriptGeneratorTests
                 .GenerateAsync(job, workspace, CancellationToken.None);
             string cfg = await File.ReadAllTextAsync(script.Path);
 
-            Assert.Contains("playdemo", cfg);
+            Assert.DoesNotContain("playdemo", cfg);
             Assert.Contains("settings add ffmpegEx cs2HighlightFfmpeg", cfg);
             Assert.Contains("{QUOTE}D:/Tools/FFmpeg/bin/ffmpeg.exe{QUOTE}", cfg);
             Assert.Contains("{QUOTE}{AFX_STREAM_PATH}/video.mp4{QUOTE}", cfg);
@@ -98,9 +98,6 @@ public sealed class Source2ScriptGeneratorTests
             Assert.Contains("gameui_hide", cfg);
             Assert.Contains("hideconsole", cfg);
             Assert.DoesNotContain(job.Player.Name!, cfg);
-            Assert.True(
-                cfg.IndexOf("hideconsole", StringComparison.Ordinal) <
-                cfg.IndexOf("playdemo", StringComparison.Ordinal));
         }
         finally
         {

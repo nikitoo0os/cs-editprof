@@ -13,7 +13,6 @@ public sealed class Source2ScriptGenerator(RenderEnvironmentOptions options) : I
         RenderWorkspace workspace,
         CancellationToken cancellationToken)
     {
-        string demo = EscapeCfg(workspace.PreparedDemoPath);
         string raw = EscapeCfg(workspace.Raw);
         string cfgDirectory = Path.Combine(workspace.Config, "cfg");
         Directory.CreateDirectory(cfgDirectory);
@@ -32,7 +31,6 @@ public sealed class Source2ScriptGenerator(RenderEnvironmentOptions options) : I
             CultureInfo.InvariantCulture,
             $"mirv_streams settings edit afxDefault settings {FfmpegPresetName}");
         AppendCaptureUiProfile(cfg, job.CaptureUi);
-        cfg.AppendLine(CultureInfo.InvariantCulture, $"playdemo \"{demo}\"");
         await File.WriteAllTextAsync(path, cfg.ToString(), new UTF8Encoding(false), cancellationToken);
         return new GeneratedRenderScript(path, job.Video.Width, job.Video.Height,
         [

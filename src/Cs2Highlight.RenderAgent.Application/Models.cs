@@ -54,6 +54,7 @@ public sealed class RenderEnvironmentOptions
     public bool AutomationVerified { get; set; }
     public int ProcessStartupTimeoutSeconds { get; set; } = 90;
     public int DemoLoadTimeoutSeconds { get; set; } = 120;
+    public double DemoInitializationStabilizationSeconds { get; set; } = 2;
     public int ProcessShutdownTimeoutSeconds { get; set; } = 15;
     public int NetConPort { get; set; } = 32123;
     public int OutputStableSeconds { get; set; } = 3;

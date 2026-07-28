@@ -29,6 +29,7 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             NetConPort = port,
             ProcessStartupTimeoutSeconds = 3,
             DemoLoadTimeoutSeconds = 3,
+            DemoInitializationStabilizationSeconds = 0,
             Warmup = new RenderWarmupOptions
             {
                 WarmupGameSeconds = 3,
@@ -66,6 +67,12 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         await server;
 
         Assert.Contains("demo_gototick 70", commands);
+        Assert.Contains(commands, command =>
+            command.StartsWith("playdemo \"", StringComparison.Ordinal));
+        Assert.True(
+            commands.FindIndex(command =>
+                command.StartsWith("playdemo \"", StringComparison.Ordinal)) <
+            commands.FindIndex(command => command == "demo_gototick 70"));
         Assert.True(commands.Count(command =>
             command == "echo AFX_RENDER_NETCON_READY") >= 2);
         Assert.True(commands.Count(command => command == "demo_gototick 70") >= 2);
@@ -117,6 +124,14 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
                 {
                     await writer.WriteLineAsync("AFX_RENDER_NETCON_READY");
                 }
+            }
+            if (command == "status")
+            {
+                await writer.WriteLineAsync("Client: Connected [DEMO]");
+            }
+            if (command == "echo AFX_RENDER_DEMO_STATUS_END")
+            {
+                await writer.WriteLineAsync("AFX_RENDER_DEMO_STATUS_END");
             }
             if (command.StartsWith("demo_gototick ", StringComparison.Ordinal))
             {

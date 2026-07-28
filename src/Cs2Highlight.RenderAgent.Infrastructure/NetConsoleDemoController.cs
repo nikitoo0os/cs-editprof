@@ -16,6 +16,7 @@ public sealed class NetConsoleDemoController(
         RegexOptions.Compiled | RegexOptions.CultureInvariant |
         RegexOptions.IgnoreCase);
     private const string NetConReadyMarker = "AFX_RENDER_NETCON_READY";
+    private const string DemoStatusEndMarker = "AFX_RENDER_DEMO_STATUS_END";
     private const string SeekFinishedMarker = "Demo Skipping finished at tick";
     private const string StartReadyMarker = "AFX_RENDER_START_READY";
     private const string SafeTailMarker = "AFX_RENDER_SAFE_TAIL";
@@ -42,6 +43,21 @@ public sealed class NetConsoleDemoController(
             TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
             cancellationToken);
         await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
+        await stateJournal.WriteAsync(
+            workspace,
+            RenderState.LoadingDemo,
+            "CS2 console is ready; starting the demo and waiting for Connected [DEMO].",
+            cancellationToken);
+        await connection.SendAsync(
+            $"playdemo \"{Source2ScriptGenerator.EscapeCfg(workspace.PreparedDemoPath)}\"",
+            cancellationToken);
+        await WaitForDemoReadyAsync(
+            connection,
+            TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
+            cancellationToken);
+        await Task.Delay(
+            TimeSpan.FromSeconds(options.DemoInitializationStabilizationSeconds),
+            cancellationToken);
 
         long warmupTick = ComputeWarmupTick(job.Segment, options.Warmup);
         await stateJournal.WriteAsync(
@@ -284,6 +300,47 @@ public sealed class NetConsoleDemoController(
             lastTimeout);
     }
 
+    private static async Task WaitForDemoReadyAsync(
+        NetConsoleConnection connection,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.Add(timeout);
+        TimeoutException? lastTimeout = null;
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await connection.SendAsync("status", cancellationToken);
+            await connection.SendAsync(
+                $"echo {DemoStatusEndMarker}",
+                cancellationToken);
+            TimeSpan remaining = deadline - DateTimeOffset.UtcNow;
+            try
+            {
+                IReadOnlyList<string> output = await connection.ReadThroughAsync(
+                    DemoStatusEndMarker,
+                    remaining < TimeSpan.FromSeconds(2)
+                        ? remaining
+                        : TimeSpan.FromSeconds(2),
+                    cancellationToken);
+                if (output.Any(line =>
+                        line.Contains("Connected [DEMO]", StringComparison.OrdinalIgnoreCase)))
+                {
+                    return;
+                }
+            }
+            catch (TimeoutException exception)
+            {
+                lastTimeout = exception;
+            }
+            await Task.Delay(250, cancellationToken);
+        }
+
+        throw new TimeoutException(
+            "CS2 console became ready, but the requested demo did not reach the connected DEMO state.",
+            lastTimeout);
+    }
+
     private sealed class NetConCaptureUiController(
         NetConsoleConnection connection) : ICaptureUiController
     {
@@ -421,6 +478,7 @@ public sealed class NetConsoleDemoController(
         [
             "NETWORK_DISCONNECT_MESSAGE_PARSE_ERROR",
             "Failed to parse message",
+            "FATAL ERROR:",
             "Demo playback finished",
             "Starting recording ... FAILED",
             "AFXERROR:"
