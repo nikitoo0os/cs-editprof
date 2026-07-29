@@ -601,7 +601,6 @@ public sealed class MusicExcerptSelector(
                     .OrderByDescending(value =>
                         value.Strength * value.Confidence)
                     .ThenBy(value => value.TimeSeconds)
-                    .Take(Math.Max(requiredPeaks * 3, requiredPeaks))
                     .OrderBy(value => value.TimeSeconds)
                     .ToArray();
                 double peakCapacity = requiredPeaks == 0
@@ -694,7 +693,6 @@ public sealed class MusicExcerptSelector(
                 .OrderByDescending(value =>
                     value.Strength * value.Confidence)
                 .ThenBy(value => value.TimeSeconds)
-                .Take(Math.Max(requiredPeaks * 3, requiredPeaks))
                 .OrderBy(value => value.TimeSeconds)
                 .ToArray();
             bool build = window.Any(value =>

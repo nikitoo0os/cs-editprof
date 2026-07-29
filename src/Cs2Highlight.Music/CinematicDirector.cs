@@ -67,6 +67,20 @@ public sealed class CinematicDirector(
                     relaxedEnergy))
             .OrderBy(value => value.PlannedPeakSeconds)
             .ToArray();
+        if (relaxedEnergy)
+        {
+            HighlightPeakMatch[] timelineSafe = CreateTimelineSafeMatches(
+                highlights,
+                excerpt,
+                sectionById,
+                matching,
+                options);
+            if (timelineSafe.Length == highlights.Count)
+            {
+                matches = timelineSafe;
+                warnings.Add("HIGHLIGHT_PEAK_TIMELINE_FALLBACK");
+            }
+        }
         List<HighlightPeakMatch> effectiveMatches = [];
         double highlightCursor = 0;
         for (int index = 0; index < matches.Length; index++)
@@ -267,6 +281,95 @@ public sealed class CinematicDirector(
             Color = color.Create(sections, options.ColorGrade),
             Warnings = warnings.Distinct(StringComparer.Ordinal).ToArray()
         };
+    }
+
+    private HighlightPeakMatch[] CreateTimelineSafeMatches(
+        IReadOnlyList<SelectedHighlight> highlights,
+        MusicExcerptPlan excerpt,
+        Dictionary<string, MusicSection> sections,
+        HighlightPeakMatchPlan original,
+        CinematicDirectorOptions options)
+    {
+        MusicalPeak[] available = excerpt.Peaks
+            .Where(value =>
+                value.Strength >= 0.45 &&
+                value.Confidence >= 0.40 &&
+                sections.TryGetValue(
+                    value.SectionId,
+                    out MusicSection? section) &&
+                MusicalPeakDetector.IsAllowedPrimaryKillSection(
+                    section.Type,
+                    relaxedEnergy: true))
+            .OrderBy(value => value.TimeSeconds)
+            .ThenByDescending(value => value.Strength * value.Confidence)
+            .ThenBy(value => value.Id, StringComparer.Ordinal)
+            .ToArray();
+        Dictionary<string, HighlightPeakMatch> originalByHighlight =
+            original.Matches.ToDictionary(
+                value => value.HighlightId,
+                StringComparer.Ordinal);
+        List<HighlightPeakMatch> result = [];
+        int peakIndex = 0;
+        double cursor = 0;
+        foreach (SelectedHighlight highlight in highlights
+                     .OrderBy(value => value.SelectionOrder)
+                     .ThenBy(value => value.Id, StringComparer.Ordinal))
+        {
+            double sourceDuration = Math.Max(
+                0.001,
+                highlight.Bounds.SafeEndSeconds -
+                highlight.Bounds.SafeStartSeconds);
+            double killOffset = Math.Clamp(
+                highlight.Bounds.PrimaryKillSeconds -
+                highlight.Bounds.SafeStartSeconds,
+                0,
+                sourceDuration);
+            HighlightPeakMatch? selected = null;
+            double selectedEnd = 0;
+            for (int index = peakIndex; index < available.Length; index++)
+            {
+                MusicalPeak peak = available[index];
+                double planned = peak.TimeSeconds - excerpt.StartSeconds;
+                double outputStart = Math.Max(0, planned - killOffset);
+                if (outputStart < cursor - 0.001)
+                    continue;
+                HighlightPeakMatch candidate = new()
+                {
+                    HighlightId = highlight.Id,
+                    Peak = peak,
+                    HighlightImportance = originalByHighlight.TryGetValue(
+                        highlight.Id,
+                        out HighlightPeakMatch? originalMatch)
+                            ? originalMatch.HighlightImportance
+                            : 1,
+                    PlannedPeakSeconds = planned,
+                    PlannedKillSeconds = planned,
+                    AlignmentErrorMilliseconds = 0,
+                    Score = peak.Strength * peak.Confidence,
+                    Warnings = ["TIMELINE_SAFE_PEAK_SELECTION"]
+                };
+                TimeWarpPlan warp = timeWarp.Create(
+                    highlight,
+                    candidate,
+                    outputStart,
+                    options.TimeWarp);
+                double outputEnd = outputStart +
+                    TimeWarpMath.OutputDuration(warp, sourceDuration);
+                if (outputEnd > excerpt.DurationSeconds + 0.001)
+                    continue;
+                selected = candidate;
+                selectedEnd = outputEnd;
+                peakIndex = index + 1;
+                break;
+            }
+            if (selected is null)
+                return [];
+            result.Add(selected);
+            cursor = selectedEnd;
+        }
+        return result
+            .OrderBy(value => value.PlannedPeakSeconds)
+            .ToArray();
     }
 
     private void AddBrollSegments(

@@ -99,6 +99,17 @@ public sealed partial class CinematicPlanService(
         ILogger logger,
         string generationId);
 
+    [LoggerMessage(
+        EventId = 8106,
+        Level = LogLevel.Error,
+        Message = "[Generation:{GenerationId}] Stage 8 incomplete highlight plan: matches={Matches}/{Highlights}, warnings={Warnings}")]
+    private static partial void LogIncompleteHighlightPlan(
+        ILogger logger,
+        string generationId,
+        int matches,
+        int highlights,
+        string warnings);
+
     public async Task<CinematicLockedPlan> CreateAndLockAsync(
         GenerationDbContext db,
         Generation generation,
@@ -316,8 +327,20 @@ public sealed partial class CinematicPlanService(
                 ColorGrade = settings.ColorGradePreset
             });
         if (plan.HighlightMatches.Count != highlights.Count)
+        {
+            if (logger.IsEnabled(LogLevel.Error))
+            {
+                string planWarnings = string.Join(", ", plan.Warnings);
+                LogIncompleteHighlightPlan(
+                    logger,
+                    generation.PublicId,
+                    plan.HighlightMatches.Count,
+                    highlights.Count,
+                    planWarnings);
+            }
             throw new InvalidOperationException(
                 "CINEMATIC_INSUFFICIENT_HIGH_ENERGY_PEAKS");
+        }
         CinematicSequenceSegment[] orderedSegments = plan.Segments
             .OrderBy(value => value.OutputStartSeconds)
             .ThenBy(value => value.Id, StringComparer.Ordinal)

@@ -519,6 +519,83 @@ public sealed class CinematicPlanningTests
     }
 
     [Fact]
+    public void RelaxedDirectorSelectsTimelineSafePeaksForEveryHighlight()
+    {
+        MusicSection verse = DetailedSection(
+            "verse",
+            MusicSectionType.Verse,
+            0,
+            25,
+            0.7);
+        MusicalPeak[] peaks =
+        [
+            .. Enumerable.Range(0, 5).Select(index => new MusicalPeak
+            {
+                Id = $"cluster-{index}",
+                Type = MusicalPeakType.Downbeat,
+                TimeSeconds = 1 + index * 0.5,
+                Strength = 0.95,
+                Confidence = 0.95,
+                SectionId = verse.Id
+            }),
+            .. Enumerable.Range(0, 5).Select(index =>
+                new MusicalPeak
+                {
+                    Id = $"safe-{index}",
+                    Type = MusicalPeakType.StrongBeat,
+                    TimeSeconds = 5 + index * 4,
+                    Strength = 0.7,
+                    Confidence = 0.8,
+                    SectionId = verse.Id
+                })
+        ];
+        MusicNarrative narrative = new()
+        {
+            DurationSeconds = 25,
+            Sections = [verse],
+            Peaks = peaks,
+            Frames = [],
+            Warnings = []
+        };
+        MusicExcerptPlan excerpt = new()
+        {
+            StartSeconds = 0,
+            EndSeconds = 25,
+            SectionIds = [verse.Id],
+            Peaks = peaks,
+            RequiredPeakCount = 5,
+            UsablePeakCount = peaks.Length,
+            Score = 1,
+            IsValid = true,
+            ScoreBreakdown = new Dictionary<string, double>(),
+            Warnings = [MusicExcerptSelector.RelaxedEnergyFallbackWarning]
+        };
+        SelectedHighlight[] highlights = Enumerable.Range(0, 5)
+            .Select(index => Highlight(
+                    $"h{index}",
+                    HighlightType.SoloKill,
+                    3,
+                    30 - index) with
+                {
+                    SelectionOrder = index
+                })
+            .ToArray();
+
+        CinematicMoviePlan plan = Director().Create(
+            narrative,
+            excerpt,
+            highlights,
+            [],
+            DirectorOptions());
+
+        Assert.Equal(highlights.Length, plan.HighlightMatches.Count);
+        Assert.Equal(
+            highlights.Length,
+            plan.Segments.Count(value => value.HighlightId is not null));
+        Assert.Contains("HIGHLIGHT_PEAK_TIMELINE_FALLBACK", plan.Warnings);
+    }
+
+    [Fact]
     public void DirectorBuildsContinuousTimelineWhenBrollIsSufficient()
     {
         SelectedHighlight[] highlights =
