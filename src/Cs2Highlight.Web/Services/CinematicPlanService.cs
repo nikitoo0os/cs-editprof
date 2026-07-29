@@ -479,16 +479,19 @@ public sealed partial class CinematicPlanService(
             now);
         await db.SaveChangesAsync(cancellationToken);
 
-        LogPlan(
-            logger,
-            generation.PublicId,
-            plan.Segments.Count,
-            plan.HighlightMatches.Count,
-            plan.Segments.Count(value =>
-                value.Camera.Type != CameraShotType.PlayerPov),
-            plan.Segments.Count(value =>
-                value.Camera.Type == CameraShotType.PlayerPov),
-            plan.Warnings.Count);
+        if (logger.IsEnabled(LogLevel.Information))
+        {
+            LogPlan(
+                logger,
+                generation.PublicId,
+                plan.Segments.Count,
+                plan.HighlightMatches.Count,
+                plan.Segments.Count(value =>
+                    value.Camera.Type != CameraShotType.PlayerPov),
+                plan.Segments.Count(value =>
+                    value.Camera.Type == CameraShotType.PlayerPov),
+                plan.Warnings.Count);
+        }
         return new CinematicLockedPlan(
             narrative,
             plan,
