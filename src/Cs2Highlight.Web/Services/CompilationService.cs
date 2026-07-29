@@ -545,8 +545,17 @@ public sealed partial class FfmpegHighlightCompilationService(
                 "-map", "0:v:0", "-map", "[mixed]",
                 "-c:v", "copy", "-c:a", "aac", "-ar", "48000",
                 "-ac", "2", "-b:a", "256k",
-                "-shortest", "-movflags", "+faststart", temporary
+                "-shortest", "-movflags", "+faststart"
             ]);
+            if (request.CinematicMoviePlan is not null)
+            {
+                mixArguments.Add("-t");
+                mixArguments.Add(
+                    request.CinematicMoviePlan.TargetDurationSeconds.ToString(
+                        "0.######",
+                        CultureInfo.InvariantCulture));
+            }
+            mixArguments.Add(temporary);
             composition = await RunAsync(
                 options.FfmpegPath,
                 mixArguments,

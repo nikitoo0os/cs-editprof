@@ -495,6 +495,12 @@ public sealed class DynamicEffectsTests
                 new VideoOutputOptions(1920, 1080, 60),
                 "aresample=48000");
 
+        Assert.Contains(
+            "settb=AVTB,setpts=PTS-STARTPTS[effect_base_v]",
+            graph.FilterComplex);
+        Assert.Contains(
+            "[0:a:0]asetpts=PTS-STARTPTS,aresample=48000[effect_audio]",
+            graph.FilterComplex);
         Assert.Contains("0.15*(", graph.FilterComplex);
         Assert.Contains("rgbashift=rh=8:bh=-8", graph.FilterComplex);
         Assert.Contains("0.034907*(", graph.FilterComplex);

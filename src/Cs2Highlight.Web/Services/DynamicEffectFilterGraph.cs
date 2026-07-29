@@ -137,7 +137,7 @@ public sealed class DynamicEffectFilterGraphBuilder : IDynamicEffectFilterGraphB
             .Append(":force_original_aspect_ratio=decrease,pad=")
             .Append(output.Width).Append(':').Append(output.Height)
             .Append(":(ow-iw)/2:(oh-ih)/2,fps=").Append(output.Fps)
-            .Append(",settb=AVTB[effect_base_v];");
+            .Append(",settb=AVTB,setpts=PTS-STARTPTS[effect_base_v];");
         BuildTimeWarp(
             graph,
             "effect_base_v",
@@ -202,7 +202,8 @@ public sealed class DynamicEffectFilterGraphBuilder : IDynamicEffectFilterGraphB
             double speed = Math.Clamp(plan.BaseSpeedFactor, 0.5, 2);
             graph.Append('[').Append(videoInput).Append("]setpts=PTS/")
                 .Append(Number(speed)).Append("[effect_warped_v];")
-                .Append('[').Append(audioInput).Append(']');
+                .Append('[').Append(audioInput)
+                .Append("]asetpts=PTS-STARTPTS,");
             if (Math.Abs(speed - 1) > 0.000001)
                 graph.Append("atempo=").Append(Number(speed)).Append(',');
             graph.Append(audioFilters);
