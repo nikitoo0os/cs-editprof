@@ -285,17 +285,20 @@ public sealed partial class FfmpegHighlightCompilationService(
                         request.Fps),
                     audioFilters,
                     postEffectVideoFilters);
-                LogGraphReady(
-                    logger,
-                    index + 1,
-                    string.Join(
-                        " -> ",
-                        dynamicGraph.Fragments
-                            .Select(value => value.Stage)
-                            .Distinct()),
-                    string.Join(
-                        ", ",
-                        dynamicEffectPlan.Effects.Select(value => value.Type)));
+                if (logger.IsEnabled(LogLevel.Information))
+                {
+                    LogGraphReady(
+                        logger,
+                        index + 1,
+                        string.Join(
+                            " -> ",
+                            dynamicGraph.Fragments
+                                .Select(value => value.Stage)
+                                .Distinct()),
+                        string.Join(
+                            ", ",
+                            dynamicEffectPlan.Effects.Select(value => value.Type)));
+                }
                 arguments.AddRange(
                 [
                     "-filter_complex", dynamicGraph.FilterComplex,
