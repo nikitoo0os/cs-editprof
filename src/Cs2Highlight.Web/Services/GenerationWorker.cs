@@ -827,10 +827,21 @@ public sealed class GenerationWorker(
                     JsonSerializer.Deserialize<HighlightEffectPlan>(
                         stored.EffectPlanJson,
                         JsonOptions);
-                result.Add(saved ?? effectPlanner.Build(
+                if (saved?.SchemaVersion == EffectPlanner.SchemaVersion)
+                {
+                    result.Add(saved);
+                    continue;
+                }
+                HighlightEffectPlan upgraded = effectPlanner.Build(
                     highlight,
                     tickRates.GetValueOrDefault(candidate.SourceDemoId, 64),
-                    stored.Preset));
+                    stored.Preset);
+                stored.TimelineJson =
+                    JsonSerializer.Serialize(upgraded.Events, JsonOptions);
+                stored.EffectPlanJson =
+                    JsonSerializer.Serialize(upgraded, JsonOptions);
+                stored.CreatedAt = timeProvider.GetUtcNow();
+                result.Add(upgraded);
                 continue;
             }
 

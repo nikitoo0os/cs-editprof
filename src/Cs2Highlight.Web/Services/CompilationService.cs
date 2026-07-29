@@ -791,7 +791,7 @@ public static class FfmpegEffectFilterBuilder
             $"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2",
             $"fps={fps}"
         ];
-        if (plan?.Preset is Domain.EffectPreset.Clean or Domain.EffectPreset.Dynamic)
+        if (plan?.Preset == Domain.EffectPreset.Clean)
         {
             filters.Add("eq=saturation=1.02:contrast=1.01");
             filters.Add("fade=t=in:st=0:d=0.15");
@@ -800,18 +800,40 @@ public static class FfmpegEffectFilterBuilder
         }
         if (plan?.Preset == Domain.EffectPreset.Dynamic)
         {
+            filters.Add("eq=saturation=1.10:contrast=1.06");
+            filters.Add("unsharp=5:5:0.65:3:3:0.25");
             EffectTimelineEvent[] zooms = plan.Events
                 .Where(value => value.Type == EffectType.SmoothZoom)
                 .ToArray();
-            if (zooms.Length > 0)
+            EffectTimelineEvent[] shakes = plan.Events
+                .Where(value => value.Type == EffectType.ImpactShake)
+                .ToArray();
+            if (zooms.Length > 0 || shakes.Length > 0)
             {
-                string activity = zooms
-                    .Select(value => Pulse(value))
-                    .Aggregate((left, right) => $"max({left}\\,{right})");
-                double intensity = zooms.Max(value => value.Intensity);
-                string factor = FormattableString.Invariant($"1+{intensity:0.####}*{activity}");
+                string zoomActivity = zooms.Length == 0
+                    ? "0"
+                    : zooms.Select(value => Pulse(value))
+                        .Aggregate((left, right) => $"max({left}\\,{right})");
+                string shakeActivity = shakes.Length == 0
+                    ? "0"
+                    : shakes.Select(value => Pulse(value))
+                        .Aggregate((left, right) => $"max({left}\\,{right})");
+                double intensity = zooms.Length == 0
+                    ? 0
+                    : zooms.Max(value => value.Intensity);
+                string factor = FormattableString.Invariant(
+                    $"1.025+{intensity:0.####}*{zoomActivity}");
                 filters.Add($"scale=w='{width}*({factor})':h='{height}*({factor})':eval=frame");
-                filters.Add($"crop={width}:{height}:(iw-ow)/2:(ih-oh)/2");
+                filters.Add(
+                    $"crop={width}:{height}:" +
+                    $"x='(iw-ow)/2+7*({shakeActivity})*sin(95*t)':" +
+                    $"y='(ih-oh)/2+5*({shakeActivity})*cos(83*t)'");
+            }
+            foreach (EffectTimelineEvent color in plan.Events.Where(value =>
+                         value.Type == EffectType.ColorPunch))
+            {
+                filters.Add(FormattableString.Invariant(
+                    $"eq=saturation={1.0 + color.Intensity * 2:0.####}:contrast={1.0 + color.Intensity * 0.45:0.####}:enable='{Between(color)}'"));
             }
             foreach (EffectTimelineEvent flash in plan.Events.Where(value =>
                          value.Type == EffectType.HeadshotFlash))
@@ -835,12 +857,20 @@ public static class FfmpegEffectFilterBuilder
         HighlightEffectPlan? plan)
     {
         List<string> filters = ["aresample=48000"];
-        if (plan?.Preset is Domain.EffectPreset.Clean or Domain.EffectPreset.Dynamic)
+        if (plan?.Preset == Domain.EffectPreset.Clean)
         {
             filters.Add("loudnorm=I=-16:TP=-1.5:LRA=11");
             filters.Add("afade=t=in:st=0:d=0.15");
             filters.Add(FormattableString.Invariant(
                 $"afade=t=out:st={Math.Max(0, durationSeconds - 0.3):0.###}:d=0.3"));
+        }
+        else if (plan?.Preset == Domain.EffectPreset.Dynamic)
+        {
+            filters.Add("loudnorm=I=-14:TP=-1.2:LRA=9");
+            filters.Add("afade=t=in:st=0:d=0.035");
+            filters.Add(FormattableString.Invariant(
+                $"afade=t=out:st={Math.Max(0, durationSeconds - 0.08):0.###}:d=0.08"));
+            filters.Add("alimiter=limit=0.92:attack=3:release=35");
         }
         return string.Join(',', filters);
     }

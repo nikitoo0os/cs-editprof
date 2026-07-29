@@ -41,12 +41,6 @@ public static class SafeClipBoundsCalculator
             options.AudioTailAllowanceSeconds
         }.Max();
         long safeEnd = request.LastKillTick + ToTicks(requiredTail, request.TickRate);
-        if (request.RoundEnding && request.RoundEndTick is long roundEnd)
-        {
-            safeEnd = Math.Max(
-                safeEnd,
-                roundEnd + ToTicks(options.RoundEndingPostKillHoldSeconds, request.TickRate));
-        }
         safeEnd = Math.Clamp(safeEnd, start, request.DemoDurationTicks);
 
         long minimumEnd = start + ToTicks(options.MinimumClipDurationSeconds, request.TickRate);

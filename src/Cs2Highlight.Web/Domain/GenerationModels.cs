@@ -55,7 +55,7 @@ public sealed class Generation
     public int Fps { get; set; } = 60;
     public TransitionType TransitionType { get; set; } = TransitionType.Fade;
     public int TransitionDurationMilliseconds { get; set; } = 300;
-    public EffectPreset EffectPreset { get; set; } = EffectPreset.Clean;
+    public EffectPreset EffectPreset { get; set; } = EffectPreset.Dynamic;
     public long EstimatedDurationMilliseconds { get; set; }
     public long PriceAmountMinor { get; set; } = 100;
     [MaxLength(3)] public string PriceCurrency { get; set; } = "USD";
@@ -116,8 +116,8 @@ public sealed class GenerationMovieSettings
     public long GenerationId { get; set; }
     public Generation Generation { get; set; } = null!;
     public MovieStyle MovieStyle { get; set; } = MovieStyle.Dynamic;
-    public MusicSyncIntensity SyncIntensity { get; set; } = MusicSyncIntensity.Expressive;
-    public ColorGradePreset ColorGradePreset { get; set; } = ColorGradePreset.Natural;
+    public MusicSyncIntensity SyncIntensity { get; set; } = MusicSyncIntensity.Aggressive;
+    public ColorGradePreset ColorGradePreset { get; set; } = ColorGradePreset.Competitive;
     [MaxLength(64)] public string? LutAssetKey { get; set; }
     public double MusicGainDb { get; set; } = -3;
     public double GameplayGainDb { get; set; } = -16;

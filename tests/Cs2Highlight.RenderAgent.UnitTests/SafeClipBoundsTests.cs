@@ -6,10 +6,22 @@ namespace Cs2Highlight.RenderAgent.UnitTests;
 
 public sealed class SafeClipBoundsTests
 {
+    [Fact]
+    public void DefaultHighlightWindowIsOneSecondBeforeAndAfter()
+    {
+        HighlightDetectionOptions options = new();
+
+        Assert.Equal(1, options.PreRollSeconds);
+        Assert.Equal(1, options.PostRollSeconds);
+        Assert.Equal(1, options.SafeTiming.SoloPostKillHoldSeconds);
+        Assert.Equal(1, options.SafeTiming.MultikillPostKillHoldSeconds);
+        Assert.Equal(2, options.SafeTiming.MinimumClipDurationSeconds);
+    }
+
     [Theory]
-    [InlineData(HighlightType.SoloKill, false, 3.0)]
-    [InlineData(HighlightType.TripleKill, false, 3.5)]
-    [InlineData(HighlightType.Ace, false, 3.5)]
+    [InlineData(HighlightType.SoloKill, false, 1.0)]
+    [InlineData(HighlightType.TripleKill, false, 1.0)]
+    [InlineData(HighlightType.Ace, false, 1.0)]
     public void SafeEndPreservesConfiguredTail(
         HighlightType type,
         bool roundEnding,
@@ -26,7 +38,7 @@ public sealed class SafeClipBoundsTests
     }
 
     [Fact]
-    public void RoundEndingSafeEndIncludesRoundTailAndDemoClamp()
+    public void RoundEndingClipStopsOneSecondAfterLastKill()
     {
         var result = SafeClipBoundsCalculator.Calculate(
             new SafeClipTimingRequest(
@@ -34,8 +46,8 @@ public sealed class SafeClipBoundsTests
             new SafeClipTimingOptions(),
             25);
 
-        Assert.Equal(1200, result.SafeEndTick);
-        Assert.Equal(1200, result.PlannedEndTick);
+        Assert.Equal(964, result.SafeEndTick);
+        Assert.Equal(964, result.PlannedEndTick);
     }
 
     [Fact]

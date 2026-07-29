@@ -162,11 +162,11 @@ public sealed class HighlightDetectionOptions
     public string? TargetPlayerId { get; init; }
     public double MaximumGapBetweenKillsSeconds { get; init; } = 6;
     public double MaximumSequenceDurationSeconds { get; init; } = 12;
-    public double PreRollSeconds { get; init; } = 3;
-    public double PostRollSeconds { get; init; } = 3;
-    public double RoundEndHoldSeconds { get; init; } = 2.5;
-    public double MinimumClipDurationSeconds { get; init; } = 6;
-    public double MaximumClipDurationSeconds { get; init; } = 25;
+    public double PreRollSeconds { get; init; } = 1;
+    public double PostRollSeconds { get; init; } = 1;
+    public double RoundEndHoldSeconds { get; init; } = 1;
+    public double MinimumClipDurationSeconds { get; init; } = 2;
+    public double MaximumClipDurationSeconds { get; init; } = 15;
     public int MinimumKills { get; init; } = 2;
     public int MinimumHeadshotsForStreak { get; init; } = 2;
     // Legacy all-or-nothing switch retained for schema 1.0 callers.
@@ -181,10 +181,10 @@ public sealed class HighlightDetectionOptions
 
 public sealed class SafeClipTimingOptions
 {
-    public double SoloPostKillHoldSeconds { get; init; } = 3.0;
-    public double MultikillPostKillHoldSeconds { get; init; } = 3.5;
-    public double RoundEndingPostKillHoldSeconds { get; init; } = 4.0;
-    public double MinimumClipDurationSeconds { get; init; } = 7.0;
+    public double SoloPostKillHoldSeconds { get; init; } = 1.0;
+    public double MultikillPostKillHoldSeconds { get; init; } = 1.0;
+    public double RoundEndingPostKillHoldSeconds { get; init; } = 1.0;
+    public double MinimumClipDurationSeconds { get; init; } = 2.0;
     public double DeathAnimationAllowanceSeconds { get; init; } = 0.5;
     public double KillfeedAllowanceSeconds { get; init; } = 1.0;
     public double AudioTailAllowanceSeconds { get; init; } = 0.3;

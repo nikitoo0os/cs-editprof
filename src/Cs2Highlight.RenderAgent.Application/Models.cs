@@ -14,6 +14,9 @@ public sealed record RenderJob(
     public CaptureUiProfile CaptureUi { get; init; } = CaptureUiProfile.Gameplay;
 }
 
+public sealed record RenderBatchManifest(IReadOnlyList<string> RenderJobPaths);
+public sealed record RenderJobOutcome(RenderResult Result, int ExitCode);
+
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum CaptureUiProfile
 {

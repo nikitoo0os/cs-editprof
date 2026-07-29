@@ -37,6 +37,33 @@ public sealed class ProcessRenderAgentClientTests : IDisposable
         Assert.True(result.Error?.Retryable);
     }
 
+    [Fact]
+    public async Task RendersMultipleJobsThroughOneAgentSession()
+    {
+        Directory.CreateDirectory(root);
+        string firstJob = await WriteJobAsync("fake-session-1");
+        string secondJob = await WriteJobAsync("fake-session-2");
+        ProcessRenderAgentClient client = new(FakeExecutablePath());
+
+        IReadOnlyList<RenderInvocationResult> results =
+            await client.RenderBatchAsync(
+            [
+                new RenderBatchItemRequest(firstJob, 1),
+                new RenderBatchItemRequest(secondJob, 1)
+            ],
+            CancellationToken.None);
+
+        Assert.Equal(2, results.Count);
+        Assert.All(results, result =>
+        {
+            Assert.Null(result.Error);
+            Assert.True(result.Result?.Success);
+        });
+        Assert.Single(Directory.EnumerateFiles(
+            Path.Combine(root, "logs"),
+            "render-session-*.stdout.log"));
+    }
+
     private async Task<string> WriteJobAsync(string jobId)
     {
         string demo = Path.Combine(root, "match.dem");

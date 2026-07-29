@@ -69,6 +69,15 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         Assert.Contains("demo_gototick 70", commands);
         Assert.Contains(commands, command =>
             command.StartsWith("playdemo \"", StringComparison.Ordinal));
+        int playDemo = commands.FindIndex(command =>
+            command.StartsWith("playdemo \"", StringComparison.Ordinal));
+        int sessionReset = commands.FindIndex(command =>
+            command == "mirv_cmd clear");
+        Assert.InRange(sessionReset, 0, playDemo - 1);
+        Assert.Contains(commands, command =>
+            command.StartsWith(
+                "mirv_streams record name \"",
+                StringComparison.Ordinal));
         Assert.True(
             commands.FindIndex(command =>
                 command.StartsWith("playdemo \"", StringComparison.Ordinal)) <

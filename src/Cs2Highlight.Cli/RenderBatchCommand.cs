@@ -319,8 +319,8 @@ internal sealed class RenderBatchCommand(ILoggerFactory loggerFactory)
             !TryInt(values, "fps", 60, out int? fps) ||
             !TryDouble(values, "fov", 90, out double fov) ||
             !TryInt(values, "timeout-seconds", 600, out int? timeout) ||
-            !TryDouble(values, "pre-roll", 3, out double preRoll) ||
-            !TryDouble(values, "post-roll", 3, out double postRoll))
+            !TryDouble(values, "pre-roll", 1, out double preRoll) ||
+            !TryDouble(values, "post-roll", 1, out double postRoll))
         {
             return false;
         }

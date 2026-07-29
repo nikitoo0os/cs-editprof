@@ -15,8 +15,29 @@ internal static class Program
 
     public static async Task<int> Main(string[] args)
     {
-        if (args.Length != 3 || args[0] != "render" || args[1] != "--job") return 2;
-        await using FileStream input = File.OpenRead(args[2]);
+        if (args.Length != 3)
+            return 2;
+        if (args[0] == "render" && args[1] == "--job")
+            return await RunJobAsync(args[2]);
+        if (args[0] == "render-batch" && args[1] == "--manifest")
+        {
+            await using FileStream manifestStream = File.OpenRead(args[2]);
+            RenderBatchManifest manifest =
+                await JsonSerializer.DeserializeAsync<RenderBatchManifest>(
+                    manifestStream,
+                    JsonOptions) ??
+                throw new InvalidDataException("Missing batch manifest.");
+            int exitCode = 0;
+            foreach (string jobPath in manifest.RenderJobPaths)
+                exitCode = Math.Max(exitCode, await RunJobAsync(jobPath));
+            return exitCode;
+        }
+        return 2;
+    }
+
+    private static async Task<int> RunJobAsync(string jobPath)
+    {
+        await using FileStream input = File.OpenRead(jobPath);
         RenderJob job = await JsonSerializer.DeserializeAsync<RenderJob>(input, JsonOptions) ??
             throw new InvalidDataException("Missing job.");
         Directory.CreateDirectory(job.OutputDirectory);

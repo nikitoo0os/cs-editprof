@@ -178,7 +178,15 @@ public sealed class HighlightSelectionService(
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum EffectType { SmoothZoom, HeadshotFlash, VignettePulse, ClipTransition }
+public enum EffectType
+{
+    SmoothZoom,
+    ImpactShake,
+    ColorPunch,
+    HeadshotFlash,
+    VignettePulse,
+    ClipTransition
+}
 
 public sealed record EffectTimelineEvent(
     EffectType Type,
@@ -202,9 +210,9 @@ public sealed record HighlightEffectPlan(
 
 public sealed class EffectPlanningOptions
 {
-    public double MaximumZoomScale { get; init; } = 1.08;
-    public double MinimumFlashGapSeconds { get; init; } = 0.4;
-    public int MaximumEffectsPerClip { get; init; } = 12;
+    public double MaximumZoomScale { get; init; } = 1.12;
+    public double MinimumFlashGapSeconds { get; init; } = 0.25;
+    public int MaximumEffectsPerClip { get; init; } = 24;
 }
 
 public interface IEffectPlanner
@@ -218,6 +226,7 @@ public interface IEffectPlanner
 public sealed class EffectPlanner(
     EffectPlanningOptions? options = null) : IEffectPlanner
 {
+    public const string SchemaVersion = "1.2";
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
     private readonly EffectPlanningOptions options = options ?? new();
@@ -243,11 +252,11 @@ public sealed class EffectPlanner(
                 (long)Math.Round(
                     (kill.Tick - highlight.StartTick) * 1000d / Math.Max(1, tickRate),
                     MidpointRounding.AwayFromZero));
-            long zoomStart = Math.Max(0, relative - 250);
+            long zoomStart = Math.Max(0, relative - 160);
             events.Add(new EffectTimelineEvent(
                 EffectType.SmoothZoom,
                 zoomStart,
-                600,
+                420,
                 options.MaximumZoomScale - 1,
                 kill.EventIndex,
                 kill.Tick,
@@ -255,10 +264,30 @@ public sealed class EffectPlanner(
                 kill.Headshot,
                 relative - zoomStart));
             events.Add(new EffectTimelineEvent(
+                EffectType.ImpactShake,
+                Math.Max(0, relative - 45),
+                180,
+                kill.Headshot ? 1.0 : 0.72,
+                kill.EventIndex,
+                kill.Tick,
+                kill.WeaponCode,
+                kill.Headshot,
+                45));
+            events.Add(new EffectTimelineEvent(
+                EffectType.ColorPunch,
+                Math.Max(0, relative - 30),
+                170,
+                kill.Headshot ? 0.22 : 0.14,
+                kill.EventIndex,
+                kill.Tick,
+                kill.WeaponCode,
+                kill.Headshot,
+                30));
+            events.Add(new EffectTimelineEvent(
                 EffectType.VignettePulse,
                 relative,
-                300,
-                0.16,
+                220,
+                0.20,
                 kill.EventIndex,
                 kill.Tick,
                 kill.WeaponCode,
@@ -270,8 +299,8 @@ public sealed class EffectPlanner(
                 events.Add(new EffectTimelineEvent(
                     EffectType.HeadshotFlash,
                     Math.Max(0, relative - 20),
-                    80,
-                    0.10,
+                    65,
+                    0.16,
                     kill.EventIndex,
                     kill.Tick,
                     kill.WeaponCode,
@@ -299,7 +328,7 @@ public sealed class EffectPlanner(
         GenerationHighlight highlight,
         EffectPreset preset,
         IReadOnlyList<EffectTimelineEvent> events) =>
-        new("1.1", preset, events)
+        new(SchemaVersion, preset, events)
         {
             ClipId = highlight.HighlightId,
             DurationMilliseconds = highlight.EstimatedDurationMilliseconds
@@ -330,8 +359,10 @@ public sealed class EffectPlanner(
             {
                 Intensity = value.Type switch
                 {
-                    EffectType.SmoothZoom => Math.Min(0.08, Math.Max(0, value.Intensity)),
-                    EffectType.HeadshotFlash => Math.Min(0.15, Math.Max(0, value.Intensity)),
+                    EffectType.SmoothZoom => Math.Min(0.12, Math.Max(0, value.Intensity)),
+                    EffectType.ImpactShake => Math.Min(1, Math.Max(0, value.Intensity)),
+                    EffectType.ColorPunch => Math.Min(0.25, Math.Max(0, value.Intensity)),
+                    EffectType.HeadshotFlash => Math.Min(0.18, Math.Max(0, value.Intensity)),
                     EffectType.VignettePulse => Math.Min(0.25, Math.Max(0, value.Intensity)),
                     _ => value.Intensity
                 }

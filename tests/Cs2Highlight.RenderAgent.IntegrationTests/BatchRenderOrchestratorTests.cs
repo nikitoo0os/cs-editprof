@@ -103,6 +103,29 @@ public sealed class BatchRenderOrchestratorTests : IDisposable
         Assert.Equal(2, client.Calls[0].ItemIndex);
     }
 
+    [Fact]
+    public async Task SessionCapableClientReceivesAllPendingItemsAtOnce()
+    {
+        Directory.CreateDirectory(root);
+        BatchRenderPlan plan = Plan(3, continueOnError: true, maxRetries: 0);
+        FakeSessionRenderAgent client = new();
+        BatchRenderOrchestrator orchestrator = new(
+            client,
+            new JsonBatchStateStore(),
+            TimeProvider.System);
+
+        BatchExecutionResult result = await orchestrator.RunAsync(
+            plan,
+            root,
+            null,
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(1, client.BatchCalls);
+        Assert.Equal(0, client.SingleCalls);
+        Assert.Equal(3, result.Report.Summary.Succeeded);
+    }
+
     private BatchRenderPlan Plan(int count, bool continueOnError, int maxRetries)
     {
         BatchRenderItem[] items = Enumerable.Range(1, count)
@@ -180,6 +203,32 @@ public sealed class BatchRenderOrchestratorTests : IDisposable
                 next = next with { Result = next.Result with { JobId = $"job-{itemIndex}" } };
             }
             return Task.FromResult(next);
+        }
+    }
+
+    private sealed class FakeSessionRenderAgent : ISessionRenderAgentClient
+    {
+        public int BatchCalls { get; private set; }
+        public int SingleCalls { get; private set; }
+
+        public Task<RenderInvocationResult> RenderAsync(
+            string renderJobPath,
+            int attempt,
+            CancellationToken cancellationToken)
+        {
+            SingleCalls++;
+            throw new InvalidOperationException("Single render was not expected.");
+        }
+
+        public Task<IReadOnlyList<RenderInvocationResult>> RenderBatchAsync(
+            IReadOnlyList<RenderBatchItemRequest> items,
+            CancellationToken cancellationToken)
+        {
+            BatchCalls++;
+            IReadOnlyList<RenderInvocationResult> results = items
+                .Select((item, index) => Success($"job-{index + 1}"))
+                .ToArray();
+            return Task.FromResult(results);
         }
     }
 }

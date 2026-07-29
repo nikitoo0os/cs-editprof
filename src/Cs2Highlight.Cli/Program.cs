@@ -24,7 +24,7 @@ internal static class Program
             Console.Error.WriteLine(
                 "Usage: cs2-highlight analyze --demo <match.dem> --output <directory> " +
                 "[--steam-id <SteamID64>] [--parser-path <demo-parser.exe>] " +
-                "[--pre-roll 3] [--post-roll 3]");
+                "[--pre-roll 1] [--post-roll 1]");
             return 2;
         }
         CliOptions options = parsedOptions;
@@ -136,8 +136,8 @@ internal static class Program
             !TryNumber(values, "height", 1080, int.TryParse, out int height) ||
             !TryNumber(values, "fps", 60, int.TryParse, out int fps) ||
             !TryNumber(values, "fov", 90d, double.TryParse, out double fov) ||
-            !TryNumber(values, "pre-roll", 3d, double.TryParse, out double preRoll) ||
-            !TryNumber(values, "post-roll", 3d, double.TryParse, out double postRoll))
+            !TryNumber(values, "pre-roll", 1d, double.TryParse, out double preRoll) ||
+            !TryNumber(values, "post-roll", 1d, double.TryParse, out double postRoll))
         {
             return false;
         }

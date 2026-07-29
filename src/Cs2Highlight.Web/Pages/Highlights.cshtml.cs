@@ -55,7 +55,7 @@ public sealed class HighlightsModel(
     public Generation Generation { get; private set; } = null!;
     public IReadOnlyList<HighlightCard> Cards { get; private set; } = [];
     [BindProperty] public List<string> HighlightIds { get; set; } = [];
-    [BindProperty] public EffectPreset EffectPreset { get; set; } = EffectPreset.Clean;
+    [BindProperty] public EffectPreset EffectPreset { get; set; } = EffectPreset.Dynamic;
 
     public async Task<IActionResult> OnGetAsync(
         string publicId,

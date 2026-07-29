@@ -46,6 +46,7 @@ public sealed class NetConsoleDemoController(
             connection,
             TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
             cancellationToken);
+        await ConfigureRecordingAsync(connection, job, workspace, cancellationToken);
         await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
         await stateJournal.WriteAsync(
             workspace,
@@ -203,6 +204,31 @@ public sealed class NetConsoleDemoController(
             MidpointRounding.AwayFromZero);
         long lowerBound = Math.Max(0, segment.RoundStartTick ?? 0);
         return Math.Max(lowerBound, segment.StartTick - warmupTicks);
+    }
+
+    private static async Task ConfigureRecordingAsync(
+        NetConsoleConnection connection,
+        RenderJob job,
+        RenderWorkspace workspace,
+        CancellationToken cancellationToken)
+    {
+        // A reused CS2 session still contains the previous clip's addAtTick
+        // commands and output path. Reset both before loading the demo again.
+        await connection.SendAsync("mirv_cmd clear", cancellationToken);
+        await connection.SendAsync(
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"mirv_fov {job.Video.Fov}"),
+            cancellationToken);
+        await connection.SendAsync("mirv_streams record screen enabled 1", cancellationToken);
+        await connection.SendAsync(
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"mirv_streams record fps {job.Video.Fps}"),
+            cancellationToken);
+        await connection.SendAsync(
+            $"mirv_streams record name \"{Source2ScriptGenerator.EscapeCfg(workspace.Raw)}\"",
+            cancellationToken);
     }
 
     private static async Task WaitForNetConReadyAsync(

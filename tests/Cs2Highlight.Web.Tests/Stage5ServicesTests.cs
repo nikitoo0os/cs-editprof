@@ -27,13 +27,15 @@ public sealed class Stage5ServicesTests
         HighlightEffectPlan second = planner.Build(highlight, 64, EffectPreset.Dynamic);
 
         Assert.Equal(JsonSerializer.Serialize(first), JsonSerializer.Serialize(second));
-        Assert.Single(first.Events.Where(value => value.Type == EffectType.SmoothZoom));
+        Assert.Equal(2, first.Events.Count(value => value.Type == EffectType.SmoothZoom));
         Assert.Single(first.Events.Where(value => value.Type == EffectType.HeadshotFlash));
+        Assert.Contains(first.Events, value => value.Type == EffectType.ImpactShake);
+        Assert.Contains(first.Events, value => value.Type == EffectType.ColorPunch);
         Assert.Contains(first.Events, value => value.Type == EffectType.VignettePulse);
         Assert.Contains(first.Events, value => value.Type == EffectType.ClipTransition);
         Assert.All(
             first.Events.Where(value => value.Type == EffectType.SmoothZoom),
-            value => Assert.InRange(value.Intensity, 0, 0.08));
+            value => Assert.InRange(value.Intensity, 0, 0.12));
     }
 
     [Theory]
@@ -62,6 +64,8 @@ public sealed class Stage5ServicesTests
             EffectPreset.Dynamic,
             [
                 new(EffectType.SmoothZoom, 100, 600, 0.08),
+                new(EffectType.ImpactShake, 300, 180, 1),
+                new(EffectType.ColorPunch, 320, 170, 0.2),
                 new(EffectType.HeadshotFlash, 340, 80, 0.1),
                 new(EffectType.VignettePulse, 360, 300, 0.16)
             ]);
@@ -72,7 +76,9 @@ public sealed class Stage5ServicesTests
         Assert.Contains("if(lt(t", video);
         Assert.Contains("vignette=PI/12", video);
         Assert.Contains("eq=brightness=0.1", video);
-        Assert.Contains("fade=t=out:st=7.7:d=0.3", video);
+        Assert.Contains("sin(95*t)", video);
+        Assert.Contains("saturation=1.4", video);
+        Assert.DoesNotContain("fade=t=out", video);
         Assert.Contains("loudnorm", audio);
     }
 

@@ -62,6 +62,120 @@ public sealed class BatchRenderOrchestrator(
 
         try
         {
+            if (renderAgent is ISessionRenderAgentClient sessionRenderAgent)
+            {
+                BatchRenderItem[] sessionItems = plan.Items
+                    .Where(item =>
+                    {
+                        BatchRenderItemState itemState =
+                            state.Items[FindStateIndex(state, item.ItemId)];
+                        return itemState.Status != BatchRenderItemStatus.Succeeded &&
+                            itemState.Status != BatchRenderItemStatus.Skipped &&
+                            itemState.Attempts < 1 + plan.Options.MaxRetries;
+                    })
+                    .ToArray();
+                if (sessionItems.Length > 1)
+                {
+                    List<RenderBatchItemRequest> requests =
+                        new(sessionItems.Length);
+                    foreach (BatchRenderItem item in sessionItems)
+                    {
+                        int stateIndex = FindStateIndex(state, item.ItemId);
+                        BatchRenderItemState itemState = state.Items[stateIndex];
+                        int attempt = itemState.Attempts + 1;
+                        itemState = itemState with
+                        {
+                            Status = BatchRenderItemStatus.Running,
+                            Attempts = attempt,
+                            StartedAt = itemState.StartedAt ??
+                                timeProvider.GetUtcNow(),
+                            CompletedAt = null,
+                            Error = null
+                        };
+                        state = Replace(state, stateIndex, itemState) with
+                        {
+                            UpdatedAt = timeProvider.GetUtcNow()
+                        };
+                        requests.Add(new RenderBatchItemRequest(
+                            item.RenderJobPath,
+                            attempt));
+                    }
+                    await stateStore.SaveAsync(
+                        statePath,
+                        state,
+                        cancellationToken);
+                    await LogAsync(
+                        logPath,
+                        $"Starting shared CS2 session for {sessionItems.Length} render items.",
+                        cancellationToken);
+                    IReadOnlyList<RenderInvocationResult> invocations =
+                        await sessionRenderAgent.RenderBatchAsync(
+                            requests,
+                            cancellationToken);
+                    if (invocations.Count != sessionItems.Length)
+                    {
+                        throw new InvalidDataException(
+                            "Shared Render Agent returned an unexpected result count.");
+                    }
+                    for (int index = 0; index < sessionItems.Length; index++)
+                    {
+                        BatchRenderItem item = sessionItems[index];
+                        RenderInvocationResult invocation = invocations[index];
+                        int stateIndex = FindStateIndex(state, item.ItemId);
+                        BatchRenderItemState itemState = state.Items[stateIndex];
+                        if (invocation.Error is null &&
+                            invocation.Result?.Success == true)
+                        {
+                            itemState = itemState with
+                            {
+                                Status = BatchRenderItemStatus.Succeeded,
+                                CompletedAt = timeProvider.GetUtcNow(),
+                                RenderResultPath = invocation.RenderResultPath,
+                                OutputFile = invocation.Result.OutputFile,
+                                OutputSizeBytes =
+                                    invocation.Result.OutputSizeBytes,
+                                DurationMilliseconds =
+                                    invocation.Result.DurationMilliseconds
+                            };
+                            await LogAsync(
+                                logPath,
+                                $"Shared session succeeded item={item.Index} pid={invocation.ProcessId} output={invocation.Result.OutputFile}",
+                                cancellationToken);
+                        }
+                        else
+                        {
+                            BatchItemError error = invocation.Error ??
+                                new BatchItemError(
+                                    "RENDER_FAILED",
+                                    "Render failed without an error.",
+                                    false);
+                            itemState = itemState with
+                            {
+                                Status = BatchRenderItemStatus.Failed,
+                                CompletedAt = timeProvider.GetUtcNow(),
+                                RenderResultPath =
+                                    invocation.RenderResultPath,
+                                DurationMilliseconds =
+                                    invocation.Result?.DurationMilliseconds,
+                                Error = error
+                            };
+                            await LogAsync(
+                                logPath,
+                                $"Shared session failed item={item.Index} error={error.Code} retryable={error.Retryable}",
+                                cancellationToken);
+                        }
+                        state = Replace(state, stateIndex, itemState) with
+                        {
+                            UpdatedAt = timeProvider.GetUtcNow()
+                        };
+                    }
+                    await stateStore.SaveAsync(
+                        statePath,
+                        state,
+                        cancellationToken);
+                }
+            }
+
             foreach (BatchRenderItem item in plan.Items)
             {
                 int stateIndex = FindStateIndex(state, item.ItemId);

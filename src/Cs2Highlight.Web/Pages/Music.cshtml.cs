@@ -35,8 +35,8 @@ public sealed class MusicModel(
     [BindProperty] public IFormFile? MusicFile { get; set; }
     [BindProperty] public bool RightsConfirmed { get; set; }
     [BindProperty] public MovieStyle MovieStyle { get; set; } = MovieStyle.Dynamic;
-    [BindProperty] public MusicSyncIntensity SyncIntensity { get; set; } = MusicSyncIntensity.Expressive;
-    [BindProperty] public ColorGradePreset ColorGrade { get; set; } = ColorGradePreset.Natural;
+    [BindProperty] public MusicSyncIntensity SyncIntensity { get; set; } = MusicSyncIntensity.Aggressive;
+    [BindProperty] public ColorGradePreset ColorGrade { get; set; } = ColorGradePreset.Competitive;
     [BindProperty] public string? LutAssetKey { get; set; }
     [BindProperty] public int GameplayGainPercent { get; set; } = 16;
     [BindProperty] public int MusicGainPercent { get; set; } = 71;

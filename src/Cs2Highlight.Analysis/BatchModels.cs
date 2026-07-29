@@ -149,6 +149,15 @@ public interface IRenderAgentClient
         CancellationToken cancellationToken);
 }
 
+public sealed record RenderBatchItemRequest(string RenderJobPath, int Attempt);
+
+public interface ISessionRenderAgentClient : IRenderAgentClient
+{
+    Task<IReadOnlyList<RenderInvocationResult>> RenderBatchAsync(
+        IReadOnlyList<RenderBatchItemRequest> items,
+        CancellationToken cancellationToken);
+}
+
 public interface IBatchStateStore
 {
     Task SaveAsync<T>(string path, T value, CancellationToken cancellationToken);
