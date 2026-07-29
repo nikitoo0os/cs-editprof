@@ -215,6 +215,52 @@ public sealed class CinematicPlanningTests
     }
 
     [Fact]
+    public void ExcerptCropsLongVerseAroundStrongPeak()
+    {
+        MusicNarrative narrative = new()
+        {
+            DurationSeconds = 28,
+            Sections =
+            [
+                DetailedSection(
+                    "long-verse",
+                    MusicSectionType.Verse,
+                    0,
+                    28,
+                    0.7)
+            ],
+            Peaks =
+            [
+                new MusicalPeak
+                {
+                    Id = "long-verse-downbeat",
+                    Type = MusicalPeakType.Downbeat,
+                    TimeSeconds = 14,
+                    Strength = 0.9,
+                    Confidence = 0.9,
+                    SectionId = "long-verse"
+                }
+            ],
+            Frames = [],
+            Warnings = []
+        };
+
+        MusicExcerptPlan excerpt = new MusicExcerptSelector(
+            new CinematicDurationPolicy()).Select(
+            narrative,
+            [Highlight("h1", HighlightType.SoloKill, 5, 30)],
+            new MovieDurationOptions());
+
+        Assert.True(excerpt.IsValid);
+        Assert.Equal(10, excerpt.DurationSeconds, 6);
+        Assert.True(excerpt.StartSeconds > 0);
+        Assert.True(excerpt.EndSeconds < narrative.DurationSeconds);
+        Assert.Contains(
+            MusicExcerptSelector.RelaxedEnergyFallbackWarning,
+            excerpt.Warnings);
+    }
+
+    [Fact]
     public void ExcerptDoesNotExpandToFullSong()
     {
         MusicNarrative narrative = ExcerptNarrative(duration: 60);

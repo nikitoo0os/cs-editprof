@@ -507,6 +507,10 @@ public sealed class MusicExcerptSelector(
                     budget,
                     requiredPeaks,
                     relaxedEnergy: true)
+                .Concat(BuildCroppedCandidates(
+                    narrative,
+                    budget,
+                    requiredPeaks))
                 .Where(value => value.Valid)
                 .OrderByDescending(value => value.Score)
                 .ThenBy(value => value.Start)
@@ -644,6 +648,90 @@ public sealed class MusicExcerptSelector(
                     breakdown.Values.Sum(),
                     breakdown);
             }
+        }
+    }
+
+    private static IEnumerable<Candidate> BuildCroppedCandidates(
+        MusicNarrative narrative,
+        MovieDurationBudget budget,
+        int requiredPeaks)
+    {
+        double duration = Math.Clamp(
+            budget.TargetSeconds,
+            budget.HighlightDurationSeconds,
+            budget.MaximumTotalSeconds);
+        duration = Math.Min(duration, narrative.DurationSeconds);
+        if (duration <= 0)
+            yield break;
+
+        MusicalPeak[] anchors = narrative.Peaks
+            .Where(value =>
+                narrative.Sections.Any(section =>
+                    section.Id == value.SectionId &&
+                    MusicalPeakDetector.IsAllowedPrimaryKillSection(
+                        section.Type,
+                        relaxedEnergy: true)))
+            .OrderBy(value => value.TimeSeconds)
+            .ThenBy(value => value.Id, StringComparer.Ordinal)
+            .ToArray();
+        foreach (MusicalPeak anchor in anchors)
+        {
+            double start = Math.Clamp(
+                anchor.TimeSeconds - duration / 2,
+                0,
+                Math.Max(0, narrative.DurationSeconds - duration));
+            double end = start + duration;
+            MusicSection[] window = narrative.Sections
+                .Where(value =>
+                    value.EndSeconds > start &&
+                    value.StartSeconds < end)
+                .OrderBy(value => value.StartSeconds)
+                .ToArray();
+            MusicalPeak[] peaks = anchors
+                .Where(value =>
+                    value.TimeSeconds >= start &&
+                    value.TimeSeconds <= end)
+                .OrderByDescending(value =>
+                    value.Strength * value.Confidence)
+                .ThenBy(value => value.TimeSeconds)
+                .Take(Math.Max(requiredPeaks * 3, requiredPeaks))
+                .OrderBy(value => value.TimeSeconds)
+                .ToArray();
+            bool build = window.Any(value =>
+                value.Type is MusicSectionType.BuildUp or
+                    MusicSectionType.PreDrop);
+            bool high = window.Any(value =>
+                MusicalPeakDetector.IsAllowedPrimaryKillSection(value.Type));
+            double brollDemand = Math.Max(
+                0,
+                duration - budget.HighlightDurationSeconds) /
+                Math.Max(0.001, budget.MaximumBrollSeconds);
+            double peakCapacity = requiredPeaks == 0
+                ? 1
+                : Math.Min(1, peaks.Length / (double)requiredPeaks);
+            Dictionary<string, double> breakdown = new(StringComparer.Ordinal)
+            {
+                ["peakCapacity"] = peakCapacity * 45,
+                ["croppedWindow"] = 20,
+                ["buildUp"] = build ? 18 : 0,
+                ["highEnergy"] = high ? 22 : 0,
+                ["durationFit"] = 15,
+                ["brollPenalty"] = -Math.Max(0, brollDemand - 1) * 40
+            };
+            yield return new Candidate(
+                start,
+                end,
+                window,
+                peaks,
+                build,
+                high,
+                RelaxedEnergy: true,
+                Valid:
+                    window.Length > 0 &&
+                    peaks.Length >= requiredPeaks &&
+                    brollDemand <= 1.000001,
+                breakdown.Values.Sum(),
+                breakdown);
         }
     }
 
