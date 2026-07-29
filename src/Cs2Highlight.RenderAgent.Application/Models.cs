@@ -163,6 +163,12 @@ public sealed record ProcessExecutionResult(
     bool TimedOut,
     TimeSpan Duration);
 
+public enum DemoLoadMode
+{
+    Start,
+    ReuseCurrent
+}
+
 public static class ExitCodes
 {
     public const int Success = 0;

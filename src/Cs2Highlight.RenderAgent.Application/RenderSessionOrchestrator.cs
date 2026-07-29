@@ -161,19 +161,32 @@ public sealed class RenderSessionOrchestrator(
 
         try
         {
+            string? loadedDemoPath = null;
             for (int preparedIndex = 0; preparedIndex < prepared.Count; preparedIndex++)
             {
                 PreparedRender item = prepared[preparedIndex];
+                string sourceDemoPath = Path.GetFullPath(item.Job.DemoPath);
+                DemoLoadMode loadMode =
+                    loadedDemoPath is not null &&
+                    string.Equals(
+                        loadedDemoPath,
+                        sourceDemoPath,
+                        StringComparison.OrdinalIgnoreCase)
+                        ? DemoLoadMode.ReuseCurrent
+                        : DemoLoadMode.Start;
                 await stateJournal.WriteAsync(
                     item.Workspace,
                     RenderState.StartingHlae,
                     preparedIndex == 0
                         ? $"Starting one shared HLAE/CS2 session for {prepared.Count} clips."
-                        : $"Reusing active HLAE/CS2 session for clip {preparedIndex + 1}/{prepared.Count}.",
+                        : loadMode == DemoLoadMode.ReuseCurrent
+                            ? $"Reusing the already loaded demo for clip {preparedIndex + 1}/{prepared.Count}; the map will not be reloaded."
+                            : $"Loading a different demo in the active HLAE/CS2 session for clip {preparedIndex + 1}/{prepared.Count}.",
                     cancellationToken);
                 Task controlTask = demoController.ControlAsync(
                     item.Job,
                     item.Workspace,
+                    loadMode,
                     cancellationToken);
                 Task firstCompleted = await Task.WhenAny(controlTask, rendererTask);
                 if (firstCompleted == rendererTask)
@@ -205,6 +218,7 @@ public sealed class RenderSessionOrchestrator(
                 try
                 {
                     await controlTask;
+                    loadedDemoPath = sourceDemoPath;
                     await stateJournal.WriteAsync(
                         item.Workspace,
                         RenderState.VerifyingOutput,

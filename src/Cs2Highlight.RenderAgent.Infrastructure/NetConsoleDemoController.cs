@@ -29,6 +29,7 @@ public sealed class NetConsoleDemoController(
     public async Task ControlAsync(
         RenderJob job,
         RenderWorkspace workspace,
+        DemoLoadMode loadMode,
         CancellationToken cancellationToken)
     {
         await using NetConsoleConnection connection = await ConnectAsync(
@@ -48,27 +49,44 @@ public sealed class NetConsoleDemoController(
             cancellationToken);
         await ConfigureRecordingAsync(connection, job, workspace, cancellationToken);
         await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
-        await stateJournal.WriteAsync(
-            workspace,
-            RenderState.LoadingDemo,
-            "CS2 console is ready; starting the demo and waiting for Connected [DEMO].",
-            cancellationToken);
-        await connection.SendAsync(
-            $"playdemo \"{Source2ScriptGenerator.EscapeCfg(workspace.PreparedDemoPath)}\"",
-            cancellationToken);
-        await WaitForDemoReadyAsync(
-            connection,
-            TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
-            cancellationToken);
-        await Task.Delay(
-            TimeSpan.FromSeconds(options.DemoInitializationStabilizationSeconds),
-            cancellationToken);
+        if (loadMode == DemoLoadMode.Start)
+        {
+            await stateJournal.WriteAsync(
+                workspace,
+                RenderState.LoadingDemo,
+                "CS2 console is ready; starting the demo and waiting for Connected [DEMO].",
+                cancellationToken);
+            await connection.SendAsync(
+                $"playdemo \"{Source2ScriptGenerator.EscapeCfg(workspace.PreparedDemoPath)}\"",
+                cancellationToken);
+            await WaitForDemoReadyAsync(
+                connection,
+                TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
+                cancellationToken);
+            await Task.Delay(
+                TimeSpan.FromSeconds(options.DemoInitializationStabilizationSeconds),
+                cancellationToken);
+        }
+        else
+        {
+            await stateJournal.WriteAsync(
+                workspace,
+                RenderState.LoadingDemo,
+                "Reusing the current demo without playdemo/map reload; validating active playback before seeking.",
+                cancellationToken);
+            await WaitForDemoReadyAsync(
+                connection,
+                TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
+                cancellationToken);
+        }
 
         long warmupTick = ComputeWarmupTick(job.Segment, options.Warmup);
         await stateJournal.WriteAsync(
             workspace,
             RenderState.SeekingToWarmup,
-            $"Demo initialized; seeking to warmup tick {warmupTick}.",
+            loadMode == DemoLoadMode.Start
+                ? $"Demo initialized; seeking to warmup tick {warmupTick}."
+                : $"Current demo is still active; seeking directly to warmup tick {warmupTick}.",
             cancellationToken);
         await SeekToWarmupAsync(
             connection,
@@ -213,7 +231,7 @@ public sealed class NetConsoleDemoController(
         CancellationToken cancellationToken)
     {
         // A reused CS2 session still contains the previous clip's addAtTick
-        // commands and output path. Reset both before loading the demo again.
+        // commands and output path. Reset both before seeking to the next clip.
         await connection.SendAsync("mirv_cmd clear", cancellationToken);
         await connection.SendAsync(
             string.Create(

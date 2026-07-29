@@ -36,7 +36,11 @@ public interface IHlaeLauncher
 
 public interface IDemoController
 {
-    Task ControlAsync(RenderJob job, RenderWorkspace workspace, CancellationToken cancellationToken);
+    Task ControlAsync(
+        RenderJob job,
+        RenderWorkspace workspace,
+        DemoLoadMode loadMode,
+        CancellationToken cancellationToken);
     Task QuitAsync(CancellationToken cancellationToken);
 }
 

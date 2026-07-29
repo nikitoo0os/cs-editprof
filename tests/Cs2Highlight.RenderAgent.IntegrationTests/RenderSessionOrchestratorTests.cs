@@ -45,6 +45,9 @@ public sealed class RenderSessionOrchestratorTests : IDisposable
         Assert.All(outcomes, outcome => Assert.True(outcome.Result.Success));
         Assert.Equal(1, runtime.LaunchCount);
         Assert.Equal(3, runtime.ControlCount);
+        Assert.Equal(
+            [DemoLoadMode.Start, DemoLoadMode.ReuseCurrent, DemoLoadMode.ReuseCurrent],
+            runtime.LoadModes);
         Assert.Equal(1, runtime.QuitCount);
     }
 
@@ -147,6 +150,7 @@ public sealed class RenderSessionOrchestratorTests : IDisposable
         public int LaunchCount { get; private set; }
         public int ControlCount { get; private set; }
         public int QuitCount { get; private set; }
+        public List<DemoLoadMode> LoadModes { get; } = [];
 
         public Task<ProcessExecutionResult> LaunchAsync(
             RenderJob job,
@@ -162,9 +166,11 @@ public sealed class RenderSessionOrchestratorTests : IDisposable
         public Task ControlAsync(
             RenderJob job,
             RenderWorkspace workspace,
+            DemoLoadMode loadMode,
             CancellationToken cancellationToken)
         {
             ControlCount++;
+            LoadModes.Add(loadMode);
             return Task.CompletedTask;
         }
 

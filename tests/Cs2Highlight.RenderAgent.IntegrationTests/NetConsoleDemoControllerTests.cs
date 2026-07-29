@@ -63,7 +63,11 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             10);
         NetConsoleDemoController controller = new(options, new StateJournal(TimeProvider.System));
 
-        await controller.ControlAsync(job, workspace, CancellationToken.None);
+        await controller.ControlAsync(
+            job,
+            workspace,
+            DemoLoadMode.Start,
+            CancellationToken.None);
         await server;
 
         Assert.Contains("demo_gototick 70", commands);
@@ -115,6 +119,68 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         Assert.Contains(commands, command =>
             command.Contains("addAtTick 200", StringComparison.Ordinal) &&
             command.Contains("mirv_streams record end", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task ReusesLoadedDemoWithoutSendingPlayDemo()
+    {
+        using TcpListener listener = new(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        List<string> commands = [];
+        Task server = RunFakeNetConAsync(listener, commands);
+        RenderEnvironmentOptions options = new()
+        {
+            NetConPort = port,
+            ProcessStartupTimeoutSeconds = 3,
+            DemoLoadTimeoutSeconds = 3,
+            DemoInitializationStabilizationSeconds = 0,
+            Warmup = new RenderWarmupOptions
+            {
+                WarmupGameSeconds = 3,
+                MinimumWallClockStabilizationSeconds = 0,
+                MaximumGameplayReadyWaitSeconds = 3
+            }
+        };
+        RenderWorkspace workspace = new(
+            root,
+            Path.Combine(root, "input"),
+            Path.Combine(root, "config"),
+            Path.Combine(root, "raw"),
+            Path.Combine(root, "output"),
+            Path.Combine(root, "logs"),
+            Path.Combine(root, "state"),
+            Path.Combine(root, "input", "demo.dem"));
+        RenderJob job = new(
+            "test-reuse",
+            workspace.PreparedDemoPath,
+            new PlayerSelector("76561198000000001", "Player One"),
+            new RenderSegment(100, 200)
+            {
+                TickRate = 10,
+                RoundStartTick = 0,
+                PrimaryKillTick = 150,
+                LastKillTick = 150,
+                SafeEndTick = 200
+            },
+            new VideoSettings(1920, 1080, 60, 90),
+            workspace.Output,
+            10);
+        NetConsoleDemoController controller =
+            new(options, new StateJournal(TimeProvider.System));
+
+        await controller.ControlAsync(
+            job,
+            workspace,
+            DemoLoadMode.ReuseCurrent,
+            CancellationToken.None);
+        await server;
+
+        Assert.DoesNotContain(commands, command =>
+            command.StartsWith("playdemo ", StringComparison.Ordinal));
+        Assert.Contains("status", commands);
+        Assert.Contains("demo_gototick 70", commands);
+        Assert.Contains("mirv_streams record start", commands);
     }
 
     private static async Task RunFakeNetConAsync(TcpListener listener, List<string> commands)

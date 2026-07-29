@@ -99,7 +99,11 @@ public sealed class RenderOrchestrator(
                 $"Starting HLAE and waiting for CS2 NetCon on port {environment.NetConPort}.",
                 cancellationToken);
 
-            Task controlTask = demoController.ControlAsync(job, workspace, cancellationToken);
+            Task controlTask = demoController.ControlAsync(
+                job,
+                workspace,
+                DemoLoadMode.Start,
+                cancellationToken);
             Task first = await Task.WhenAny(controlTask, rendererTask);
             if (first == rendererTask)
             {
