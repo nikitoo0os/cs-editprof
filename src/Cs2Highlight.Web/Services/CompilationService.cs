@@ -93,6 +93,7 @@ public sealed partial class FfmpegHighlightCompilationService(
     ILogger<FfmpegHighlightCompilationService> logger)
     : IHighlightCompilationService
 {
+    private const string NormalizationPipelineVersion = "3";
     private static readonly Encoding Utf8WithoutBom = new UTF8Encoding(false);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -122,6 +123,12 @@ public sealed partial class FfmpegHighlightCompilationService(
 
     [LoggerMessage(EventId = 5108, Level = LogLevel.Information, Message = "[Effects] Final composition verified: {IncludedClips} clips, {DurationSeconds:F3}s, {FileSizeBytes} bytes")]
     private static partial void LogCompositionVerified(ILogger logger, int includedClips, double durationSeconds, long fileSizeBytes);
+
+    [LoggerMessage(EventId = 5109, Level = LogLevel.Information, Message = "[Effects] Re-encoding {ClipCount} normalized clips into one timestamp-safe gameplay stream")]
+    private static partial void LogDecodedConcat(ILogger logger, int clipCount);
+
+    [LoggerMessage(EventId = 5110, Level = LogLevel.Information, Message = "[Effects] Decoding the complete final video to verify stream integrity")]
+    private static partial void LogDecodeVerification(ILogger logger);
 
     public async Task<CompilationResult> ComposeAsync(
         CompilationRequest request,
@@ -210,6 +217,11 @@ public sealed partial class FfmpegHighlightCompilationService(
                     request.CinematicMoviePlan.Segments[index].TimeWarp;
             }
             double speed = timeWarp?.BaseSpeedFactor ?? 1;
+            double expectedOutputDuration = timeWarp is null
+                ? metadata.DurationSeconds
+                : TimeWarpMath.OutputDuration(
+                    timeWarp,
+                    metadata.DurationSeconds);
             string videoFilters = graph.Video;
             string audioFilters = graph.Audio;
             string? selectedLutPath = null;
@@ -257,6 +269,7 @@ public sealed partial class FfmpegHighlightCompilationService(
                 Encoding.UTF8.GetBytes(string.Join(
                     '\n',
                     input,
+                    NormalizationPipelineVersion,
                     new FileInfo(input).Length.ToString(CultureInfo.InvariantCulture),
                     File.GetLastWriteTimeUtc(input).Ticks.ToString(CultureInfo.InvariantCulture),
                     videoFilters,
@@ -365,7 +378,11 @@ public sealed partial class FfmpegHighlightCompilationService(
             [
                 "-c:v", "libx264", "-preset", "medium", "-crf", "18",
                 "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
-                "-shortest", "-movflags", "+faststart", temporaryTarget
+                "-shortest", "-movflags", "+faststart",
+                "-t", expectedOutputDuration.ToString(
+                    "0.######",
+                    CultureInfo.InvariantCulture),
+                temporaryTarget
             ]);
             ProcessResult normalization = await RunAsync(options.FfmpegPath, arguments, cancellationToken);
             LogFfmpegCompleted(
@@ -472,21 +489,38 @@ public sealed partial class FfmpegHighlightCompilationService(
                 skipped,
                 watch.ElapsedMilliseconds);
 
-        string concatFile = Path.Combine(normalizedDirectory, "concat.txt");
-        string concat = string.Join(
-            Environment.NewLine,
-            normalized.Select(path => $"file '{path.Replace("'", "'\\''", StringComparison.Ordinal)}'"));
-        await File.WriteAllTextAsync(concatFile, concat, Utf8WithoutBom, cancellationToken);
         progress?.Report(new CompilationProgress(75, "Composing gameplay timeline"));
         string temporary = Path.Combine(outputDirectory, "final-highlights.tmp.mp4");
         string final = Path.Combine(outputDirectory, "final-highlights.mp4");
         string gameplay = Path.Combine(normalizedDirectory, "gameplay-timeline.mp4");
         if (File.Exists(temporary)) File.Delete(temporary);
         if (File.Exists(gameplay)) File.Delete(gameplay);
+        LogDecodedConcat(logger, normalized.Count);
+        List<string> concatArguments =
+        [
+            "-y", "-hide_banner", "-loglevel", "error"
+        ];
+        foreach (string clip in normalized)
+        {
+            concatArguments.Add("-i");
+            concatArguments.Add(clip);
+        }
+        string concatGraph = BuildDecodedConcatGraph(normalized.Count);
+        concatArguments.AddRange(
+        [
+            "-filter_complex", concatGraph,
+            "-map", "[gameplay_video]",
+            "-map", "[gameplay_audio]",
+            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-pix_fmt", "yuv420p", "-r",
+            request.Fps.ToString(CultureInfo.InvariantCulture),
+            "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
+            "-movflags", "+faststart",
+            gameplay
+        ]);
         ProcessResult concatResult = await RunAsync(
             options.FfmpegPath,
-            ["-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0",
-             "-i", concatFile, "-c", "copy", gameplay],
+            concatArguments,
             cancellationToken);
         await WriteProcessLogAsync(
             Path.Combine(outputDirectory, "composition.ffmpeg.log"),
@@ -585,6 +619,29 @@ public sealed partial class FfmpegHighlightCompilationService(
             finalMetadata.Width != request.Width || finalMetadata.Height != request.Height ||
             file.Length < request.MinimumOutputBytes)
             return Failure("FINAL_VIDEO_INVALID", request.ClipPaths.Count, skipped, watch.ElapsedMilliseconds);
+        LogDecodeVerification(logger);
+        ProcessResult decodeVerification = await RunAsync(
+            options.FfmpegPath,
+            [
+                "-hide_banner", "-loglevel", "error", "-xerror",
+                "-i", temporary,
+                "-map", "0:v:0",
+                "-f", "null", "-"
+            ],
+            cancellationToken);
+        await WriteProcessLogAsync(
+            Path.Combine(outputDirectory, "decode-verification.ffmpeg.log"),
+            decodeVerification,
+            cancellationToken);
+        if (decodeVerification.ExitCode != 0)
+        {
+            File.Delete(temporary);
+            return Failure(
+                $"FINAL_VIDEO_DECODE_FAILED: {decodeVerification.Error}",
+                request.ClipPaths.Count,
+                skipped,
+                watch.ElapsedMilliseconds);
+        }
         LoudnessMeasurement? loudness = null;
         if (request.MusicPath is not null && request.MovieSettings is not null)
         {
@@ -701,6 +758,30 @@ public sealed partial class FfmpegHighlightCompilationService(
             cancellationToken);
         progress?.Report(new CompilationProgress(100, "Completed"));
         return result;
+    }
+
+    private static string BuildDecodedConcatGraph(int clipCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(clipCount, 1);
+        StringBuilder graph = new();
+        for (int index = 0; index < clipCount; index++)
+        {
+            graph.Append('[').Append(index)
+                .Append(":v:0]settb=AVTB,setpts=PTS-STARTPTS[v")
+                .Append(index).Append("];[")
+                .Append(index)
+                .Append(":a:0]asetpts=PTS-STARTPTS,")
+                .Append("aresample=48000:async=1:first_pts=0[a")
+                .Append(index).Append("];");
+        }
+        for (int index = 0; index < clipCount; index++)
+        {
+            graph.Append("[v").Append(index).Append("][a")
+                .Append(index).Append(']');
+        }
+        graph.Append("concat=n=").Append(clipCount)
+            .Append(":v=1:a=1[gameplay_video][gameplay_audio]");
+        return graph.ToString();
     }
 
     private static DynamicEffectClipResult EffectResult(
