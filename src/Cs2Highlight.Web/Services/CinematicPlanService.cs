@@ -481,15 +481,18 @@ public sealed partial class CinematicPlanService(
 
         if (logger.IsEnabled(LogLevel.Information))
         {
+            var cinematicSegmentCount = plan.Segments.Count(value =>
+                value.Camera.Type != CameraShotType.PlayerPov);
+            var playerPovSegmentCount = plan.Segments.Count(value =>
+                value.Camera.Type == CameraShotType.PlayerPov);
+
             LogPlan(
                 logger,
                 generation.PublicId,
                 plan.Segments.Count,
                 plan.HighlightMatches.Count,
-                plan.Segments.Count(value =>
-                    value.Camera.Type != CameraShotType.PlayerPov),
-                plan.Segments.Count(value =>
-                    value.Camera.Type == CameraShotType.PlayerPov),
+                cinematicSegmentCount,
+                playerPovSegmentCount,
                 plan.Warnings.Count);
         }
         return new CinematicLockedPlan(
