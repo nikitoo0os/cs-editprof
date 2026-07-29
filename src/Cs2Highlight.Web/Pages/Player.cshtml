@@ -1,28 +1,128 @@
 @page "/generations/{publicId}/player"
 @model PlayerModel
-@{ ViewData["Title"] = "Выбор игрока"; }
-<section class="card">
-<h1>Выберите игрока</h1>
-<form method="post" asp-antiforgery="true">
-@foreach (var player in Model.Players) {
-  <label class="card">
-    <input type="radio" asp-for="SteamId" value="@player.SteamId" required />
-    <strong>@player.DisplayName</strong><br />
-    <span class="muted">SteamID: @player.SteamId · Матчей: @player.DemoCount · Убийств: @player.TotalKills · Моментов: @player.CandidateCount</span>
-  </label>
+@{
+  ViewData["Title"] = "Выбор игрока";
+  ViewData["CurrentStep"] = 2;
+  UiState emptyPlayers = new(
+    "users-round",
+    "Игроки не найдены",
+    "В демках нет доступных данных об игроках. Попробуй загрузить другие матчи.",
+    "Загрузить другие демки",
+    "/");
 }
-<div class="grid">
-  <label>Лучших моментов
-    <select asp-for="MaximumHighlights"><option>3</option><option>5</option><option>10</option></select>
-  </label>
-  <label>Формат
-    <select asp-for="AspectRatio"><option value="16:9">16:9 — 1920×1080</option><option value="9:16">9:16 — 1080×1920</option></select>
-  </label>
-  <label>Порядок
-    <select asp-for="OutputOrder"><option value="Chronological">По хронологии</option><option value="ScoreDescending">По score</option></select>
-  </label>
-  <label>Минимальный score <input asp-for="MinimumScore" type="number" min="0" max="1000" step="1" /></label>
-</div>
-<button type="submit">Продолжить к оплате</button>
-</form>
+<section data-player-selection>
+  <header class="page-header">
+    <div>
+      <p class="page-eyebrow">Шаг 2 · Игрок</p>
+      <h1 class="page-title">Чьи моменты собираем?</h1>
+      <p class="page-lead">Выбери игрока — мы покажем найденные для него убийства из всех загруженных матчей.</p>
+    </div>
+    <span class="badge badge-success">@Model.Players.Count игроков найдено</span>
+  </header>
+
+  @if (Model.Players.Count == 0)
+  {
+    <partial name="_EmptyState" model="emptyPlayers" />
+  }
+  else
+  {
+    <form method="post" asp-antiforgery="true" data-loading-form>
+      <div class="player-toolbar surface surface-pad">
+        <label style="flex:1">
+          <span class="form-label">Поиск по нику или SteamID</span>
+          <input class="form-control"
+                 type="search"
+                 data-player-search
+                 placeholder="Например, s1mple"
+                 autocomplete="off" />
+        </label>
+        <label style="min-width:220px">
+          <span class="form-label">Сортировка</span>
+          <select class="form-select" data-player-sort>
+            <option value="moments">По количеству моментов</option>
+            <option value="kills">По убийствам</option>
+            <option value="matches">По матчам</option>
+            <option value="name">По имени</option>
+          </select>
+        </label>
+      </div>
+
+      <div class="section-grid-sidebar">
+        <div class="player-grid" data-player-grid>
+          @foreach (GenerationPlayer player in Model.Players)
+          {
+            string initial = string.IsNullOrWhiteSpace(player.DisplayName)
+              ? "P"
+              : player.DisplayName[..1].ToUpperInvariant();
+            <label class="player-card"
+                   data-player-card
+                   data-search="@($"{player.DisplayName} {player.SteamId}".ToLowerInvariant())"
+                   data-kills="@player.TotalKills"
+                   data-matches="@player.DemoCount"
+                   data-moments="@player.CandidateCount">
+              <input class="player-card__radio"
+                     type="radio"
+                     asp-for="SteamId"
+                     value="@player.SteamId"
+                     required />
+              <span class="avatar-placeholder" aria-hidden="true">@initial</span>
+              <strong class="player-card__name">@player.DisplayName</strong>
+              <span class="player-card__id">SteamID64 · @player.SteamId</span>
+              <span class="player-card__stats">
+                <span class="mini-stat"><strong>@player.DemoCount</strong><span>матчей</span></span>
+                <span class="mini-stat"><strong>@player.TotalKills</strong><span>убийств</span></span>
+                <span class="mini-stat"><strong>@player.CandidateCount</strong><span>моментов</span></span>
+              </span>
+            </label>
+          }
+        </div>
+
+        <aside class="surface surface-pad sticky-panel">
+          <span class="badge badge-brand">Параметры отбора</span>
+          <h2 class="section-title" style="margin-top:14px">Каким будет мувик</h2>
+          <div style="display:grid;gap:16px;margin-top:20px">
+            <label>
+              <span class="form-label">Количество лучших моментов</span>
+              <select class="form-select" asp-for="MaximumHighlights">
+                <option value="3">3 момента</option>
+                <option value="5">5 моментов</option>
+                <option value="10">10 моментов</option>
+              </select>
+            </label>
+            <label>
+              <span class="form-label">Формат видео</span>
+              <select class="form-select" asp-for="AspectRatio">
+                <option value="16:9">16:9 · YouTube и desktop</option>
+                <option value="9:16">9:16 · Shorts и Reels</option>
+              </select>
+            </label>
+            <label>
+              <span class="form-label">Порядок моментов</span>
+              <select class="form-select" asp-for="OutputOrder">
+                <option value="Chronological">По хронологии</option>
+                <option value="ScoreDescending">Сначала самые яркие</option>
+              </select>
+            </label>
+            <label>
+              <span class="form-label">Минимальная оценка</span>
+              <input class="form-control" asp-for="MinimumScore" type="number" min="0" max="1000" step="1" />
+            </label>
+          </div>
+          <button type="submit"
+                  class="btn btn-primary btn-lg btn-block"
+                  style="margin-top:22px"
+                  data-player-submit
+                  data-loading-label="Сохраняем выбор…"
+                  disabled>
+            Продолжить
+            <img class="ui-icon" src="/assets/icons/chevron-right.svg" alt="" />
+          </button>
+        </aside>
+      </div>
+    </form>
+  }
 </section>
+
+@section Scripts {
+  <script type="module" src="/js/player-selection.js"></script>
+}

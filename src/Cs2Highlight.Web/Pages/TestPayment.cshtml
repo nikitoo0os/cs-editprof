@@ -1,12 +1,22 @@
 @page "/generations/{publicId}/test-payment"
 @model TestPaymentModel
-@{ ViewData["Title"] = "Тестовая оплата"; }
-<section class="card">
-<h1>Тестовая оплата</h1>
-<p>Сумма: <strong>$1.00 USD</strong></p>
-<p class="muted">Реального списания денег не происходит.</p>
-<form method="post" asp-antiforgery="true">
- <button name="decision" value="success">Успешная оплата</button>
- <button name="decision" value="decline">Отклонить платёж</button>
-</form>
+@{
+  ViewData["Title"] = "Тестовая оплата";
+  ViewData["CurrentStep"] = 5;
+}
+<section class="surface surface--elevated surface-pad" style="max-width:720px;margin-inline:auto;text-align:center">
+  <span class="state-icon" aria-hidden="true">
+    <img class="ui-icon ui-icon--brand" src="/assets/icons/credit-card.svg" alt="" />
+  </span>
+  <span class="badge badge-warning">Тестовый режим</span>
+  <h1 class="page-title" style="margin:18px auto 10px">Подтвердите тестовую оплату</h1>
+  <p class="page-lead" style="margin-inline:auto">Реального списания не будет. После подтверждения начнётся генерация мувика.</p>
+  <p class="checkout-total" style="margin:26px 0">$1.00 <span class="muted" style="font-size:14px">USD</span></p>
+  <form method="post" asp-antiforgery="true" style="display:flex;justify-content:center;gap:10px;flex-wrap:wrap">
+    <button class="btn btn-primary btn-lg" name="decision" value="success">
+      <img class="ui-icon" src="/assets/icons/check-circle-2.svg" alt="" />
+      Подтвердить оплату
+    </button>
+    <button class="btn btn-secondary btn-lg" name="decision" value="decline">Отклонить</button>
+  </form>
 </section>

@@ -19,8 +19,10 @@ public sealed class BrowserFlowTests
         await page.GotoAsync(baseUrl!);
 
         await Assertions.Expect(page.Locator("h1"))
-            .ToContainTextAsync("Соберите лучшие моменты");
+            .ToContainTextAsync("Преврати свои лучшие моменты");
         await Assertions.Expect(page.Locator("input[type=file][multiple]")).ToHaveCountAsync(1);
+        await Assertions.Expect(page.GetByRole(AriaRole.Link, new() { Name = "cshighlighter — на главную" }))
+            .ToHaveCountAsync(1);
     }
 
     [Fact(Timeout = 1_200_000)]
@@ -45,7 +47,7 @@ public sealed class BrowserFlowTests
 
         await page.GotoAsync(baseUrl);
         await page.Locator("#demos").SetInputFilesAsync(demos);
-        await page.GetByRole(AriaRole.Button, new() { Name = "Загрузить и проанализировать" })
+        await page.GetByRole(AriaRole.Button, new() { Name = "Загрузить и найти моменты" })
             .ClickAsync();
         await page.WaitForURLAsync(url => url.Contains("/generations/", StringComparison.Ordinal));
         await ClickWhenAvailableAsync(page, "Выбрать игрока");
@@ -55,9 +57,8 @@ public sealed class BrowserFlowTests
             ? page.Locator("input[type=radio][name=SteamId]").First
             : page.Locator($"input[type=radio][name=SteamId][value='{steamId}']");
         await player.CheckAsync();
-        await page.GetByRole(AriaRole.Button, new() { Name = "Продолжить к оплате" })
-            .ClickAsync();
-        await page.GetByRole(AriaRole.Button, new() { Name = "Top 3" }).ClickAsync();
+        await page.Locator("[data-player-submit]").ClickAsync();
+        await page.GetByRole(AriaRole.Button, new() { Name = "Топ-3" }).ClickAsync();
         await page.Locator("input[name=EffectPreset][value=Dynamic]").CheckAsync();
         await page.Locator("#selection-form button[type=submit]").ClickAsync();
 
@@ -66,15 +67,15 @@ public sealed class BrowserFlowTests
         await page.GetByRole(AriaRole.Button, new() { Name = "Проанализировать музыку" })
             .ClickAsync();
         await ClickWhenAvailableAsync(page, "Музыка и стиль");
-        await Assertions.Expect(page.Locator("text=BPM:")).ToHaveCountAsync(1);
-        await page.Locator("select[name=MovieStyle]").SelectOptionAsync("Dynamic");
-        await page.Locator("select[name=SyncIntensity]").SelectOptionAsync("Expressive");
-        await page.Locator("select[name=ColorGrade]").SelectOptionAsync("CinematicCool");
+        await Assertions.Expect(page.GetByText("Трек проанализирован")).ToHaveCountAsync(1);
+        await page.Locator("input[name=MovieStyle][value=Dynamic]").CheckAsync();
+        await page.Locator("input[name=SyncIntensity][value=Expressive]").CheckAsync();
+        await page.Locator("input[name=ColorGrade][value=CinematicCool]").CheckAsync();
         await page.GetByRole(AriaRole.Button, new() { Name = "Продолжить к оплате" })
             .ClickAsync();
-        await Assertions.Expect(page.GetByText("$1.00 USD")).ToHaveCountAsync(1);
+        await Assertions.Expect(page.GetByText("$1.00")).ToHaveCountAsync(1);
         await page.GetByRole(AriaRole.Button, new() { Name = "Оплатить $1" }).ClickAsync();
-        await page.GetByRole(AriaRole.Button, new() { Name = "Успешная оплата" }).ClickAsync();
+        await page.GetByRole(AriaRole.Button, new() { Name = "Подтвердить оплату" }).ClickAsync();
 
         await page.Locator("#video-result:not([hidden])").WaitForAsync(
             new LocatorWaitForOptions
@@ -83,7 +84,7 @@ public sealed class BrowserFlowTests
                 Timeout = 900_000
             });
         await Assertions.Expect(page.Locator("#status"))
-            .ToContainTextAsync("Completed", new() { Timeout = 10_000 });
+            .ToContainTextAsync("Готово", new() { Timeout = 10_000 });
         IDownload download = await page.RunAndWaitForDownloadAsync(async () =>
             await page.GetByRole(AriaRole.Link, new() { Name = "Скачать MP4" }).ClickAsync());
         Assert.EndsWith(".mp4", download.SuggestedFilename, StringComparison.OrdinalIgnoreCase);
@@ -93,7 +94,7 @@ public sealed class BrowserFlowTests
         await page.GotoAsync($"{baseUrl}/generations/{publicId}/music");
         await page.WaitForURLAsync(url =>
             !url.EndsWith("/music", StringComparison.OrdinalIgnoreCase));
-        await Assertions.Expect(page.Locator("form select[name=MovieStyle]")).ToHaveCountAsync(0);
+        await Assertions.Expect(page.Locator("form input[name=MovieStyle]")).ToHaveCountAsync(0);
     }
 
     private static async Task ClickWhenAvailableAsync(IPage page, string label)

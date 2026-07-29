@@ -1,0 +1,20 @@
+@model UiState
+<section class="surface error-state">
+  <div>
+    <span class="state-icon" aria-hidden="true">
+      <img class="ui-icon" src="/assets/icons/@(Model.Icon).svg" alt="" />
+    </span>
+    <h1 class="section-title">@Model.Title</h1>
+    <p class="page-lead">@Model.Description</p>
+    @if (Model.Reference is not null)
+    {
+      <p class="muted">Код для поддержки: <code>@Model.Reference</code></p>
+    }
+    @if (Model.ActionText is not null && Model.ActionUrl is not null)
+    {
+      <p style="margin-top:22px">
+        <a class="btn btn-primary" href="@Model.ActionUrl">@Model.ActionText</a>
+      </p>
+    }
+  </div>
+</section>

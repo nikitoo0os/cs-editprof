@@ -2,29 +2,62 @@
 @model CheckoutModel
 @{
   ViewData["Title"] = "Оплата";
-  TimeSpan duration = TimeSpan.FromMilliseconds(
-    Model.Generation.EstimatedDurationMilliseconds);
+  ViewData["CurrentStep"] = 5;
+  TimeSpan duration = TimeSpan.FromMilliseconds(Model.Generation.EstimatedDurationMilliseconds);
 }
-<section class="card">
-  <h1>Проверка заказа</h1>
-  <div class="grid">
-    <p>
-      Игрок: <strong>@Model.Generation.SelectedPlayerName</strong><br />
-      <span class="muted">@Model.Generation.SelectedSteamId</span>
-    </p>
-    <p>Загружено демок: @Model.DemoCount</p>
-    <p>Выбрано моментов: @Model.SelectedCount</p>
-    <p>Категории: @string.Join(", ", Model.Categories)</p>
-    <p>Примерная длительность: ≈ @duration.Minutes:@duration.Seconds.ToString("00")</p>
-    <p>
-      Формат: @Model.Generation.Width×@Model.Generation.Height,
-      @Model.Generation.Fps FPS
-    </p>
-    <p>Эффекты: @Model.Generation.EffectPreset</p>
-    <p>Итого: <strong>$1.00 USD</strong></p>
+<section>
+  <header class="page-header">
+    <div>
+      <p class="page-eyebrow">Шаг 5 · Проверка заказа</p>
+      <h1 class="page-title">Всё готово к генерации</h1>
+      <p class="page-lead">Проверь параметры. После тестовой оплаты начнётся запись и финальный монтаж.</p>
+    </div>
+    <span class="badge badge-warning">Тестовая оплата</span>
+  </header>
+
+  <div class="section-grid-sidebar">
+    <section class="surface surface-pad">
+      <span class="badge badge-brand">Ваш мувик</span>
+      <h2 class="section-title" style="margin-top:14px">Параметры генерации</h2>
+      <div class="checkout-list" style="margin-top:16px">
+        <div class="checkout-row"><span class="muted">Игрок</span><strong>@Model.Generation.SelectedPlayerName</strong></div>
+        <div class="checkout-row"><span class="muted">Демки</span><strong>@Model.DemoCount</strong></div>
+        <div class="checkout-row"><span class="muted">Моменты</span><strong>@Model.SelectedCount</strong></div>
+        <div class="checkout-row">
+          <span class="muted">Категории</span>
+          <strong style="text-align:right">@string.Join(", ", Model.Categories.Select(UiText.HighlightType))</strong>
+        </div>
+        <div class="checkout-row"><span class="muted">Длительность</span><strong>≈ @duration.Minutes:@duration.Seconds.ToString("00")</strong></div>
+        <div class="checkout-row"><span class="muted">Формат</span><strong>@Model.Generation.Width×@Model.Generation.Height · @Model.Generation.Fps FPS</strong></div>
+        <div class="checkout-row"><span class="muted">Эффекты</span><strong>@UiText.Effect(Model.Generation.EffectPreset)</strong></div>
+        <div class="checkout-row"><span class="muted">Музыка</span><strong>Проанализирована</strong></div>
+      </div>
+    </section>
+
+    <aside class="surface surface--elevated surface-pad sticky-panel">
+      <span class="badge badge-success">
+        <img class="ui-icon" src="/assets/icons/shield-check.svg" alt="" />
+        Без скрытых платежей
+      </span>
+      <h2 class="section-title" style="margin-top:16px">Одна генерация</h2>
+      <p class="checkout-total">$1.00</p>
+      <ul class="benefit-list" style="margin-top:18px">
+        <li class="benefit">✓ Запись всех выбранных моментов</li>
+        <li class="benefit">✓ Эффекты, цвет и музыка</li>
+        <li class="benefit">✓ Готовый MP4 для скачивания</li>
+      </ul>
+      <form method="post" asp-antiforgery="true" data-loading-form>
+        <button type="submit"
+                class="btn btn-primary btn-lg btn-block"
+                style="margin-top:24px"
+                data-loading-label="Открываем оплату…">
+          <img class="ui-icon" src="/assets/icons/credit-card.svg" alt="" />
+          Оплатить $1
+        </button>
+      </form>
+      <p class="muted" style="margin:14px 0 0;font-size:11px;line-height:1.5">
+        Денежные средства не списываются: в текущей сборке используется тестовый платёж.
+      </p>
+    </aside>
   </div>
-  <p class="muted">Длительность приблизительная и уточняется после рендера.</p>
-  <form method="post" asp-antiforgery="true">
-    <button type="submit">Оплатить $1</button>
-  </form>
 </section>

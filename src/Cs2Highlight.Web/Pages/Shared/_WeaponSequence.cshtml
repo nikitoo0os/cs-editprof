@@ -1,0 +1,16 @@
+@model IReadOnlyList<Cs2Highlight.Analysis.WeaponSequenceSegment>
+<div class="weapon-sequence" aria-label="Последовательность оружия">
+  @foreach (Cs2Highlight.Analysis.WeaponSequenceSegment weapon in Model)
+  {
+    @if (weapon.SwapBefore)
+    {
+      <span class="swap" aria-label="Смена оружия">
+        <span aria-hidden="true">→</span> СМЕНА <span aria-hidden="true">→</span>
+      </span>
+    }
+    <span class="weapon">
+      <img src="@weapon.IconPath" alt="" width="50" height="28" />
+      @weapon.DisplayName@if (weapon.KillCount > 1) { <text> ×@weapon.KillCount</text> }
+    </span>
+  }
+</div>

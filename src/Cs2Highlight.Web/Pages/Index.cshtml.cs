@@ -18,6 +18,7 @@ public sealed class IndexModel(
 {
     [BindProperty] public List<IFormFile> DemoFiles { get; set; } = [];
     public int MaximumFiles => options.MaximumFilesPerGeneration;
+    public long MaximumFileSizeBytes => options.MaximumFileSizeBytes;
     public string? Error { get; private set; }
 
     public void OnGet() { }

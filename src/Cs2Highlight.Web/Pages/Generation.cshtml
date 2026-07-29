@@ -1,89 +1,239 @@
 @page "/generations/{publicId}"
 @model GenerationModel
 @{
-  ViewData["Title"] = "Статус генерации";
+  ViewData["Title"] = "Генерация мувика";
+  ViewData["CurrentStep"] = UiText.Step(Model.Generation.Status);
   bool completed = Model.Generation.Status is
     GenerationStatus.Completed or GenerationStatus.CompletedWithWarnings;
+  bool terminalFailure = Model.Generation.Status is
+    GenerationStatus.Failed or GenerationStatus.Cancelled or GenerationStatus.Expired;
+  int progress = Model.Generation.ProgressPercent;
+  UiStatCard demoStat = new("Демки", Model.DemoCount.ToString(), "files", "demo-count");
+  UiStatCard playerStat = new("Игроки", Model.PlayerCount.ToString(), "users-round", "player-count");
+  UiStatCard highlightStat = new("Моменты", Model.HighlightCount.ToString(), "crosshair", "highlight-count");
+  VideoPlayerViewModel videoPlayer = new(Model.Generation.PublicId, "Готовый CS2-мувик");
 }
-<section class="card"
-         data-generation-status
+<section data-generation-status
          data-public-id="@Model.Generation.PublicId">
-  <h1 id="generation-stage">@Model.Generation.CurrentStage</h1>
-  <p>Статус: <strong id="status">@Model.Generation.Status</strong></p>
-  <div class="progress" aria-label="Прогресс">
-    <div id="bar" style="width:@Model.Generation.ProgressPercent%"></div>
+  <div id="generation-progress-view" hidden="@completed">
+    <header class="page-header">
+      <div>
+        <p class="page-eyebrow">Live · Без перезагрузки</p>
+        <h1 class="page-title" id="generation-stage">@UiText.Status(Model.Generation.Status)</h1>
+        <p class="page-lead" id="status" aria-live="polite">@UiText.Status(Model.Generation.Status)</p>
+      </div>
+      <span class="badge @(terminalFailure ? "badge-warning" : "badge-brand")">
+        @(terminalFailure ? "Нужно действие" : "В процессе")
+      </span>
+    </header>
+
+    <section class="surface surface--elevated surface-pad generation-hero">
+      <div>
+        <span class="progress-number"><span id="progress-value">@progress</span><span>%</span></span>
+        <p class="subtle" style="margin:16px 0 18px">Создаём ваш мувик и сразу показываем каждый новый этап.</p>
+        <div class="progress-track"
+             role="progressbar"
+             aria-label="Прогресс генерации"
+             aria-valuemin="0"
+             aria-valuemax="100"
+             aria-valuenow="@progress">
+          <div class="progress-value" id="bar" style="width:@progress%"></div>
+        </div>
+      </div>
+      <div id="next-action">
+        @if (Model.Generation.Status == GenerationStatus.AwaitingPlayerSelection)
+        {
+          <a class="btn btn-primary btn-lg"
+             asp-page="/Player"
+             asp-route-publicId="@Model.Generation.PublicId">Выбрать игрока</a>
+        }
+        else if (Model.Generation.Status == GenerationStatus.AwaitingHighlightSelection)
+        {
+          <a class="btn btn-primary btn-lg"
+             asp-page="/Highlights"
+             asp-route-publicId="@Model.Generation.PublicId">Выбрать моменты</a>
+        }
+        else if (Model.Generation.Status is
+          GenerationStatus.AwaitingMusicUpload or
+          GenerationStatus.AwaitingMovieConfiguration)
+        {
+          <a class="btn btn-primary btn-lg"
+             asp-page="/Music"
+             asp-route-publicId="@Model.Generation.PublicId">Музыка и стиль</a>
+        }
+      </div>
+    </section>
+
+    <div class="stats-grid" style="margin-top:16px">
+      <partial name="_StatCard" model="demoStat" />
+      <partial name="_StatCard" model="playerStat" />
+      <partial name="_StatCard" model="highlightStat" />
+    </div>
+
+    <section class="surface surface-pad" style="margin-top:18px">
+      <div class="page-header" style="margin-bottom:22px">
+        <div>
+          <span class="badge">Этапы</span>
+          <h2 class="section-title" style="margin-top:12px">Как собирается видео</h2>
+        </div>
+      </div>
+      <div class="generation-stage-grid" data-generation-stages>
+        @{
+          (string Label, int Threshold)[] stages =
+          [
+            ("Анализ моментов", 18),
+            ("Анализ музыки", 38),
+            ("Монтажный план", 50),
+            ("Рендер клипов", 72),
+            ("Синхронизация", 82),
+            ("Цвет и звук", 94),
+            ("Финальная проверка", 99),
+            ("Готово", 100)
+          ];
+        }
+        @foreach (var stage in stages)
+        {
+          string stageClass = progress >= stage.Threshold
+            ? "is-complete"
+            : progress + 16 >= stage.Threshold
+              ? "is-current"
+              : string.Empty;
+          <article class="generation-stage-card @stageClass">
+            <span class="timeline__dot">@(progress >= stage.Threshold ? "✓" : "•")</span>
+            <strong style="display:block;margin-top:11px;font-size:13px">@stage.Label</strong>
+          </article>
+        }
+      </div>
+    </section>
+
+    <div id="generation-error"
+         class="surface error-state"
+         style="margin-top:18px"
+         hidden="@(Model.Generation.ErrorCode is null)">
+      <div>
+        <span class="state-icon">
+          <img class="ui-icon" src="/assets/icons/alert-triangle.svg" alt="" />
+        </span>
+        <h2 class="section-title">Не удалось завершить текущий этап</h2>
+        <p class="page-lead" data-error-message>
+          @(Model.Generation.ErrorMessage ?? "Попробуйте повторить генерацию.")
+        </p>
+        <p class="muted">Код для поддержки: <code data-error-reference>@Model.Generation.ErrorCode</code></p>
+        @if (Model.CanRetry)
+        {
+          <form method="post"
+                asp-page-handler="Retry"
+                asp-antiforgery="true"
+                data-loading-form
+                style="margin-top:20px">
+            <button class="btn btn-primary" type="submit" data-loading-label="Повторяем…">Повторить генерацию</button>
+          </form>
+        }
+      </div>
+    </div>
+
+    <section class="surface surface-pad" style="margin-top:18px">
+      <details class="details-panel">
+        <summary>Диагностика и технические детали</summary>
+        <div id="event-feed" class="technical-log" aria-live="polite" style="margin-top:12px">
+          <p>@progress% · @UiText.Event(Model.Generation.CurrentStage)</p>
+        </div>
+      </details>
+
+      @if (!terminalFailure && !completed)
+      {
+        <button class="btn btn-danger"
+                type="button"
+                data-modal-target="cancel-dialog"
+                data-modal-toggle="cancel-dialog"
+                style="margin-top:18px">
+          Отменить генерацию
+        </button>
+      }
+    </section>
   </div>
-  <p><span id="progress-value">@Model.Generation.ProgressPercent</span>%</p>
-  <div class="grid">
-    <p>Демок: <span id="demo-count">@Model.DemoCount</span></p>
-    <p>Игроков: <span id="player-count">@Model.PlayerCount</span></p>
-    <p>Моментов: <span id="highlight-count">@Model.HighlightCount</span></p>
-  </div>
 
-  <div id="next-action">
-    @if (Model.Generation.Status == GenerationStatus.AwaitingPlayerSelection)
-    {
-      <a class="button"
-         asp-page="/Player"
-         asp-route-publicId="@Model.Generation.PublicId">Выбрать игрока</a>
-    }
-    else if (Model.Generation.Status == GenerationStatus.AwaitingHighlightSelection)
-    {
-      <a class="button"
-         asp-page="/Highlights"
-         asp-route-publicId="@Model.Generation.PublicId">Выбрать моменты</a>
-    }
-    else if (Model.Generation.Status is
-      GenerationStatus.AwaitingMusicUpload or
-      GenerationStatus.AwaitingMovieConfiguration)
-    {
-      <a class="button"
-         asp-page="/Music"
-         asp-route-publicId="@Model.Generation.PublicId">Музыка и стиль</a>
-    }
-  </div>
+  <section id="video-result"
+           data-video-result
+           class="result-workspace"
+           hidden="@(!completed)">
+    <header class="page-header">
+      <div>
+        <p class="page-eyebrow">Готово · MP4</p>
+        <h1 class="page-title">Ваш мувик готов</h1>
+        <p class="page-lead">@Model.HighlightCount моментов · @Model.DemoCount матчей · готово к просмотру и скачиванию</p>
+      </div>
+      <span class="state-icon" style="margin:0">
+        <img class="ui-icon ui-icon--brand" src="/assets/icons/check-circle-2.svg" alt="" />
+      </span>
+    </header>
 
-  <div id="video-result" hidden="@(!completed)">
-    <h2>Готовое видео</h2>
-    <video controls
-           preload="metadata"
-           src="/generations/@Model.Generation.PublicId/video"></video>
-    <p>
-      <a class="button"
-         href="/generations/@Model.Generation.PublicId/video?download=true">Скачать MP4</a>
-    </p>
-  </div>
+    <partial name="_VideoPlayer" model="videoPlayer" />
 
-  <p id="generation-error"
-     class="error"
-     hidden="@(Model.Generation.ErrorCode is null)">
-    @if (Model.Generation.ErrorCode is not null)
-    {
-      <text>@Model.Generation.ErrorCode: @Model.Generation.ErrorMessage</text>
-    }
-  </p>
-
-  <div id="event-feed" aria-live="polite"></div>
-
-  @if (Model.CanRetry)
-  {
-    <form method="post" asp-page-handler="Retry" asp-antiforgery="true">
-      <button type="submit">Повторить генерацию</button>
-    </form>
-  }
-  @if (Model.Generation.Status is not (
-    GenerationStatus.Completed or
-    GenerationStatus.CompletedWithWarnings or
-    GenerationStatus.Cancelled or
-    GenerationStatus.Failed or
-    GenerationStatus.Expired))
-  {
-    <form method="post" asp-page-handler="Cancel" asp-antiforgery="true">
-      <button type="submit">Отменить</button>
-    </form>
-  }
+    <div class="result-meta-grid">
+      <section class="surface surface-pad">
+        <h2 class="section-title">О мувике</h2>
+        <dl class="definition-grid" style="margin-top:16px">
+          <div><dt>Игрок</dt><dd>@(Model.Generation.SelectedPlayerName ?? "Выбранный игрок")</dd></div>
+          <div><dt>Моменты</dt><dd>@Model.HighlightCount</dd></div>
+          <div><dt>Качество</dt><dd>@Model.Generation.Width×@Model.Generation.Height · @Model.Generation.Fps FPS</dd></div>
+          <div><dt>Эффекты</dt><dd>@UiText.Effect(Model.Generation.EffectPreset)</dd></div>
+          <div><dt>Создан</dt><dd>@(Model.Generation.GenerationCompletedAt?.ToLocalTime().ToString("dd.MM.yyyy, HH:mm") ?? "только что")</dd></div>
+          <div><dt>Формат</dt><dd>MP4</dd></div>
+        </dl>
+        <details class="details-panel" style="margin-top:20px">
+          <summary>Детали генерации</summary>
+          <p class="muted">Идентификатор: @Model.Generation.PublicId</p>
+        </details>
+      </section>
+      <aside class="surface surface--elevated surface-pad">
+        <h2 class="section-title">Готово к игре</h2>
+        <p class="muted">Скачай файл или создай ещё один мувик с другими моментами.</p>
+        <div class="action-stack" style="margin-top:20px">
+          <a class="btn btn-primary btn-lg btn-block"
+             href="/generations/@Model.Generation.PublicId/video?download=true">
+            <img class="ui-icon" src="/assets/icons/download.svg" alt="" />
+            Скачать MP4
+          </a>
+          <a class="btn btn-secondary btn-block" asp-page="/Index">
+            <img class="ui-icon" src="/assets/icons/plus.svg" alt="" />
+            Создать ещё один мувик
+          </a>
+        </div>
+      </aside>
+    </div>
+  </section>
 </section>
+
+<div id="cancel-dialog"
+     class="fixed left-0 right-0 top-0 z-[100] hidden h-[calc(100%-1rem)] max-h-full w-full overflow-y-auto overflow-x-hidden p-4 md:inset-0"
+     tabindex="-1"
+     role="dialog"
+     aria-modal="true"
+     aria-labelledby="cancel-dialog-title"
+     aria-hidden="true">
+  <div class="relative max-h-full w-full max-w-md">
+    <div class="surface surface-pad relative">
+      <button type="button"
+              class="icon-button absolute end-3 top-3"
+              data-modal-hide="cancel-dialog"
+              aria-label="Закрыть">
+        <img class="ui-icon" src="/assets/icons/x.svg" alt="" />
+      </button>
+      <h2 class="section-title" id="cancel-dialog-title">Отменить генерацию?</h2>
+      <p class="muted">Готовые промежуточные клипы сохранятся только по внутренним правилам хранения.</p>
+      <div style="display:flex;gap:10px;margin-top:20px">
+        <form method="post" asp-page-handler="Cancel" asp-antiforgery="true">
+          <button class="btn btn-danger" type="submit">Да, отменить</button>
+        </form>
+        <button class="btn btn-secondary" type="button" data-modal-hide="cancel-dialog">Продолжить генерацию</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 @section Scripts {
-<script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js"></script>
-<script src="/js/generation-status.js"></script>
+  <script src="/js/vendor/signalr.min.js"></script>
+  <script type="module" src="/js/generation-progress.js"></script>
+  <script type="module" src="/js/video-result.js"></script>
 }

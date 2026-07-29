@@ -1,0 +1,8 @@
+@model UiStatCard
+<article class="stat-card">
+  <span class="stat-card__label">
+    <img class="ui-icon" src="/assets/icons/@(Model.Icon).svg" alt="" />
+    @Model.Label
+  </span>
+  <strong class="stat-card__value" id="@Model.ValueId">@Model.Value</strong>
+</article>

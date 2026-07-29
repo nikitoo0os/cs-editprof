@@ -1,0 +1,7 @@
+@model VideoPlayerViewModel
+<div class="video-frame">
+  <video controls
+         preload="metadata"
+         aria-label="@Model.AccessibleTitle"
+         src="/generations/@Model.PublicId/video"></video>
+</div>

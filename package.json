@@ -1,0 +1,21 @@
+{
+  "name": "cshighlighter-web-ui",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Frontend build pipeline for the cshighlighter Razor Pages application.",
+  "scripts": {
+    "css:build": "tailwindcss -i ./src/Cs2Highlight.Web/Styles/app.css -o ./src/Cs2Highlight.Web/wwwroot/css/app.generated.css --minify",
+    "css:watch": "tailwindcss -i ./src/Cs2Highlight.Web/Styles/app.css -o ./src/Cs2Highlight.Web/wwwroot/css/app.generated.css --watch",
+    "vendor:sync": "node ./scripts/sync-web-vendor.mjs",
+    "ui:build": "npm run vendor:sync && npm run css:build"
+  },
+  "devDependencies": {
+    "@tailwindcss/cli": "4.3.3",
+    "flowbite": "4.0.2",
+    "lucide-static": "1.27.0",
+    "tailwindcss": "4.3.3"
+  },
+  "dependencies": {
+    "@microsoft/signalr": "8.0.7"
+  }
+}

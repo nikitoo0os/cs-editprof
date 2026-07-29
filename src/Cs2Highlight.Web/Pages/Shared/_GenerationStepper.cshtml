@@ -1,0 +1,28 @@
+@{
+  int current = ViewData["CurrentStep"] as int? ?? 0;
+  (string Label, string ShortLabel)[] steps =
+  [
+    ("Демки", "1"),
+    ("Игрок", "2"),
+    ("Моменты", "3"),
+    ("Музыка", "4"),
+    ("Оплата", "5"),
+    ("Мувик", "6")
+  ];
+}
+<nav class="generation-stepper" aria-label="Этапы создания мувика">
+  <ol class="app-container generation-stepper__list">
+    @for (int index = 0; index < steps.Length; index++)
+    {
+      int number = index + 1;
+      string stateClass = number < current ? "is-complete" : number == current ? "is-active" : string.Empty;
+      <li class="generation-stepper__item @stateClass"
+          aria-current="@(number == current ? "step" : null)">
+        <span class="generation-stepper__index" aria-hidden="true">
+          @(number < current ? "✓" : steps[index].ShortLabel)
+        </span>
+        <span class="generation-stepper__label">@steps[index].Label</span>
+      </li>
+    }
+  </ol>
+</nav>

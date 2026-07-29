@@ -2,59 +2,230 @@
 @model MusicModel
 @{
   ViewData["Title"] = "Музыка и стиль";
+  ViewData["CurrentStep"] = 4;
 }
-<section class="card">
-  <h1>Музыка и стиль мувика</h1>
-  <div asp-validation-summary="All" class="error"></div>
+<section>
+  <header class="page-header">
+    <div>
+      <p class="page-eyebrow">Шаг 4 · Музыка и монтаж</p>
+      <h1 class="page-title">Задайте ритм вашему мувику</h1>
+      <p class="page-lead">Добавь трек, а затем выбери стиль, интенсивность синхронизации и цвет.</p>
+    </div>
+    <span class="badge badge-brand">
+      <img class="ui-icon ui-icon--brand" src="/assets/icons/music-2.svg" alt="" />
+      Монтаж в ритм
+    </span>
+  </header>
+
+  <div asp-validation-summary="All" class="validation-summary-errors" role="alert"></div>
 
   @if (Model.Generation.Status == GenerationStatus.AwaitingMusicUpload)
   {
-    <form method="post" asp-page-handler="Upload" enctype="multipart/form-data">
-      <label asp-for="MusicFile">Музыкальный трек</label>
-      <input asp-for="MusicFile" type="file" accept=".mp3,.wav,.flac,.m4a,.aac" required />
-      <label class="rights-confirmation">
-        <input asp-for="RightsConfirmed" type="checkbox" required />
-        Я подтверждаю, что имею право использовать загруженный аудиофайл для создания этого видео.
-      </label>
-      <p class="muted">Это подтверждение пользователя, а не юридическая проверка лицензии.</p>
-      <button type="submit">Проанализировать музыку</button>
-    </form>
+    <div class="section-grid-2" data-music-upload>
+      <form class="surface surface-pad"
+            method="post"
+            asp-page-handler="Upload"
+            enctype="multipart/form-data"
+            data-loading-form>
+        <span class="badge badge-brand">Музыкальный файл</span>
+        <label class="upload-zone" for="MusicFile" style="min-height:330px;margin-top:16px">
+          <input class="upload-zone__input"
+                 asp-for="MusicFile"
+                 type="file"
+                 accept=".mp3,.wav,.flac,.m4a,.aac"
+                 required />
+          <span>
+            <span class="upload-zone__icon">
+              <img class="ui-icon ui-icon--brand" src="/assets/icons/headphones.svg" alt="" />
+            </span>
+            <strong class="section-title" style="display:block">Перетащи сюда трек</strong>
+            <span class="subtle" data-music-file-name>MP3, WAV, FLAC, M4A или AAC</span>
+            <span class="muted" style="display:block;margin-top:12px;font-size:12px">До 200 МБ</span>
+          </span>
+        </label>
+        <label style="display:flex;align-items:flex-start;gap:11px;margin-top:18px">
+          <input asp-for="RightsConfirmed"
+                 type="checkbox"
+                 required
+                 style="width:20px;height:20px;accent-color:#22d3ee" />
+          <span class="subtle" style="font-size:13px;line-height:1.55">
+            Я подтверждаю, что имею право использовать этот трек в создаваемом видео.
+          </span>
+        </label>
+        <button type="submit"
+                class="btn btn-primary btn-lg btn-block"
+                style="margin-top:18px"
+                data-loading-label="Анализируем музыку…">
+          <img class="ui-icon" src="/assets/icons/wand-sparkles.svg" alt="" />
+          Проанализировать музыку
+        </button>
+      </form>
+
+      <aside class="surface surface--elevated surface-pad">
+        <span class="badge badge-violet">Что произойдёт</span>
+        <h2 class="section-title" style="margin-top:14px">Найдём сильные музыкальные акценты</h2>
+        <p class="page-lead">cshighlighter определит темп, биты и дропы, чтобы ключевые убийства совпали с музыкой.</p>
+        <ul class="timeline" style="margin-top:28px">
+          <li class="timeline__item is-current"><span class="timeline__dot">1</span><span>Загрузка и проверка трека</span></li>
+          <li class="timeline__item"><span class="timeline__dot">2</span><span>Определение темпа и сильных битов</span></li>
+          <li class="timeline__item"><span class="timeline__dot">3</span><span>Подготовка вариантов синхронизации</span></li>
+        </ul>
+      </aside>
+    </div>
   }
   else if (Model.Generation.Status == GenerationStatus.AnalyzingMusic)
   {
-    <p>Анализируем ритм и вероятные сильные музыкальные акценты…</p>
-    <a class="button" asp-page="/Generation" asp-route-publicId="@Model.Generation.PublicId">Статус</a>
+    <section class="surface surface-pad" aria-busy="true">
+      <div class="section-grid-2">
+        <div>
+          <span class="badge badge-brand">Анализируем трек</span>
+          <h2 class="section-title" style="margin-top:14px">Ищем ритм и музыкальные акценты</h2>
+          <p class="page-lead">Обычно это занимает меньше минуты. Страница обновится автоматически.</p>
+          <div class="progress-track" style="margin-top:24px"><div class="progress-value" style="width:64%"></div></div>
+          <p style="margin-top:22px">
+            <a class="btn btn-secondary" asp-page="/Generation" asp-route-publicId="@Model.Generation.PublicId">Открыть общий прогресс</a>
+          </p>
+        </div>
+        <div class="waveform" aria-hidden="true">
+          @for (int index = 0; index < 34; index++)
+          {
+            int height = 18 + ((index * 17) % 62);
+            <span style="height:@height%"></span>
+          }
+        </div>
+      </div>
+    </section>
   }
   else if (Model.Generation.Status == GenerationStatus.AwaitingMovieConfiguration && Model.Music is not null)
   {
-    <div class="grid">
-      <p>Длительность: @TimeSpan.FromMilliseconds(Model.Music.DurationMilliseconds).ToString(@"m\:ss")</p>
-      <p>BPM: @(Model.Music.TempoBpm?.ToString("0.#") ?? "не определён")</p>
-      <p>Beats: @Model.BeatCount</p>
-      <p>Сильных акцентов: @Model.StrongAnchorCount</p>
-      <p>Вероятных сильных музыкальных акцентов: @Model.DropCount</p>
+    <div class="section-grid-sidebar" data-movie-settings>
+      <form class="surface surface-pad"
+            method="post"
+            asp-page-handler="Configure"
+            data-loading-form>
+        <section>
+          <span class="badge badge-brand">Стиль монтажа</span>
+          <h2 class="section-title" style="margin-top:13px">Как должен ощущаться мувик</h2>
+          <div class="option-grid" style="margin-top:16px">
+            <label class="option-card">
+              <input asp-for="MovieStyle" type="radio" value="Clean" />
+              <img class="ui-icon" src="/assets/icons/film.svg" alt="" />
+              <strong>Чистый</strong>
+              <small>Минимум эффектов и фокус на игре.</small>
+            </label>
+            <label class="option-card">
+              <input asp-for="MovieStyle" type="radio" value="Dynamic" />
+              <img class="ui-icon ui-icon--brand" src="/assets/icons/wand-sparkles.svg" alt="" />
+              <strong>Динамичный</strong>
+              <small>Быстрый ритм, зумы и яркие акценты.</small>
+            </label>
+            <label class="option-card">
+              <input asp-for="MovieStyle" type="radio" value="Cinematic" />
+              <img class="ui-icon" src="/assets/icons/video.svg" alt="" />
+              <strong>Кинематографичный</strong>
+              <small>Плавный монтаж и атмосферный цвет.</small>
+            </label>
+          </div>
+        </section>
+
+        <section style="margin-top:30px">
+          <span class="badge">Синхронизация</span>
+          <div class="option-grid" style="margin-top:14px">
+            <label class="option-card" style="min-height:110px">
+              <input asp-for="SyncIntensity" type="radio" value="Soft" />
+              <strong>Мягкая</strong>
+              <small>Музыка поддерживает монтаж, не меняя темп игры.</small>
+            </label>
+            <label class="option-card" style="min-height:110px">
+              <input asp-for="SyncIntensity" type="radio" value="Expressive" />
+              <strong>Выраженная</strong>
+              <small>Основные убийства попадают в сильные доли.</small>
+            </label>
+            <label class="option-card" style="min-height:110px">
+              <input asp-for="SyncIntensity" type="radio" value="Aggressive" />
+              <strong>Агрессивная</strong>
+              <small>Максимум ритмических акцентов и ускорений.</small>
+            </label>
+          </div>
+        </section>
+
+        <section style="margin-top:30px">
+          <span class="badge">Цвет</span>
+          <div class="option-grid" style="margin-top:14px">
+            @{
+              (ColorGradePreset Value, string Name, string Colors)[] colors =
+              [
+                (ColorGradePreset.Natural, "Естественный", "linear-gradient(90deg,#64748b,#93c5fd)"),
+                (ColorGradePreset.Competitive, "Соревновательный", "linear-gradient(90deg,#0ea5e9,#22d3ee)"),
+                (ColorGradePreset.CinematicCool, "Холодное кино", "linear-gradient(90deg,#312e81,#60a5fa)"),
+                (ColorGradePreset.CinematicWarm, "Тёплое кино", "linear-gradient(90deg,#9a3412,#fbbf24)"),
+                (ColorGradePreset.HighContrast, "Высокий контраст", "linear-gradient(90deg,#020617,#f8fafc)"),
+                (ColorGradePreset.Neon, "Неон", "linear-gradient(90deg,#7c3aed,#22d3ee)")
+              ];
+            }
+            @foreach (var color in colors)
+            {
+              <label class="option-card" style="min-height:105px">
+                <input asp-for="ColorGrade" type="radio" value="@color.Value" />
+                <span class="color-swatch" style="background:@color.Colors"></span>
+                <strong>@color.Name</strong>
+              </label>
+            }
+          </div>
+        </section>
+
+        <section class="section-grid-2" style="margin-top:30px">
+          <label>
+            <span class="form-label">Игровой звук: <strong data-range-value="GameplayGainPercent">@Model.GameplayGainPercent</strong>%</span>
+            <input class="form-range" asp-for="GameplayGainPercent" type="range" min="0" max="100" />
+          </label>
+          <label>
+            <span class="form-label">Музыка: <strong data-range-value="MusicGainPercent">@Model.MusicGainPercent</strong>%</span>
+            <input class="form-range" asp-for="MusicGainPercent" type="range" min="0" max="100" />
+          </label>
+        </section>
+        <label style="display:block;margin-top:20px">
+          <span class="form-label">Дополнительный цветовой профиль</span>
+          <select class="form-select" asp-for="LutAssetKey">
+            <option value="">Без дополнительного LUT</option>
+            @foreach (string lut in Model.AvailableLuts)
+            {
+              <option value="@lut">@lut</option>
+            }
+          </select>
+        </label>
+        <button type="submit"
+                class="btn btn-primary btn-lg"
+                style="margin-top:24px"
+                data-loading-label="Сохраняем настройки…">
+          Продолжить к оплате
+          <img class="ui-icon" src="/assets/icons/chevron-right.svg" alt="" />
+        </button>
+      </form>
+
+      <aside class="surface surface--elevated surface-pad sticky-panel">
+        <span class="badge badge-success">Трек проанализирован</span>
+        <h2 class="section-title" style="margin-top:14px;overflow-wrap:anywhere">@Model.Music.OriginalFileName</h2>
+        <div class="waveform" aria-label="Упрощённая визуализация ритма" style="margin:18px 0">
+          @for (int index = 0; index < 28; index++)
+          {
+            int height = 20 + ((index * 23) % 68);
+            <span style="height:@height%"></span>
+          }
+        </div>
+        <dl class="definition-grid" style="grid-template-columns:repeat(2,minmax(0,1fr))">
+          <div><dt>Длительность</dt><dd>@TimeSpan.FromMilliseconds(Model.Music.DurationMilliseconds).ToString(@"m\:ss")</dd></div>
+          <div><dt>Темп</dt><dd>@(Model.Music.TempoBpm?.ToString("0") ?? "—") BPM</dd></div>
+          <div><dt>Сильные акценты</dt><dd>@Model.StrongAnchorCount</dd></div>
+          <div><dt>Найденные дропы</dt><dd>@Model.DropCount</dd></div>
+        </dl>
+        <p class="muted" style="margin-top:18px">Оценочная длительность мувика: @Model.EstimatedDurationText</p>
+      </aside>
     </div>
-    <form method="post" asp-page-handler="Configure">
-      <label asp-for="MovieStyle">Стиль монтажа</label>
-      <select asp-for="MovieStyle" asp-items="Html.GetEnumSelectList<MovieStyle>()"></select>
-      <label asp-for="SyncIntensity">Синхронизация с музыкой</label>
-      <select asp-for="SyncIntensity" asp-items="Html.GetEnumSelectList<MusicSyncIntensity>()"></select>
-      <label asp-for="ColorGrade">Цвет</label>
-      <select asp-for="ColorGrade" asp-items="Html.GetEnumSelectList<ColorGradePreset>()"></select>
-      <label asp-for="LutAssetKey">Проверенный LUT (необязательно)</label>
-      <select asp-for="LutAssetKey">
-        <option value="">Без LUT</option>
-        @foreach (string lut in Model.AvailableLuts)
-        {
-          <option value="@lut">@lut</option>
-        }
-      </select>
-      <label asp-for="GameplayGainPercent">Игровой звук: <span id="gameplay-value">@Model.GameplayGainPercent</span>%</label>
-      <input asp-for="GameplayGainPercent" type="range" min="0" max="100" />
-      <label asp-for="MusicGainPercent">Музыка: <span id="music-value">@Model.MusicGainPercent</span>%</label>
-      <input asp-for="MusicGainPercent" type="range" min="0" max="100" />
-      <p>Оценочная длительность: @Model.EstimatedDurationText</p>
-      <button type="submit">Продолжить к оплате</button>
-    </form>
   }
 </section>
+
+@section Scripts {
+  <script type="module" src="/js/music-upload.js"></script>
+  <script type="module" src="/js/movie-settings.js"></script>
+}

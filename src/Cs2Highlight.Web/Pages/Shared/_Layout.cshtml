@@ -2,13 +2,32 @@
 <html lang="ru">
 <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>@ViewData["Title"] — CS2 Highlights</title>
-    <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#070b14" />
+    <meta name="description" content="cshighlighter — автоматический монтаж лучших моментов из CS2-демок." />
+    <title>@ViewData["Title"] — cshighlighter</title>
+    <link rel="stylesheet" href="~/css/app.generated.css" asp-append-version="true" />
 </head>
 <body>
-<header><a href="/">CS2 Highlight Generator</a><span>Одна генерация — $1.00</span></header>
-<main>@RenderBody()</main>
+<a class="skip-link" href="#main-content">Перейти к содержимому</a>
+<div class="app-shell">
+  <partial name="_AppHeader" />
+  <partial name="_GenerationStepper" />
+  <main id="main-content" class="app-main" tabindex="-1">
+    <div class="app-container">
+      @RenderBody()
+    </div>
+  </main>
+  <footer id="app-help" class="app-footer">
+    <div class="app-container app-footer__inner">
+      <span>cshighlighter · Ваши демки, ваш мувик</span>
+      <span>Файлы автоматически удаляются по правилам хранения</span>
+    </div>
+  </footer>
+</div>
+<partial name="_ToastHost" />
+<script src="/js/vendor/flowbite.min.js"></script>
+<script type="module" src="/js/app-shell.js"></script>
 @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

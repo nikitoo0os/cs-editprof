@@ -3,6 +3,8 @@ obj/
 .vs/
 TestResults/
 artifacts/
+node_modules/
+src/Cs2Highlight.Web/storage/
 appsettings.local.json
 *.user
 *.suo

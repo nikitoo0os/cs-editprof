@@ -167,10 +167,56 @@ Build the parser and solution, verify the render-agent environment, then start:
 
 ```powershell
 .\scripts\build-demo-parser.ps1
+npm install
+npm run ui:build
 dotnet build .\Cs2Highlight.RenderPoC.sln -c Release
 $env:ASPNETCORE_URLS = "http://127.0.0.1:5080"
 dotnet run --project .\src\Cs2Highlight.Web -c Release --no-build
 ```
+
+### cshighlighter frontend
+
+The Razor Pages UI uses Tailwind CSS 4, themed Flowbite primitives, a local
+SignalR browser client and a curated set of Lucide SVG icons. Production does
+not depend on a CDN. Source styles live in
+`src/Cs2Highlight.Web/Styles/app.css`; the minified build is written to
+`wwwroot/css/app.generated.css`.
+
+```powershell
+# One production build, including local vendor assets
+npm run ui:build
+
+# CSS development watch mode
+npm run css:watch
+```
+
+The page models, antiforgery protection, upload validation, payment flow and
+render pipeline remain server-side sources of truth. Client modules add file
+selection UX, filters, toasts, reconnect feedback and live progress without a
+page reload.
+
+The regular test suite includes markup, API and pipeline coverage:
+
+```powershell
+dotnet test .\Cs2Highlight.RenderPoC.sln -c Release
+```
+
+Opt-in Chromium smoke tests use a running local Web project:
+
+```powershell
+$env:CS2_WEB_BROWSER_TESTS = "1"
+$env:CS2_WEB_BASE_URL = "http://127.0.0.1:5080"
+dotnet test .\tests\Cs2Highlight.Web.Tests -c Release `
+  --filter "Category=Browser"
+```
+
+Visual regression fixtures cover the empty/file-selected home, analysis,
+player selection, catalog, music, checkout, generation, reconnect, completed,
+error and mobile result states. Start the Web project with a dedicated SQLite
+database, then set `CS2_WEB_VISUAL_TESTS=1`, `CS2_WEB_BASE_URL`,
+`CS2_WEB_VISUAL_DB` and optionally `CS2_WEB_VISUAL_OUTPUT`; run the
+`Category=Visual` filter. Animations are disabled and reduced motion is enabled
+for stable screenshots.
 
 See [Stage 4 Web acceptance](docs/STAGE4_WEB_E2E.md) for the real two-demo,
 restart, Range, browser playback, download and evidence checklist. Stage 4 is

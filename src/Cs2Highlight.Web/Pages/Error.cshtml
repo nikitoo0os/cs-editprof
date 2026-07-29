@@ -1,14 +1,14 @@
 @page
 @model ErrorModel
 @{
-    ViewData["Title"] = "Ошибка";
+  ViewData["Title"] = "Ошибка";
+  ViewData["CurrentStep"] = 0;
+  UiState errorState = new(
+    "alert-triangle",
+    "Не удалось выполнить запрос",
+    "Обнови страницу или вернись на главную и попробуй ещё раз. Если ошибка повторится, передай код службе поддержки.",
+    "Вернуться на главную",
+    "/",
+    Model.ShowRequestId ? Model.RequestId : null);
 }
-<section class="card">
-  <h1>Не удалось выполнить запрос</h1>
-  <p>Повторите попытку. Если ошибка повторяется, сохраните идентификатор запроса для диагностики.</p>
-  @if (Model.ShowRequestId)
-  {
-    <p><strong>Request ID:</strong> <code>@Model.RequestId</code></p>
-  }
-  <p><a class="button" asp-page="/Index">На главную</a></p>
-</section>
+<partial name="_ErrorState" model="errorState" />

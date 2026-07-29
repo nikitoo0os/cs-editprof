@@ -1,0 +1,52 @@
+@model HighlightCard
+<article class="highlight-card"
+         data-type="@Model.Type"
+         data-recommended="@Model.Recommended.ToString().ToLowerInvariant()"
+         data-score="@Model.TotalScore.ToString(System.Globalization.CultureInfo.InvariantCulture)"
+         data-duration="@Model.DurationMilliseconds"
+         data-demo="@Model.DemoFileName"
+         data-round="@Model.RoundNumber"
+         data-tick="@Model.FirstKillTick">
+  <label class="highlight-card__label">
+    <span class="highlight-card__top">
+      <input class="highlight-card__checkbox"
+             type="checkbox"
+             name="HighlightIds"
+             value="@Model.Id"
+             aria-label="Выбрать: @UiText.HighlightType(Model.Type), раунд @Model.RoundNumber" />
+      @if (Model.Recommended)
+      {
+        <span class="badge badge-violet">
+          <img class="ui-icon" src="/assets/icons/sparkles.svg" alt="" />
+          рекомендуем
+        </span>
+      }
+    </span>
+    <strong class="highlight-card__title">@UiText.HighlightType(Model.Type)</strong>
+    <span class="highlight-card__meta">
+      Раунд @Model.RoundNumber · @Model.MapName<br />
+      @Model.DemoFileName
+    </span>
+    <partial name="_WeaponSequence" model="Model.Weapons" />
+    <span class="tags">
+      @foreach (string tag in Model.Tags.Take(3))
+      {
+        <span class="tag">@UiText.Tag(tag)</span>
+      }
+    </span>
+    <span class="highlight-card__footer">
+      <span class="highlight-score">
+        <strong>@Model.TotalScore.ToString("0")</strong>
+        <span>оценка момента</span>
+      </span>
+      <span class="badge">@TimeSpan.FromMilliseconds(Model.DurationMilliseconds).TotalSeconds.ToString("0.0") сек.</span>
+    </span>
+  </label>
+  <details class="score-explanation">
+    <summary>Почему этот момент выделяется</summary>
+    <div class="subtle" style="font-size:12px;line-height:1.7">
+      <p>Убийств: @Model.KillCount · Хедшотов: @Model.HeadshotCount</p>
+      <p>Боевой вклад: @Model.ScoreBreakdown.CombatScore.ToString("0.#") · Визуальная выразительность: @Model.ScoreBreakdown.BeautyScore.ToString("0.#")</p>
+    </div>
+  </details>
+</article>

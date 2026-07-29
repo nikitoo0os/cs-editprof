@@ -28,7 +28,8 @@ public sealed class WebIntegrationTests : IDisposable
         string home = await client.GetStringAsync("/");
         HttpResponseMessage health = await client.GetAsync("/health/live");
 
-        Assert.Contains("Загрузить и проанализировать", home);
+        Assert.Contains("Загрузить и найти моменты", home);
+        Assert.Contains("cshighlighter", home);
         Assert.Equal(HttpStatusCode.OK, health.StatusCode);
     }
 
@@ -134,7 +135,7 @@ public sealed class WebIntegrationTests : IDisposable
         string events = await client.GetStringAsync($"/api/generations/{publicId}/events");
         string highlights = await client.GetStringAsync(
             $"/api/generations/{publicId}/highlights");
-        string script = await client.GetStringAsync("/js/generation-status.js");
+        string script = await client.GetStringAsync("/js/generation-progress.js");
 
         Assert.Contains("\"progressPercent\":62", state);
         Assert.Contains("Rendered 1/2 clips", events);

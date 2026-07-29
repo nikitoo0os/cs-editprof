@@ -99,7 +99,7 @@ app.Use(async (context, next) =>
     context.Response.Headers.XContentTypeOptions = "nosniff";
     context.Response.Headers.XFrameOptions = "DENY";
     context.Response.Headers.ContentSecurityPolicy =
-        "default-src 'self'; script-src 'self' https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; media-src 'self'; connect-src 'self' ws: wss:";
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self' ws: wss:";
     await next();
 });
 if (app.Configuration.GetValue("HttpsRedirection:Enabled", false))

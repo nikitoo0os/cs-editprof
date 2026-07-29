@@ -1,13 +1,77 @@
 @page
 @model IndexModel
-@{ ViewData["Title"] = "Загрузка демок"; }
-<section class="card">
-  <h1>Соберите лучшие моменты из нескольких матчей</h1>
-  <p class="muted">Загрузите до @Model.MaximumFiles CS2-файлов .dem. После анализа выберите игрока и оплатите тестовые $1.00.</p>
-  <form method="post" enctype="multipart/form-data" asp-antiforgery="true" asp-page-handler="Upload">
-    <label for="demos">Демо-файлы</label>
-    <input id="demos" type="file" name="DemoFiles" accept=".dem" multiple required />
-    <p><button type="submit">Загрузить и проанализировать</button></p>
-  </form>
-  @if (Model.Error is not null) { <p class="error">@Model.Error</p> }
+@{
+  ViewData["Title"] = "Создать CS2-мувик";
+  ViewData["CurrentStep"] = 1;
+  string? friendlyError = Model.Error switch
+  {
+    "FILE_TOO_LARGE" => "Одна из демок превышает допустимый размер.",
+    "TOO_MANY_FILES" => "Выбрано слишком много файлов.",
+    "ALL_FILES_DUPLICATE" => "Все выбранные демки уже были добавлены.",
+    _ when Model.Error is not null => "Не удалось загрузить демки. Проверь файлы и попробуй ещё раз.",
+    _ => null
+  };
+}
+<section class="section-grid-2" style="align-items:center;min-height:610px">
+  <div>
+    <p class="page-eyebrow">Автоматический CS2-монтаж</p>
+    <h1 class="hero-title text-gradient">Преврати свои лучшие моменты в CS2-мувик</h1>
+    <p class="page-lead">
+      Загрузи демки, выбери хайлайты и музыку.
+      cshighlighter сам соберёт готовое видео в ритм трека.
+    </p>
+    <ul class="benefit-list" aria-label="Преимущества">
+      <li class="benefit">
+        <span class="benefit__icon"><img class="ui-icon ui-icon--brand" src="/assets/icons/crosshair.svg" alt="" /></span>
+        Автоматический поиск моментов
+      </li>
+      <li class="benefit">
+        <span class="benefit__icon"><img class="ui-icon ui-icon--brand" src="/assets/icons/music-2.svg" alt="" /></span>
+        Монтаж в ритм музыки
+      </li>
+      <li class="benefit">
+        <span class="benefit__icon"><img class="ui-icon ui-icon--brand" src="/assets/icons/badge-dollar-sign.svg" alt="" /></span>
+        Готовое видео за $1
+      </li>
+    </ul>
+    <p style="margin-top:28px">
+      <a class="btn btn-secondary" href="#upload-workspace">
+        Как это работает
+        <img class="ui-icon" src="/assets/icons/chevron-right.svg" alt="" />
+      </a>
+    </p>
+  </div>
+
+  <section id="upload-workspace" class="surface surface--elevated surface-pad">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px">
+      <div>
+        <span class="badge badge-brand">Новый мувик</span>
+        <h2 class="section-title" style="margin-top:12px">Добавь демки</h2>
+      </div>
+      <img class="ui-icon ui-icon--brand" src="/assets/icons/files.svg" alt="" style="width:28px;height:28px" />
+    </div>
+    @if (friendlyError is not null)
+    {
+      <div class="error-state-inline" role="alert">@friendlyError</div>
+    }
+    <form method="post"
+          enctype="multipart/form-data"
+          asp-antiforgery="true"
+          asp-page-handler="Upload"
+          data-loading-form>
+      <partial name="_UploadDropzone"
+               model="new UploadDropzoneViewModel(Model.MaximumFiles, Model.MaximumFileSizeBytes)" />
+      <button type="submit"
+              class="btn btn-primary btn-lg btn-block"
+              style="margin-top:18px"
+              data-loading-label="Загружаем демки…">
+        <img class="ui-icon" src="/assets/icons/wand-sparkles.svg" alt="" />
+        Загрузить и найти моменты
+      </button>
+    </form>
+  </section>
 </section>
+
+@section Scripts {
+  <script type="module" src="/js/upload-dropzone.js"></script>
+}

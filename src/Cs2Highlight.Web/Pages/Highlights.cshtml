@@ -1,125 +1,156 @@
 @page "/generations/{publicId}/highlights"
 @model HighlightsModel
-@using Cs2Highlight.Analysis
 @{
   ViewData["Title"] = "Выбор моментов";
+  ViewData["CurrentStep"] = 3;
   string[] categories = ["All", "SoloKill", "DoubleKill", "TripleKill", "QuadKill", "Ace", "Recommended"];
+  UiState emptyHighlights = new(
+    "crosshair",
+    "Подходящие моменты не найдены",
+    "Попробуй вернуться и выбрать другого игрока или снизить минимальную оценку.",
+    "Выбрать игрока",
+    $"/generations/{Model.Generation.PublicId}/player");
 }
-<section class="catalog"
-         data-highlight-catalog
-         data-maximum="@Model.Generation.MaximumHighlights">
-  <header class="catalog-header">
+<section data-highlight-catalog data-maximum="@Model.Generation.MaximumHighlights">
+  <header class="page-header">
     <div>
-      <h1>Выберите моменты</h1>
-      <p class="muted">@Model.Generation.SelectedPlayerName · до оплаты</p>
+      <p class="page-eyebrow">Шаг 3 · Моменты</p>
+      <h1 class="page-title">Выберите лучшие моменты</h1>
+      <p class="page-lead">
+        Мы нашли @Model.Cards.Count моментов для @Model.Generation.SelectedPlayerName.
+        Выбрано <strong data-selected-count>0</strong> · примерно <strong data-selected-duration>0:00</strong>
+      </p>
     </div>
-    <div class="selection-summary">
-      <strong><span id="selected-count">0</span> выбрано</strong>
-      <span>≈ <span id="selected-duration">0:00</span></span>
-    </div>
+    <button type="button" class="btn btn-secondary" data-select="recommended">
+      <img class="ui-icon ui-icon--brand" src="/assets/icons/sparkles.svg" alt="" />
+      Выбрать рекомендованные
+    </button>
   </header>
-  <div asp-validation-summary="All" class="error"></div>
-  <div class="filters" role="tablist">
-    @foreach (string category in categories)
-    {
-      int count = category switch
-      {
-        "All" => Model.Cards.Count,
-        "Recommended" => Model.Cards.Count(value => value.Recommended),
-        _ => Model.Cards.Count(value => value.Type == category)
-      };
-      <button type="button" class="filter" data-filter="@category">
-        @(category == "All" ? "Все" : category == "Recommended" ? "Рекомендованные" : category.Replace("Kill", ""))
-        <span>@count</span>
-      </button>
-    }
-  </div>
-  <div class="catalog-actions">
-    <button type="button" data-select="recommended">Выбрать рекомендованные</button>
-    <button type="button" data-select="top3">Top 3</button>
-    <button type="button" data-select="top5">Top 5</button>
-    <button type="button" data-select="top10">Top 10</button>
-    <button type="button" data-select="visible">Выбрать видимые</button>
-    <button type="button" data-select="clear-visible">Снять видимые</button>
-    <button type="button" data-select="none">Снять всё</button>
-    <label>
-      Демо
-      <select id="demo-filter">
-        <option value="All">Все</option>
-        @foreach (string demo in Model.Cards
-          .Select(value => value.DemoFileName)
-          .Distinct(StringComparer.Ordinal)
-          .OrderBy(value => value, StringComparer.Ordinal))
+
+  <div asp-validation-summary="All" class="validation-summary-errors" role="alert"></div>
+
+  @if (Model.Cards.Count == 0)
+  {
+    <partial name="_EmptyState" model="emptyHighlights" />
+  }
+  else
+  {
+    <div class="surface surface-pad" style="position:sticky;z-index:20;top:140px">
+      <div class="segmented-tabs" role="tablist" aria-label="Категории моментов">
+        @foreach (string category in categories)
         {
-          <option value="@demo">@demo</option>
+          int count = category switch
+          {
+            "All" => Model.Cards.Count,
+            "Recommended" => Model.Cards.Count(value => value.Recommended),
+            _ => Model.Cards.Count(value => value.Type == category)
+          };
+          <button type="button"
+                  class="segmented-tab"
+                  role="tab"
+                  aria-selected="@(category == "All" ? "true" : "false")"
+                  data-filter="@category">
+            @UiText.HighlightTab(category)
+            <span class="segmented-tab__count">@count</span>
+          </button>
         }
-      </select>
-    </label>
-    <label>
-      Сортировка
-      <select id="catalog-sort">
-        <option value="score">По score</option>
-        <option value="round">По раунду</option>
-        <option value="chronological">Хронологически</option>
-      </select>
-    </label>
-  </div>
-  <form method="post" asp-antiforgery="true" id="selection-form">
-    <div class="highlight-grid">
-      @foreach (HighlightCard card in Model.Cards)
-      {
-        <article class="highlight-card"
-                 data-type="@card.Type"
-                 data-recommended="@card.Recommended.ToString().ToLowerInvariant()"
-                 data-score="@card.TotalScore.ToString(System.Globalization.CultureInfo.InvariantCulture)"
-                 data-duration="@card.DurationMilliseconds"
-                 data-demo="@card.DemoFileName"
-                 data-round="@card.RoundNumber"
-                 data-tick="@card.FirstKillTick">
-          <label class="highlight-select">
-            <input type="checkbox" name="HighlightIds" value="@card.Id" />
-            <span>@card.Type.Replace("Kill", " Kill")</span>
-          </label>
-          @if (card.Recommended) { <span class="recommended">Recommended</span> }
-          <p>Round @card.RoundNumber · @card.MapName · @card.DemoFileName</p>
-          <p><strong>Score: @card.TotalScore.ToString("0.#")</strong> · Beauty: @card.BeautyScore.ToString("0.#") · @TimeSpan.FromMilliseconds(card.DurationMilliseconds).TotalSeconds.ToString("0.0") sec</p>
-          <div class="weapon-sequence">
-            @foreach (WeaponSequenceSegment weapon in card.Weapons)
+      </div>
+      <div class="catalog-toolbar catalog-toolbar__desktop" style="margin:10px 0 0">
+        <label style="flex:1">
+          <span class="form-label">Поиск</span>
+          <input class="form-control"
+                 type="search"
+                 data-highlight-search
+                 placeholder="Карта, файл или тег" />
+        </label>
+        <label style="min-width:190px">
+          <span class="form-label">Матч</span>
+          <select class="form-select" id="demo-filter">
+            <option value="All">Все матчи</option>
+            @foreach (string demo in Model.Cards.Select(value => value.DemoFileName).Distinct().Order())
             {
-              @if (weapon.SwapBefore) { <span class="swap">→ swap →</span> }
-              <span class="weapon">
-                <img src="@weapon.IconPath" alt="" width="42" height="20" />
-                @weapon.DisplayName@if (weapon.KillCount > 1) { <text> ×@weapon.KillCount</text> }
-              </span>
+              <option value="@demo">@demo</option>
             }
-          </div>
-          <p>Убийств: @card.KillCount · Headshot: @card.HeadshotCount</p>
-          <div class="tags">
-            @foreach (string tag in card.Tags) { <span>@tag.Replace('_', ' ')</span> }
-          </div>
-          <details class="score-explanation">
-            <summary>Почему такой score</summary>
-            <p>Combat: @card.ScoreBreakdown.CombatScore.ToString("0.#") · Beauty: @card.ScoreBreakdown.BeautyScore.ToString("0.#")</p>
-            <ul>
-              @if (card.ScoreBreakdown.HeadshotBonus != 0) { <li>Headshot: +@card.ScoreBreakdown.HeadshotBonus</li> }
-              @if (card.ScoreBreakdown.WallbangBonus != 0) { <li>Wallbang: +@card.ScoreBreakdown.WallbangBonus</li> }
-              @if (card.ScoreBreakdown.OneTapBonus != 0) { <li>One-tap: +@card.ScoreBreakdown.OneTapBonus</li> }
-              @if (card.ScoreBreakdown.WeaponSwapBonus != 0) { <li>Weapon swap: +@card.ScoreBreakdown.WeaponSwapBonus</li> }
-              @if (card.ScoreBreakdown.RoundWinBonus != 0) { <li>Round win: +@card.ScoreBreakdown.RoundWinBonus</li> }
-            </ul>
-          </details>
-        </article>
-      }
+          </select>
+        </label>
+        <label style="min-width:190px">
+          <span class="form-label">Сортировка</span>
+          <select class="form-select" id="catalog-sort">
+            <option value="score">Сначала лучшие</option>
+            <option value="round">По раунду</option>
+            <option value="chronological">По хронологии</option>
+          </select>
+        </label>
+        <div style="display:flex;gap:6px;align-items:end">
+          <button class="btn btn-ghost" type="button" data-select="top3">Топ-3</button>
+          <button class="btn btn-ghost" type="button" data-select="top5">Топ-5</button>
+          <button class="btn btn-ghost" type="button" data-select="top10">Топ-10</button>
+        </div>
+        <button class="btn btn-secondary mobile-filter-button"
+                type="button"
+                data-drawer-target="filter-drawer"
+                data-drawer-show="filter-drawer"
+                aria-controls="filter-drawer">
+          <img class="ui-icon" src="/assets/icons/filter.svg" alt="" />
+          Фильтры
+        </button>
+      </div>
     </div>
-    <fieldset>
-      <legend>Эффекты</legend>
-      <label><input asp-for="EffectPreset" type="radio" value="None" /> None</label>
-      <label><input asp-for="EffectPreset" type="radio" value="Clean" /> Clean</label>
-      <label><input asp-for="EffectPreset" type="radio" value="Dynamic" /> Dynamic</label>
-    </fieldset>
-    <button type="submit" class="button">Продолжить к оплате · $1.00</button>
-  </form>
+
+    <form method="post" asp-antiforgery="true" id="selection-form" data-loading-form>
+      <div class="highlight-grid">
+        @foreach (HighlightCard card in Model.Cards)
+        {
+          <partial name="_HighlightCard" model="card" />
+        }
+      </div>
+
+      <section class="surface surface-pad" style="margin-bottom:24px">
+        <span class="badge badge-brand">Видеоэффекты</span>
+        <h2 class="section-title" style="margin-top:13px">Выберите характер монтажа</h2>
+        <div class="option-grid" style="margin-top:16px">
+          <label class="option-card">
+            <input asp-for="EffectPreset" type="radio" value="None" />
+            <img class="ui-icon" src="/assets/icons/video.svg" alt="" />
+            <strong>Без эффектов</strong>
+            <small>Только чистая нарезка выбранных моментов.</small>
+          </label>
+          <label class="option-card">
+            <input asp-for="EffectPreset" type="radio" value="Clean" />
+            <img class="ui-icon" src="/assets/icons/film.svg" alt="" />
+            <strong>Чистый</strong>
+            <small>Деликатные переходы и аккуратный цвет.</small>
+          </label>
+          <label class="option-card">
+            <input asp-for="EffectPreset" type="radio" value="Dynamic" />
+            <img class="ui-icon ui-icon--brand" src="/assets/icons/wand-sparkles.svg" alt="" />
+            <strong>Динамичный</strong>
+            <small>Зумы, импакт, вспышки и акценты на убийствах.</small>
+          </label>
+        </div>
+      </section>
+
+      <div class="selection-bar" aria-label="Выбранные моменты">
+        <div class="selection-bar__summary">
+          <strong><span data-selected-count>0</span> моментов выбрано</strong>
+          <span>≈ <span data-selected-duration>0:00</span></span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button type="button" class="btn btn-ghost" data-select="none">Снять всё</button>
+          <button type="submit"
+                  class="btn btn-primary btn-lg"
+                  data-selection-submit
+                  data-loading-label="Сохраняем моменты…"
+                  disabled>
+            Продолжить
+            <img class="ui-icon" src="/assets/icons/chevron-right.svg" alt="" />
+          </button>
+        </div>
+      </div>
+    </form>
+  }
 </section>
+
 @section Scripts {
-<script src="/js/highlight-catalog.js"></script>
+  <script type="module" src="/js/highlight-catalog.js"></script>
 }
