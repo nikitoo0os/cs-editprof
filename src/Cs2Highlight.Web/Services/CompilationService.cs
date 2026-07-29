@@ -287,17 +287,19 @@ public sealed partial class FfmpegHighlightCompilationService(
                     postEffectVideoFilters);
                 if (logger.IsEnabled(LogLevel.Information))
                 {
+                    string stages = string.Join(
+                        " -> ",
+                        dynamicGraph.Fragments
+                            .Select(value => value.Stage)
+                            .Distinct());
+                    string effects = string.Join(
+                        ", ",
+                        dynamicEffectPlan.Effects.Select(value => value.Type));
                     LogGraphReady(
                         logger,
                         index + 1,
-                        string.Join(
-                            " -> ",
-                            dynamicGraph.Fragments
-                                .Select(value => value.Stage)
-                                .Distinct()),
-                        string.Join(
-                            ", ",
-                            dynamicEffectPlan.Effects.Select(value => value.Type)));
+                        stages,
+                        effects);
                 }
                 arguments.AddRange(
                 [
