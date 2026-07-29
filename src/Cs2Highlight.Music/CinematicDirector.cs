@@ -264,7 +264,16 @@ public sealed class CinematicDirector(
             .Sum(value => value.OutputEndSeconds - value.OutputStartSeconds) >
             duration.MaximumBrollSeconds + 0.001)
         {
-            throw new InvalidOperationException("CINEMATIC_BROLL_RATIO_EXCEEDED");
+            if (relaxedEnergy)
+            {
+                warnings.Add(
+                    "CINEMATIC_BROLL_RATIO_RELAXED_FOR_CONTINUITY");
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    "CINEMATIC_BROLL_RATIO_EXCEEDED");
+            }
         }
         return new CinematicMoviePlan
         {
@@ -383,6 +392,12 @@ public sealed class CinematicDirector(
         List<string> warnings)
     {
         double used = 0;
+        bool continuityFallback = excerpt.Warnings.Contains(
+            MusicExcerptSelector.RelaxedEnergyFallbackWarning,
+            StringComparer.Ordinal);
+        double brollLimit = continuityFallback
+            ? targetDuration
+            : duration.MaximumBrollSeconds;
         HashSet<string> selected = new(StringComparer.Ordinal);
         int index = 0;
         CinematicSequenceSegment[] highlights = segments
@@ -395,8 +410,8 @@ public sealed class CinematicDirector(
                      .Append(null))
         {
             double gapEnd = next?.OutputStartSeconds ?? targetDuration;
-            while (gapEnd - cursor >= 0.5 &&
-                   used < duration.MaximumBrollSeconds - 0.001)
+            while (gapEnd - cursor >= 0.05 &&
+                   used < brollLimit - 0.001)
             {
                 double absoluteMusicTime =
                     excerpt.StartSeconds + cursor;
@@ -420,7 +435,7 @@ public sealed class CinematicDirector(
                     candidate.DurationSeconds,
                     Math.Min(
                         gapEnd - cursor,
-                        duration.MaximumBrollSeconds - used));
+                        brollLimit - used));
                 if (section.Type == MusicSectionType.Intro)
                     clipDuration = Math.Min(
                         clipDuration,
@@ -429,7 +444,7 @@ public sealed class CinematicDirector(
                     clipDuration = Math.Min(
                         clipDuration,
                         options.Duration.MaximumOutroSeconds);
-                if (clipDuration < 0.5)
+                if (clipDuration < 0.05)
                     break;
                 BrollCandidate planned = TrimCandidate(
                     candidate,

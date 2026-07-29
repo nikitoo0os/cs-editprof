@@ -585,7 +585,12 @@ public sealed class CinematicPlanningTests
             narrative,
             excerpt,
             highlights,
-            [],
+            Enumerable.Range(0, 12)
+                .Select(index => Broll() with
+                {
+                    Id = $"timeline-broll-{index}"
+                })
+                .ToArray(),
             DirectorOptions());
 
         Assert.Equal(highlights.Length, plan.HighlightMatches.Count);
@@ -593,6 +598,11 @@ public sealed class CinematicPlanningTests
             highlights.Length,
             plan.Segments.Count(value => value.HighlightId is not null));
         Assert.Contains("HIGHLIGHT_PEAK_TIMELINE_FALLBACK", plan.Warnings);
+        Assert.DoesNotContain(
+            plan.Warnings,
+            value => value.StartsWith(
+                "CINEMATIC_TIMELINE_GAP:",
+                StringComparison.Ordinal));
     }
 
     [Fact]
