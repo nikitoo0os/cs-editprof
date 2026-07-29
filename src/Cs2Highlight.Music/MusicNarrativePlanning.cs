@@ -330,6 +330,13 @@ public sealed class MusicalPeakDetector : IMusicalPeakDetector
             MusicSectionType.Chorus or
             MusicSectionType.HighEnergy;
 
+    public static bool IsAllowedPrimaryKillSection(
+        MusicSectionType type,
+        bool relaxedEnergy) =>
+        IsAllowedPrimaryKillSection(type) ||
+        (relaxedEnergy &&
+         type is not MusicSectionType.Intro and not MusicSectionType.Outro);
+
     private static MusicalPeak FramePeak(
         string id,
         MusicalPeakType type,
@@ -471,6 +478,9 @@ public interface IMusicExcerptSelector
 public sealed class MusicExcerptSelector(
     ICinematicDurationPolicy durationPolicy) : IMusicExcerptSelector
 {
+    public const string RelaxedEnergyFallbackWarning =
+        "MUSIC_EXCERPT_RELAXED_ENERGY_FALLBACK";
+
     public MusicExcerptPlan Select(
         MusicNarrative narrative,
         IReadOnlyList<SelectedHighlight> highlights,
@@ -483,13 +493,27 @@ public sealed class MusicExcerptSelector(
         Candidate[] candidates = BuildCandidates(
                 narrative,
                 budget,
-                requiredPeaks)
+                requiredPeaks,
+                relaxedEnergy: false)
             .OrderByDescending(value => value.Score)
             .ThenBy(value => value.Start)
             .ThenBy(value => value.End)
             .ToArray();
-        Candidate? selected = candidates.FirstOrDefault(value => value.Valid) ??
-            candidates.FirstOrDefault();
+        Candidate? selected = candidates.FirstOrDefault(value => value.Valid);
+        if (selected is null)
+        {
+            selected = BuildCandidates(
+                    narrative,
+                    budget,
+                    requiredPeaks,
+                    relaxedEnergy: true)
+                .Where(value => value.Valid)
+                .OrderByDescending(value => value.Score)
+                .ThenBy(value => value.Start)
+                .ThenBy(value => value.End)
+                .FirstOrDefault();
+        }
+        selected ??= candidates.FirstOrDefault();
         if (selected is null)
         {
             double end = Math.Min(
@@ -514,6 +538,8 @@ public sealed class MusicExcerptSelector(
             warnings.Add("MUSIC_EXCERPT_BUILDUP_MISSING");
         if (!selected.HasHighEnergy)
             warnings.Add("MUSIC_EXCERPT_HIGH_ENERGY_MISSING");
+        if (selected.RelaxedEnergy)
+            warnings.Add(RelaxedEnergyFallbackWarning);
         if (selected.Peaks.Length < requiredPeaks)
             warnings.Add("MUSIC_EXCERPT_INSUFFICIENT_PEAKS");
         if (Math.Abs(selected.End - narrative.DurationSeconds) < 0.001 &&
@@ -538,7 +564,8 @@ public sealed class MusicExcerptSelector(
     private static IEnumerable<Candidate> BuildCandidates(
         MusicNarrative narrative,
         MovieDurationBudget budget,
-        int requiredPeaks)
+        int requiredPeaks,
+        bool relaxedEnergy)
     {
         MusicSection[] sections = narrative.Sections
             .OrderBy(value => value.StartSeconds)
@@ -565,7 +592,8 @@ public sealed class MusicExcerptSelector(
                         window.Any(section =>
                             section.Id == value.SectionId &&
                             MusicalPeakDetector.IsAllowedPrimaryKillSection(
-                                section.Type)))
+                                section.Type,
+                                relaxedEnergy)))
                     .OrderByDescending(value =>
                         value.Strength * value.Confidence)
                     .ThenBy(value => value.TimeSeconds)
@@ -601,8 +629,7 @@ public sealed class MusicExcerptSelector(
                             : 0
                 };
                 bool valid =
-                    build &&
-                    high &&
+                    (relaxedEnergy || (build && high)) &&
                     peaks.Length >= requiredPeaks &&
                     brollDemand <= 1.000001;
                 yield return new Candidate(
@@ -612,6 +639,7 @@ public sealed class MusicExcerptSelector(
                     peaks,
                     build,
                     high,
+                    relaxedEnergy,
                     valid,
                     breakdown.Values.Sum(),
                     breakdown);
@@ -634,6 +662,7 @@ public sealed class MusicExcerptSelector(
         MusicalPeak[] Peaks,
         bool HasBuildUp,
         bool HasHighEnergy,
+        bool RelaxedEnergy,
         bool Valid,
         double Score,
         IReadOnlyDictionary<string, double> Breakdown);

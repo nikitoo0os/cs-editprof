@@ -155,6 +155,66 @@ public sealed class CinematicPlanningTests
     }
 
     [Fact]
+    public void ExcerptUsesStrongVersePeakWhenHighEnergyPeakIsUnavailable()
+    {
+        MusicNarrative narrative = new()
+        {
+            DurationSeconds = 8,
+            Sections =
+            [
+                DetailedSection(
+                    "verse",
+                    MusicSectionType.Verse,
+                    0,
+                    8,
+                    0.7)
+            ],
+            Peaks =
+            [
+                new MusicalPeak
+                {
+                    Id = "verse-downbeat",
+                    Type = MusicalPeakType.Downbeat,
+                    TimeSeconds = 4,
+                    Strength = 0.85,
+                    Confidence = 0.9,
+                    SectionId = "verse"
+                }
+            ],
+            Frames = [],
+            Warnings = []
+        };
+        SelectedHighlight highlight = Highlight(
+            "h1",
+            HighlightType.SoloKill,
+            4,
+            30);
+
+        MusicExcerptPlan excerpt = new MusicExcerptSelector(
+            new CinematicDurationPolicy()).Select(
+            narrative,
+            [highlight],
+            new MovieDurationOptions());
+        CinematicMoviePlan movie = Director().Create(
+            narrative,
+            excerpt,
+            [highlight],
+            [],
+            DirectorOptions());
+        CinematicAlignmentReport alignment =
+            CinematicAlignmentReportBuilder.FromPlan(
+                movie,
+                narrative.Sections);
+
+        Assert.True(excerpt.IsValid);
+        Assert.Contains(
+            MusicExcerptSelector.RelaxedEnergyFallbackWarning,
+            excerpt.Warnings);
+        Assert.Single(movie.HighlightMatches);
+        Assert.Equal(0, alignment.KillsOutsideHighEnergySections);
+    }
+
+    [Fact]
     public void ExcerptDoesNotExpandToFullSong()
     {
         MusicNarrative narrative = ExcerptNarrative(duration: 60);

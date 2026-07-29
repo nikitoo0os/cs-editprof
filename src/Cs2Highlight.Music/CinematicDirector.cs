@@ -56,10 +56,15 @@ public sealed class CinematicDirector(
             .. excerpt.Warnings,
             .. matching.Warnings
         ];
+        bool relaxedEnergy = excerpt.Warnings.Contains(
+            MusicExcerptSelector.RelaxedEnergyFallbackWarning,
+            StringComparer.Ordinal);
         HighlightPeakMatch[] matches = matching.Matches
             .Where(value =>
                 sectionById.TryGetValue(value.Peak.SectionId, out MusicSection? section) &&
-                MusicalPeakDetector.IsAllowedPrimaryKillSection(section.Type))
+                MusicalPeakDetector.IsAllowedPrimaryKillSection(
+                    section.Type,
+                    relaxedEnergy))
             .OrderBy(value => value.PlannedPeakSeconds)
             .ToArray();
         List<HighlightPeakMatch> effectiveMatches = [];
@@ -232,7 +237,8 @@ public sealed class CinematicDirector(
         if (ordered
             .Where(value => value.HighlightId is not null)
             .Any(value => !MusicalPeakDetector.IsAllowedPrimaryKillSection(
-                sectionById[value.MusicSectionId].Type)))
+                sectionById[value.MusicSectionId].Type,
+                relaxedEnergy)))
         {
             throw new InvalidOperationException(
                 "PRIMARY_KILL_OUTSIDE_HIGH_ENERGY_SECTION");
@@ -459,12 +465,17 @@ public static class CinematicAlignmentReportBuilder
         double[] errors = plan.HighlightMatches
             .Select(value => Math.Abs(value.AlignmentErrorMilliseconds))
             .ToArray();
+        bool relaxedEnergy = plan.MusicExcerpt.Warnings.Contains(
+            MusicExcerptSelector.RelaxedEnergyFallbackWarning,
+            StringComparer.Ordinal);
         int outside = plan.HighlightMatches.Count(match =>
         {
             MusicSection? section = sections.FirstOrDefault(value =>
                 value.Id == match.Peak.SectionId);
             return section is null ||
-                !MusicalPeakDetector.IsAllowedPrimaryKillSection(section.Type);
+                !MusicalPeakDetector.IsAllowedPrimaryKillSection(
+                    section.Type,
+                    relaxedEnergy);
         });
         return new CinematicAlignmentReport
         {

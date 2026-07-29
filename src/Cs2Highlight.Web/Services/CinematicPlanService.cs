@@ -91,6 +91,14 @@ public sealed partial class CinematicPlanService(
         int povShots,
         int warnings);
 
+    [LoggerMessage(
+        EventId = 8105,
+        Level = LogLevel.Warning,
+        Message = "[Generation:{GenerationId}] Stage 8 music has insufficient high-energy peaks; using strong peaks from regular sections")]
+    private static partial void LogRelaxedEnergyFallback(
+        ILogger logger,
+        string generationId);
+
     public async Task<CinematicLockedPlan> CreateAndLockAsync(
         GenerationDbContext db,
         Generation generation,
@@ -163,6 +171,12 @@ public sealed partial class CinematicPlanService(
             excerpt.UsablePeakCount,
             excerpt.RequiredPeakCount,
             excerpt.Score);
+        if (excerpt.Warnings.Contains(
+                MusicExcerptSelector.RelaxedEnergyFallbackWarning,
+                StringComparer.Ordinal))
+        {
+            LogRelaxedEnergyFallback(logger, generation.PublicId);
+        }
         if (!excerpt.IsValid)
             throw new InvalidOperationException(
                 excerpt.UsablePeakCount < excerpt.RequiredPeakCount
