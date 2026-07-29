@@ -113,11 +113,20 @@ public static class UiText
         _ => "Динамичный"
     };
 
+    public static string EffectIntensity(EffectIntensity intensity) => intensity switch
+    {
+        Cs2Highlight.Web.Domain.EffectIntensity.Minimal => "Минимальная",
+        Cs2Highlight.Web.Domain.EffectIntensity.Balanced => "Сбалансированная",
+        Cs2Highlight.Web.Domain.EffectIntensity.Strong => "Сильная",
+        _ => "Сбалансированная"
+    };
+
     public static string MovieStyle(MovieStyle style) => style switch
     {
         Cs2Highlight.Music.MovieStyle.Clean => "Чистый",
         Cs2Highlight.Music.MovieStyle.Dynamic => "Динамичный",
         Cs2Highlight.Music.MovieStyle.Cinematic => "Кинематографичный",
+        Cs2Highlight.Music.MovieStyle.Aggressive => "Агрессивный",
         _ => "Динамичный"
     };
 

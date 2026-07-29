@@ -63,6 +63,14 @@ builder.Services.AddSingleton<Cs2Highlight.Analysis.IWeaponCatalog, Cs2Highlight
 builder.Services.AddScoped<HighlightSelectionService>();
 builder.Services.AddSingleton<IEffectPlanner, EffectPlanner>();
 builder.Services.AddSingleton<IEffectFilterGraphBuilder, FfmpegEffectFilterGraphBuilder>();
+builder.Services.AddSingleton<IEffectSeedProvider, Sha256EffectSeedProvider>();
+builder.Services.AddSingleton<IEffectCompatibilityPolicy, EffectCompatibilityPolicy>();
+builder.Services.AddSingleton<IEffectBudgetPolicy, EffectBudgetPolicy>();
+builder.Services.AddSingleton<IEffectVarietyPolicy, EffectVarietyPolicy>();
+builder.Services.AddSingleton<IEffectTimeMapper, EffectTimeMapper>();
+builder.Services.AddSingleton<IDynamicEffectPlanner, DynamicEffectPlanner>();
+builder.Services.AddSingleton<IFfmpegCapabilityScanner, FfmpegCapabilityScanner>();
+builder.Services.AddSingleton<IDynamicEffectFilterGraphBuilder, DynamicEffectFilterGraphBuilder>();
 builder.Services.AddSingleton<IHighlightCompilationService, FfmpegHighlightCompilationService>();
 builder.Services.AddSingleton<IPaymentProvider, TestPaymentProvider>();
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);

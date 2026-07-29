@@ -59,6 +59,40 @@ dotnet build -c Release
 dotnet test -c Release --no-build
 ```
 
+## Stage 7: deterministic dynamic effects
+
+Stage 7 replaces the fixed Dynamic preset with a deterministic, typed effect
+planner. It derives a stable seed from generation and highlight identity,
+scores compatible effects against highlight metadata and musical anchors,
+applies per-clip cost/intensity budgets, and persists the locked plan before
+FFmpeg composition. Recovery therefore renders the same decisions instead of
+rolling a new random edit.
+
+The available UI styles are Clean, Dynamic, Cinematic and Aggressive, with
+Minimal, Balanced and Strong intensity. Advanced controls can disable effect
+groups without accepting arbitrary FFmpeg expressions. `None` remains a true
+diagnostic bypass and the legacy `Clean` preset cannot accidentally opt into
+dynamic effects.
+
+The render graph applies gameplay time warp first, then hit-stop, zoom, motion,
+temporal, distortion, color/accent, transition and global grading stages. The
+capability scanner records the installed FFmpeg version and filters; missing
+optional filters produce deterministic fallbacks and warnings rather than a
+late render crash.
+
+An opt-in FFmpeg test renders and probes twelve synthetic fixtures:
+
+```powershell
+$env:CS2_STAGE7_FFMPEG = "C:\path\to\ffmpeg.exe"
+$env:CS2_STAGE7_FIXTURE_OUTPUT = "$PWD\artifacts\stage7-fixtures"
+dotnet test .\tests\Cs2Highlight.Web.Tests -c Release `
+  --filter "Category=Stage7Ffmpeg"
+```
+
+The synthetic test proves executable filter graphs, output duration and media
+structure. It does not replace visual acceptance on real CS2/HLAE footage.
+See [Stage 7 real E2E](docs/STAGE7_E2E.md).
+
 ## Stage 6: music-driven automatic movie
 
 Stage 6 adds safe clip tails and a music-driven path without changing the

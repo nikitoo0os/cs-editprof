@@ -43,6 +43,7 @@ public sealed class GenerationDbContext(DbContextOptions<GenerationDbContext> op
         modelBuilder.Entity<GenerationMovieSettings>()
             .HasIndex(value => value.GenerationId).IsUnique();
         modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.MovieStyle).HasConversion<string>();
+        modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.EffectIntensity).HasConversion<string>();
         modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.SyncIntensity).HasConversion<string>();
         modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.ColorGradePreset).HasConversion<string>();
         modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.MusicDurationPolicy).HasConversion<string>();

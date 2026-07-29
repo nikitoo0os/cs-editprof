@@ -15,6 +15,7 @@ public sealed class MusicModel(
     MusicUploadService uploads,
     GenerationStorage storage,
     IMusicEditPlanner musicEditPlanner,
+    IEffectSeedProvider effectSeedProvider,
     TrustedLutCatalog trustedLuts,
     GenerationWakeSignal queue,
     TimeProvider timeProvider) : PageModel
@@ -36,6 +37,9 @@ public sealed class MusicModel(
     [BindProperty] public bool RightsConfirmed { get; set; }
     [BindProperty] public MovieStyle MovieStyle { get; set; } = MovieStyle.Dynamic;
     [BindProperty] public MusicSyncIntensity SyncIntensity { get; set; } = MusicSyncIntensity.Aggressive;
+    [BindProperty] public EffectIntensity EffectIntensity { get; set; } = EffectIntensity.Balanced;
+    [BindProperty] public List<string> EnabledEffectGroups { get; set; } =
+        DynamicEffectGroups.All.OrderBy(value => value, StringComparer.Ordinal).ToList();
     [BindProperty] public ColorGradePreset ColorGrade { get; set; } = ColorGradePreset.Competitive;
     [BindProperty] public string? LutAssetKey { get; set; }
     [BindProperty] public int GameplayGainPercent { get; set; } = 16;
@@ -109,6 +113,8 @@ public sealed class MusicModel(
     {
         if (GameplayGainPercent is < 0 or > 100 || MusicGainPercent is < 0 or > 100)
             return BadRequest();
+        if (EnabledEffectGroups.Any(value => !DynamicEffectGroups.All.Contains(value)))
+            return BadRequest();
         try
         {
             _ = trustedLuts.Resolve(LutAssetKey);
@@ -142,6 +148,17 @@ public sealed class MusicModel(
         {
             GenerationId = generation.Id,
             MovieStyle = MovieStyle,
+            EffectIntensity = EffectIntensity,
+            EnabledEffectGroupsJson = JsonSerializer.Serialize(
+                EnabledEffectGroups.Distinct(StringComparer.Ordinal).OrderBy(
+                    value => value,
+                    StringComparer.Ordinal)),
+            EffectPlannerVersion = DynamicEffectPlanner.PlannerVersion,
+            EffectSeed = effectSeedProvider.CreateSeed(
+                publicId,
+                "movie-settings",
+                -1,
+                DynamicEffectPlanner.PlannerVersion),
             SyncIntensity = SyncIntensity,
             ColorGradePreset = ColorGrade,
             LutAssetKey = string.IsNullOrWhiteSpace(LutAssetKey)

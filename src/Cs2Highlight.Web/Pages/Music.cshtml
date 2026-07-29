@@ -125,8 +125,66 @@
               <strong>Кинематографичный</strong>
               <small>Плавный монтаж и атмосферный цвет.</small>
             </label>
+            <label class="option-card">
+              <input asp-for="MovieStyle" type="radio" value="Aggressive" />
+              <img class="ui-icon" src="/assets/icons/wand-sparkles.svg" alt="" />
+              <strong>Агрессивный</strong>
+              <small>Сильные акценты для самых важных убийств.</small>
+            </label>
           </div>
         </section>
+
+        <section style="margin-top:30px">
+          <span class="badge">Интенсивность эффектов</span>
+          <div class="option-grid" style="margin-top:14px">
+            <label class="option-card" style="min-height:110px">
+              <input asp-for="EffectIntensity" type="radio" value="Minimal" />
+              <strong>Минимальная</strong>
+              <small>Плавные зумы и редкие мягкие акценты.</small>
+            </label>
+            <label class="option-card" style="min-height:110px">
+              <input asp-for="EffectIntensity" type="radio" value="Balanced" />
+              <strong>Сбалансированная</strong>
+              <small>Заметная динамика без потери читаемости.</small>
+            </label>
+            <label class="option-card" style="min-height:110px">
+              <input asp-for="EffectIntensity" type="radio" value="Strong" />
+              <strong>Сильная</strong>
+              <small>Больше выразительных эффектов в пределах бюджета.</small>
+            </label>
+          </div>
+        </section>
+
+        <details class="surface surface-pad" style="margin-top:24px">
+          <summary class="section-title">Расширенные настройки эффектов</summary>
+          <p class="muted" style="margin-top:8px">Отключайте только группы эффектов — произвольные FFmpeg-команды не принимаются.</p>
+          <div class="option-grid" style="margin-top:16px">
+            @{
+              (string Value, string Name)[] effectGroups =
+              [
+                (DynamicEffectGroups.SmoothZooms, "Плавные зумы"),
+                (DynamicEffectGroups.PunchZooms, "Ударные зумы"),
+                (DynamicEffectGroups.MotionBlur, "Размытие движения"),
+                (DynamicEffectGroups.RgbSplit, "RGB split"),
+                (DynamicEffectGroups.CameraShake, "Тряска камеры"),
+                (DynamicEffectGroups.HitStop, "Hit stop"),
+                (DynamicEffectGroups.FrameEcho, "Frame echo"),
+                (DynamicEffectGroups.LensDistortion, "Линзовое искажение"),
+                (DynamicEffectGroups.DynamicTransitions, "Динамические переходы")
+              ];
+            }
+            @foreach (var group in effectGroups)
+            {
+              <label class="option-card" style="min-height:72px">
+                <input type="checkbox"
+                       name="EnabledEffectGroups"
+                       value="@group.Value"
+                       checked="@(Model.EnabledEffectGroups.Contains(group.Value, StringComparer.Ordinal) ? "checked" : null)" />
+                <strong>@group.Name</strong>
+              </label>
+            }
+          </div>
+        </details>
 
         <section style="margin-top:30px">
           <span class="badge">Синхронизация</span>

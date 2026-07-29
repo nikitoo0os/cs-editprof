@@ -27,9 +27,11 @@ public sealed class BrowserFlowTests
 
     [Fact(Timeout = 1_200_000)]
     [Trait("Category", "Stage6BrowserE2E")]
+    [Trait("Category", "Stage7BrowserE2E")]
     public async Task MusicDrivenFlowCompletesWithoutManualReloadWhenOptedIn()
     {
-        if (Environment.GetEnvironmentVariable("CS2_STAGE6_BROWSER_E2E") != "1")
+        if (Environment.GetEnvironmentVariable("CS2_STAGE6_BROWSER_E2E") != "1" &&
+            Environment.GetEnvironmentVariable("CS2_STAGE7_BROWSER_E2E") != "1")
             return;
         string baseUrl = Required("CS2_WEB_BASE_URL").TrimEnd('/');
         string music = Path.GetFullPath(Required("CS2_STAGE6_MUSIC"));
@@ -69,11 +71,22 @@ public sealed class BrowserFlowTests
         await ClickWhenAvailableAsync(page, "Музыка и стиль");
         await Assertions.Expect(page.GetByText("Трек проанализирован")).ToHaveCountAsync(1);
         await page.Locator("input[name=MovieStyle][value=Dynamic]").CheckAsync();
+        await page.Locator("input[name=EffectIntensity][value=Balanced]").CheckAsync();
+        await page.Locator("details").EvaluateAsync(
+            "(element) => { element.open = true; }");
+        await page.Locator(
+                "input[name=EnabledEffectGroups][value=rgbSplit]")
+            .UncheckAsync();
         await page.Locator("input[name=SyncIntensity][value=Expressive]").CheckAsync();
         await page.Locator("input[name=ColorGrade][value=CinematicCool]").CheckAsync();
         await page.GetByRole(AriaRole.Button, new() { Name = "Продолжить к оплате" })
             .ClickAsync();
         await Assertions.Expect(page.GetByText("$1.00")).ToHaveCountAsync(1);
+        await Assertions.Expect(page.Locator("[data-effect-summary]"))
+            .ToContainTextAsync("Сбалансированная");
+        await page.ReloadAsync();
+        await Assertions.Expect(page.Locator("[data-effect-summary]"))
+            .ToContainTextAsync("Сбалансированная");
         await page.GetByRole(AriaRole.Button, new() { Name = "Оплатить $1" }).ClickAsync();
         await page.GetByRole(AriaRole.Button, new() { Name = "Подтвердить оплату" }).ClickAsync();
 

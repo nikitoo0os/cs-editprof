@@ -8,7 +8,7 @@ public enum MusicalAnchorType { Beat, StrongBeat, Downbeat, Onset, SectionBounda
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum MusicSyncIntensity { Soft, Expressive, Aggressive }
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum MovieStyle { Clean, Dynamic, Cinematic }
+public enum MovieStyle { Clean, Dynamic, Cinematic, Aggressive }
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ColorGradePreset
 {

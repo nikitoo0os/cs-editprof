@@ -31,12 +31,15 @@ public enum DemoFailurePolicy { FailGeneration, SkipInvalidDemo }
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum EffectPreset { None, Clean, Dynamic }
 [JsonConverter(typeof(JsonStringEnumConverter))]
+public enum EffectIntensity { Minimal, Balanced, Strong }
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ArtifactType
 {
     UploadedDemo, DemoAnalysis, Highlights, GenerationPlan, BatchPlan, BatchState,
     BatchReport, IntermediateClip, CompilationResult, GenerationReport, FinalVideo, Log,
     MusicUpload, MusicAnalysis, MusicEditPlan, ProcessedClip, AudioMixResult,
-    MusicAlignmentResult, ColorGradeResult
+    MusicAlignmentResult, ColorGradeResult, DynamicEffectPlan, DynamicEffectResult,
+    FfmpegCapabilities
 }
 
 public sealed class Generation
@@ -116,6 +119,10 @@ public sealed class GenerationMovieSettings
     public long GenerationId { get; set; }
     public Generation Generation { get; set; } = null!;
     public MovieStyle MovieStyle { get; set; } = MovieStyle.Dynamic;
+    public EffectIntensity EffectIntensity { get; set; } = EffectIntensity.Balanced;
+    public string EnabledEffectGroupsJson { get; set; } = "[]";
+    [MaxLength(32)] public string EffectPlannerVersion { get; set; } = "7.0";
+    public int EffectSeed { get; set; }
     public MusicSyncIntensity SyncIntensity { get; set; } = MusicSyncIntensity.Aggressive;
     public ColorGradePreset ColorGradePreset { get; set; } = ColorGradePreset.Competitive;
     [MaxLength(64)] public string? LutAssetKey { get; set; }
@@ -238,6 +245,10 @@ public sealed class GenerationEffectPlan
     public EffectPreset Preset { get; set; }
     public string TimelineJson { get; set; } = "[]";
     public string EffectPlanJson { get; set; } = "{}";
+    public string DynamicEffectPlanJson { get; set; } = "{}";
+    [MaxLength(32)] public string? PlannerVersion { get; set; }
+    public int? DeterministicSeed { get; set; }
+    public DateTimeOffset? LockedAt { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
 }
 

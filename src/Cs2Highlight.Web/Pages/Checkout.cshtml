@@ -30,6 +30,11 @@
         <div class="checkout-row"><span class="muted">Длительность</span><strong>≈ @duration.Minutes:@duration.Seconds.ToString("00")</strong></div>
         <div class="checkout-row"><span class="muted">Формат</span><strong>@Model.Generation.Width×@Model.Generation.Height · @Model.Generation.Fps FPS</strong></div>
         <div class="checkout-row"><span class="muted">Эффекты</span><strong>@UiText.Effect(Model.Generation.EffectPreset)</strong></div>
+        @if (Model.MovieSettings is not null)
+        {
+          <div class="checkout-row"><span class="muted">Стиль</span><strong>@Model.MovieSettings.MovieStyle</strong></div>
+          <div class="checkout-row" data-effect-summary><span class="muted">Интенсивность</span><strong>@UiText.EffectIntensity(Model.MovieSettings.EffectIntensity)</strong></div>
+        }
         <div class="checkout-row"><span class="muted">Музыка</span><strong>Проанализирована</strong></div>
       </div>
     </section>
@@ -46,6 +51,16 @@
         <li class="benefit">✓ Эффекты, цвет и музыка</li>
         <li class="benefit">✓ Готовый MP4 для скачивания</li>
       </ul>
+      @if (Model.MovieSettings is not null)
+      {
+        <div class="surface" style="padding:14px;margin-top:18px">
+          <strong>Возможные эффекты</strong>
+          <p class="muted" style="margin:7px 0 0;font-size:12px;line-height:1.55">
+            Плавные и ударные зумы, лёгкая тряска, короткие цветовые и ритмические акценты.
+            Конкретный набор зависит от убийств и музыкальных точек.
+          </p>
+        </div>
+      }
       <form method="post" asp-antiforgery="true" data-loading-form>
         <button type="submit"
                 class="btn btn-primary btn-lg btn-block"

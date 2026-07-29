@@ -9,7 +9,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Cs2Highlight.Web.Services;
 
-public sealed class GenerationWorker(
+public sealed partial class GenerationWorker(
     IDbContextFactory<GenerationDbContext> dbFactory,
     GenerationWakeSignal queue,
     GenerationCancellationRegistry cancellations,
@@ -20,6 +20,8 @@ public sealed class GenerationWorker(
     IMusicalAnchorBuilder musicalAnchorBuilder,
     IMusicEditPlanner musicEditPlanner,
     IEffectPlanner effectPlanner,
+    IDynamicEffectPlanner dynamicEffectPlanner,
+    IFfmpegCapabilityScanner capabilityScanner,
     IHighlightCompilationService compilationService,
     IHubContext<GenerationHub> hub,
     TimeProvider timeProvider,
@@ -42,6 +44,18 @@ public sealed class GenerationWorker(
                 LogLevel.Information,
                 new EventId(4003, nameof(LogGenerationStage)),
                 "[Generation:{GenerationId}] {Status} {Progress}% — {Stage}");
+    [LoggerMessage(EventId = 4004, Level = LogLevel.Information, Message = "[Generation:{GenerationId}] Scanning FFmpeg capabilities")]
+    private static partial void LogCapabilityScan(ILogger logger, string generationId);
+
+    [LoggerMessage(EventId = 4005, Level = LogLevel.Information, Message = "[Generation:{GenerationId}] FFmpeg {Version}; available={Available}; filters={FilterCount}; warnings={WarningCount}")]
+    private static partial void LogCapabilities(ILogger logger, string generationId, string? version, bool available, int filterCount, int warningCount);
+
+    [LoggerMessage(EventId = 4006, Level = LogLevel.Information, Message = "[Generation:{GenerationId}] Reusing locked effect plan for {HighlightId}: seed={Seed}, effects={EffectCount}")]
+    private static partial void LogLockedPlan(ILogger logger, string generationId, string highlightId, long seed, int effectCount);
+
+    [LoggerMessage(EventId = 4007, Level = LogLevel.Information, Message = "[Generation:{GenerationId}] Planned effects for {HighlightId}: style={Style}, intensity={Intensity}, seed={Seed}, accepted={Accepted}, rejected={Rejected}")]
+    private static partial void LogEffectPlan(ILogger logger, string generationId, string highlightId, MovieStyle style, EffectIntensity intensity, long seed, int accepted, int rejected);
+
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
@@ -619,6 +633,20 @@ public sealed class GenerationWorker(
                 renderedSelection,
                 snapshot.EffectPreset,
                 cancellationToken);
+        FfmpegCapabilities? capabilities = null;
+        IReadOnlyList<DynamicEffectPlan>? dynamicEffectPlans = null;
+        if (musicContext is not null && snapshot.EffectPreset != EffectPreset.None)
+        {
+            capabilities = await GetOrCreateCapabilitiesAsync(
+                publicId,
+                cancellationToken);
+            dynamicEffectPlans = await GetOrCreateDynamicEffectPlansAsync(
+                publicId,
+                renderedSelection,
+                musicContext,
+                capabilities,
+                cancellationToken);
+        }
         if (musicContext is not null)
         {
             if (resumeStage <= GenerationStageOrder(GenerationStatus.ComposingVideo))
@@ -644,7 +672,9 @@ public sealed class GenerationWorker(
                 EffectPlans: effectPlans,
                 MusicEditPlan: musicContext?.Plan,
                 MusicPath: musicContext?.MusicPath,
-                MovieSettings: musicContext?.Settings),
+                MovieSettings: musicContext?.Settings,
+                DynamicEffectPlans: dynamicEffectPlans,
+                FfmpegCapabilities: capabilities),
             progress,
             cancellationToken);
         if (!compilation.Success || compilation.OutputFile is null)
@@ -864,6 +894,186 @@ public sealed class GenerationWorker(
         return result;
     }
 
+    private async Task<FfmpegCapabilities> GetOrCreateCapabilitiesAsync(
+        string publicId,
+        CancellationToken cancellationToken)
+    {
+        string directory = storage.EnsureDirectory(publicId, "plan");
+        string path = Path.Combine(directory, "ffmpeg-capabilities.json");
+        FfmpegCapabilities capabilities;
+        if (File.Exists(path))
+        {
+            capabilities = await ReadJsonAsync<FfmpegCapabilities>(
+                path,
+                cancellationToken);
+        }
+        else
+        {
+            LogCapabilityScan(logger, publicId);
+            capabilities = await capabilityScanner.ScanAsync(cancellationToken);
+            await capabilityScanner.WriteAsync(
+                capabilities,
+                path,
+                cancellationToken);
+        }
+        LogCapabilities(
+            logger,
+            publicId,
+            capabilities.Version,
+            capabilities.Available,
+            capabilities.Filters.Count,
+            capabilities.Warnings.Count);
+        await using GenerationDbContext db =
+            await dbFactory.CreateDbContextAsync(cancellationToken);
+        long generationId = await db.Generations
+            .Where(value => value.PublicId == publicId)
+            .Select(value => value.Id)
+            .SingleAsync(cancellationToken);
+        await AddArtifactAsync(
+            db,
+            generationId,
+            ArtifactType.FfmpegCapabilities,
+            path,
+            cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return capabilities;
+    }
+
+    private async Task<IReadOnlyList<DynamicEffectPlan>>
+        GetOrCreateDynamicEffectPlansAsync(
+            string publicId,
+            GlobalHighlightCandidate[] selected,
+            MusicMovieContext musicContext,
+            FfmpegCapabilities capabilities,
+            CancellationToken cancellationToken)
+    {
+        await using GenerationDbContext db =
+            await dbFactory.CreateDbContextAsync(cancellationToken);
+        Generation generation = await db.Generations.SingleAsync(
+            value => value.PublicId == publicId,
+            cancellationToken);
+        GenerationEffectPlan[] storedPlans = await db.GenerationEffectPlans
+            .Where(value => value.GenerationId == generation.Id)
+            .ToArrayAsync(cancellationToken);
+        Dictionary<long, GenerationEffectPlan> storedByHighlight =
+            storedPlans.ToDictionary(value => value.GenerationHighlightId);
+        IReadOnlySet<string> enabledGroups = ParseEnabledGroups(
+            musicContext.Settings.EnabledEffectGroupsJson);
+        Dictionary<string, MusicEditSegment> editByHighlight =
+            musicContext.Plan.Segments.ToDictionary(
+                value => value.HighlightId,
+                StringComparer.Ordinal);
+        List<DynamicEffectPlan> result = new(selected.Length);
+        foreach (GlobalHighlightCandidate candidate in selected)
+        {
+            GenerationHighlight highlight = await db.GenerationHighlights.SingleAsync(
+                value =>
+                    value.GenerationId == generation.Id &&
+                    value.GenerationDemoId == candidate.SourceDemoId &&
+                    value.HighlightId == candidate.Highlight.Id,
+                cancellationToken);
+            if (storedByHighlight.TryGetValue(
+                    highlight.Id,
+                    out GenerationEffectPlan? stored) &&
+                stored.LockedAt is not null &&
+                stored.PlannerVersion == DynamicEffectPlanner.PlannerVersion)
+            {
+                DynamicEffectPlan? locked = JsonSerializer.Deserialize<DynamicEffectPlan>(
+                    stored.DynamicEffectPlanJson,
+                    JsonOptions);
+                if (locked?.PlannerVersion == DynamicEffectPlanner.PlannerVersion)
+                {
+                    LogLockedPlan(
+                        logger,
+                        publicId,
+                        highlight.HighlightId,
+                        locked.DeterministicSeed,
+                        locked.Effects.Count);
+                    result.Add(locked);
+                    continue;
+                }
+            }
+            DynamicEffectPlan plan = dynamicEffectPlanner.Build(
+                new DynamicEffectPlanningContext
+                {
+                    GenerationId = publicId,
+                    Highlight = highlight,
+                    TickRate = Math.Max(1, highlight.TickRate),
+                    Style = generation.EffectPreset == EffectPreset.Clean
+                        ? MovieStyle.Clean
+                        : musicContext.Settings.MovieStyle,
+                    Intensity = musicContext.Settings.EffectIntensity,
+                    EditSegment = editByHighlight.GetValueOrDefault(
+                        highlight.HighlightId),
+                    EnabledGroups = enabledGroups,
+                    Capabilities = capabilities
+                });
+            LogEffectPlan(
+                logger,
+                publicId,
+                highlight.HighlightId,
+                plan.Style,
+                plan.Intensity,
+                plan.DeterministicSeed,
+                plan.Effects.Count,
+                plan.RejectedEffects.Count);
+            if (!storedByHighlight.TryGetValue(
+                    highlight.Id,
+                    out GenerationEffectPlan? entity))
+            {
+                entity = new GenerationEffectPlan
+                {
+                    GenerationId = generation.Id,
+                    GenerationHighlightId = highlight.Id,
+                    Preset = generation.EffectPreset,
+                    CreatedAt = timeProvider.GetUtcNow()
+                };
+                db.GenerationEffectPlans.Add(entity);
+                storedByHighlight.Add(highlight.Id, entity);
+            }
+            entity.DynamicEffectPlanJson = JsonSerializer.Serialize(plan, JsonOptions);
+            entity.PlannerVersion = plan.PlannerVersion;
+            entity.DeterministicSeed = plan.DeterministicSeed;
+            entity.LockedAt = musicContext.Settings.LockedAt ??
+                timeProvider.GetUtcNow();
+            result.Add(plan);
+        }
+        string directory = storage.EnsureDirectory(publicId, "plan");
+        string path = Path.Combine(directory, "dynamic-effect-plan.json");
+        string temporary = path + ".tmp";
+        if (File.Exists(temporary))
+            File.Delete(temporary);
+        await File.WriteAllTextAsync(
+            temporary,
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = DynamicEffectPlanner.SchemaVersion,
+                plannerVersion = DynamicEffectPlanner.PlannerVersion,
+                generationId = publicId,
+                plans = result
+            }, JsonOptions),
+            cancellationToken);
+        File.Move(temporary, path, true);
+        await AddArtifactAsync(
+            db,
+            generation.Id,
+            ArtifactType.DynamicEffectPlan,
+            path,
+            cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return result;
+    }
+
+    private static IReadOnlySet<string> ParseEnabledGroups(string json)
+    {
+        string[] values = DeserializeJson<string[]>(json, []);
+        return values.Length == 0
+            ? DynamicEffectGroups.All
+            : new HashSet<string>(
+                values.Where(DynamicEffectGroups.All.Contains),
+                StringComparer.Ordinal);
+    }
+
     private sealed record MusicMovieContext(
         MusicEditPlan Plan,
         string MusicPath,
@@ -1004,6 +1214,8 @@ public sealed class GenerationWorker(
             storage.EnsureDirectory(publicId, "output"), "music-alignment-result.json");
         string colorGradeResultPath = Path.Combine(
             storage.EnsureDirectory(publicId, "output"), "color-grade-result.json");
+        string dynamicEffectResultPath = Path.Combine(
+            storage.EnsureDirectory(publicId, "output"), "dynamic-effect-result.json");
         await File.WriteAllTextAsync(
             reportPath,
             JsonSerializer.Serialize(new
@@ -1045,6 +1257,10 @@ public sealed class GenerationWorker(
             await AddArtifactAsync(
                 db, generation.Id, ArtifactType.ColorGradeResult,
                 colorGradeResultPath, cancellationToken);
+        if (File.Exists(dynamicEffectResultPath))
+            await AddArtifactAsync(
+                db, generation.Id, ArtifactType.DynamicEffectResult,
+                dynamicEffectResultPath, cancellationToken);
         await AddArtifactAsync(
             db, generation.Id, ArtifactType.GenerationReport, reportPath, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);

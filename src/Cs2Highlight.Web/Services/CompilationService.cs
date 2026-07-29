@@ -20,7 +20,9 @@ public sealed record CompilationRequest(
     IReadOnlyList<HighlightEffectPlan>? EffectPlans = null,
     MusicEditPlan? MusicEditPlan = null,
     string? MusicPath = null,
-    GenerationMovieSettings? MovieSettings = null);
+    GenerationMovieSettings? MovieSettings = null,
+    IReadOnlyList<DynamicEffectPlan>? DynamicEffectPlans = null,
+    FfmpegCapabilities? FfmpegCapabilities = null);
 public sealed record CompilationProgress(int Percent, string Stage);
 public sealed record CompilationVideo(int Width, int Height, int Fps, string Codec);
 public sealed record CompilationAudio(string? Codec, int? SampleRate);
@@ -35,6 +37,17 @@ public sealed record CompilationResult(
     CompilationVideo? Video,
     CompilationAudio? Audio,
     string? Error);
+public sealed record DynamicEffectClipResult(
+    string ClipId,
+    int PlannedEffects,
+    int AppliedEffects,
+    int FallbackEffects,
+    int SkippedEffects,
+    long RenderDurationMilliseconds,
+    double OutputDurationSeconds,
+    int FfmpegExitCode,
+    bool Verified,
+    IReadOnlyList<string> Warnings);
 
 public interface IHighlightCompilationService
 {
@@ -71,10 +84,12 @@ public sealed class FfmpegEffectFilterGraphBuilder : IEffectFilterGraphBuilder
             FfmpegEffectFilterBuilder.BuildAudio(durationSeconds, plan));
 }
 
-public sealed class FfmpegHighlightCompilationService(
+public sealed partial class FfmpegHighlightCompilationService(
     PipelineOptions options,
     IEffectFilterGraphBuilder filterGraphs,
-    TrustedLutCatalog trustedLuts)
+    IDynamicEffectFilterGraphBuilder dynamicFilterGraphs,
+    TrustedLutCatalog trustedLuts,
+    ILogger<FfmpegHighlightCompilationService> logger)
     : IHighlightCompilationService
 {
     private static readonly Encoding Utf8WithoutBom = new UTF8Encoding(false);
@@ -82,6 +97,30 @@ public sealed class FfmpegHighlightCompilationService(
     {
         WriteIndented = true
     };
+
+    [LoggerMessage(EventId = 5101, Level = LogLevel.Information, Message = "[Effects] Starting composition: {ClipCount} clips, {Width}x{Height}@{Fps}, dynamic plans: {DynamicPlanCount}")]
+    private static partial void LogCompositionStarted(ILogger logger, int clipCount, int width, int height, int fps, int dynamicPlanCount);
+
+    [LoggerMessage(EventId = 5102, Level = LogLevel.Information, Message = "[Effects] Clip {ClipNumber}/{ClipCount}: probe completed, duration {DurationSeconds:F3}s, planned effects {EffectCount}")]
+    private static partial void LogClipProbed(ILogger logger, int clipNumber, int clipCount, double durationSeconds, int effectCount);
+
+    [LoggerMessage(EventId = 5103, Level = LogLevel.Information, Message = "[Effects] Clip {ClipNumber}: graph ready, stages {Stages}, effects {Effects}")]
+    private static partial void LogGraphReady(ILogger logger, int clipNumber, string stages, string effects);
+
+    [LoggerMessage(EventId = 5104, Level = LogLevel.Information, Message = "[Effects] Clip {ClipNumber}: FFmpeg finished with exit code {ExitCode} in {ElapsedMilliseconds} ms")]
+    private static partial void LogFfmpegCompleted(ILogger logger, int clipNumber, int exitCode, long elapsedMilliseconds);
+
+    [LoggerMessage(EventId = 5105, Level = LogLevel.Warning, Message = "[Effects] Clip {ClipNumber}: render failed; see {LogPath}")]
+    private static partial void LogRenderFailed(ILogger logger, int clipNumber, string logPath);
+
+    [LoggerMessage(EventId = 5106, Level = LogLevel.Warning, Message = "[Effects] Clip {ClipNumber}: output validation failed ({Width}x{Height}, {DurationSeconds:F3}s)")]
+    private static partial void LogValidationFailed(ILogger logger, int clipNumber, int? width, int? height, double durationSeconds);
+
+    [LoggerMessage(EventId = 5107, Level = LogLevel.Information, Message = "[Effects] Clip {ClipNumber}: verified and persisted ({DurationSeconds:F3}s)")]
+    private static partial void LogClipVerified(ILogger logger, int clipNumber, double durationSeconds);
+
+    [LoggerMessage(EventId = 5108, Level = LogLevel.Information, Message = "[Effects] Final composition verified: {IncludedClips} clips, {DurationSeconds:F3}s, {FileSizeBytes} bytes")]
+    private static partial void LogCompositionVerified(ILogger logger, int includedClips, double durationSeconds, long fileSizeBytes);
 
     public async Task<CompilationResult> ComposeAsync(
         CompilationRequest request,
@@ -95,9 +134,18 @@ public sealed class FfmpegHighlightCompilationService(
         Directory.CreateDirectory(normalizedDirectory);
         List<string> normalized = [];
         List<string> probeErrors = [];
+        List<DynamicEffectClipResult> effectResults = [];
         int skipped = 0;
+        LogCompositionStarted(
+            logger,
+            request.ClipPaths.Count,
+            request.Width,
+            request.Height,
+            request.Fps,
+            request.DynamicEffectPlans?.Count ?? 0);
         for (int index = 0; index < request.ClipPaths.Count; index++)
         {
+            Stopwatch clipWatch = Stopwatch.StartNew();
             string input = Path.GetFullPath(request.ClipPaths[index]);
             if (!File.Exists(input) || new FileInfo(input).Length == 0)
             {
@@ -135,6 +183,17 @@ public sealed class FfmpegHighlightCompilationService(
                 request.EffectPlans is not null && index < request.EffectPlans.Count
                     ? request.EffectPlans[index]
                     : null;
+            DynamicEffectPlan? dynamicEffectPlan =
+                request.DynamicEffectPlans is not null &&
+                index < request.DynamicEffectPlans.Count
+                    ? request.DynamicEffectPlans[index]
+                    : null;
+            LogClipProbed(
+                logger,
+                index + 1,
+                request.ClipPaths.Count,
+                metadata.DurationSeconds,
+                dynamicEffectPlan?.Effects.Count ?? 0);
             FfmpegFilterGraph graph = filterGraphs.Build(
                 metadata.DurationSeconds,
                 effectPlan,
@@ -147,12 +206,24 @@ public sealed class FfmpegHighlightCompilationService(
             string videoFilters = graph.Video;
             string audioFilters = graph.Audio;
             string? selectedLutPath = null;
+            List<string> postEffectVideoFilters = [];
             if (request.MovieSettings is not null)
             {
-                videoFilters += "," + FfmpegMovieFilterBuilder.Color(request.MovieSettings.ColorGradePreset);
+                string color = FfmpegMovieFilterBuilder.Color(
+                    request.MovieSettings.ColorGradePreset);
+                if (dynamicEffectPlan is null)
+                    videoFilters += "," + color;
+                else
+                    postEffectVideoFilters.Add(color);
                 selectedLutPath = trustedLuts.Resolve(request.MovieSettings.LutAssetKey);
                 if (selectedLutPath is not null)
-                    videoFilters += "," + FfmpegMovieFilterBuilder.Lut(selectedLutPath);
+                {
+                    string lut = FfmpegMovieFilterBuilder.Lut(selectedLutPath);
+                    if (dynamicEffectPlan is null)
+                        videoFilters += "," + lut;
+                    else
+                        postEffectVideoFilters.Add(lut);
+                }
             }
             string lutFingerprint = selectedLutPath is null
                 ? string.Empty
@@ -167,6 +238,8 @@ public sealed class FfmpegHighlightCompilationService(
                     videoFilters,
                     audioFilters,
                     lutFingerprint,
+                    JsonSerializer.Serialize(dynamicEffectPlan, JsonOptions),
+                    JsonSerializer.Serialize(request.FfmpegCapabilities, JsonOptions),
                     JsonSerializer.Serialize(timeWarp, JsonOptions))))).ToLowerInvariant();
             if (File.Exists(target) &&
                 File.Exists(signaturePath) &&
@@ -183,12 +256,54 @@ public sealed class FfmpegHighlightCompilationService(
                     persisted.Height == request.Height)
                 {
                     normalized.Add(target);
+                    if (dynamicEffectPlan is not null)
+                    {
+                        effectResults.Add(EffectResult(
+                            dynamicEffectPlan,
+                            0,
+                            persisted.DurationSeconds,
+                            0,
+                            true));
+                    }
                     continue;
                 }
             }
             if (File.Exists(target)) File.Delete(target);
             if (File.Exists(signaturePath)) File.Delete(signaturePath);
-            if (timeWarp?.UsesLocalRamp == true && timeWarp.Segments.Count > 1)
+            if (dynamicEffectPlan is not null)
+            {
+                string audioInput = metadata.HasAudio ? "0:a:0" : "1:a:0";
+                DynamicFfmpegFilterGraph dynamicGraph = dynamicFilterGraphs.Build(
+                    "0:v:0",
+                    audioInput,
+                    metadata.DurationSeconds,
+                    dynamicEffectPlan,
+                    timeWarp,
+                    new VideoOutputOptions(
+                        request.Width,
+                        request.Height,
+                        request.Fps),
+                    audioFilters,
+                    postEffectVideoFilters);
+                LogGraphReady(
+                    logger,
+                    index + 1,
+                    string.Join(
+                        " -> ",
+                        dynamicGraph.Fragments
+                            .Select(value => value.Stage)
+                            .Distinct()),
+                    string.Join(
+                        ", ",
+                        dynamicEffectPlan.Effects.Select(value => value.Type)));
+                arguments.AddRange(
+                [
+                    "-filter_complex", dynamicGraph.FilterComplex,
+                    "-map", $"[{dynamicGraph.VideoOutputLabel}]",
+                    "-map", $"[{dynamicGraph.AudioOutputLabel}]"
+                ]);
+            }
+            else if (timeWarp?.UsesLocalRamp == true && timeWarp.Segments.Count > 1)
             {
                 string timeWarpGraph = FfmpegMovieFilterBuilder.TimeWarp(
                     videoFilters,
@@ -224,13 +339,32 @@ public sealed class FfmpegHighlightCompilationService(
                 "-shortest", "-movflags", "+faststart", temporaryTarget
             ]);
             ProcessResult normalization = await RunAsync(options.FfmpegPath, arguments, cancellationToken);
+            LogFfmpegCompleted(
+                logger,
+                index + 1,
+                normalization.ExitCode,
+                clipWatch.ElapsedMilliseconds);
             await WriteProcessLogAsync(
                 Path.Combine(normalizedDirectory, $"clip-{index + 1:D3}.ffmpeg.log"),
                 normalization,
                 cancellationToken);
             if (normalization.ExitCode != 0 || !File.Exists(temporaryTarget))
             {
+                if (dynamicEffectPlan is not null)
+                {
+                    effectResults.Add(EffectResult(
+                        dynamicEffectPlan,
+                        clipWatch.ElapsedMilliseconds,
+                        0,
+                        normalization.ExitCode,
+                        false,
+                        ["EFFECT_RENDER_FAILED"]));
+                }
                 if (File.Exists(temporaryTarget)) File.Delete(temporaryTarget);
+                LogRenderFailed(
+                    logger,
+                    index + 1,
+                    Path.Combine(normalizedDirectory, $"clip-{index + 1:D3}.ffmpeg.log"));
                 skipped++;
                 continue;
             }
@@ -242,7 +376,23 @@ public sealed class FfmpegHighlightCompilationService(
                 normalizedMetadata.Width != request.Width ||
                 normalizedMetadata.Height != request.Height)
             {
+                if (dynamicEffectPlan is not null)
+                {
+                    effectResults.Add(EffectResult(
+                        dynamicEffectPlan,
+                        clipWatch.ElapsedMilliseconds,
+                        normalizedMetadata.DurationSeconds,
+                        normalization.ExitCode,
+                        false,
+                        ["EFFECT_OUTPUT_INVALID"]));
+                }
                 File.Delete(temporaryTarget);
+                LogValidationFailed(
+                    logger,
+                    index + 1,
+                    normalizedMetadata.Width,
+                    normalizedMetadata.Height,
+                    normalizedMetadata.DurationSeconds);
                 skipped++;
                 continue;
             }
@@ -253,6 +403,36 @@ public sealed class FfmpegHighlightCompilationService(
                 Utf8WithoutBom,
                 cancellationToken);
             normalized.Add(target);
+            if (dynamicEffectPlan is not null)
+            {
+                effectResults.Add(EffectResult(
+                    dynamicEffectPlan,
+                    clipWatch.ElapsedMilliseconds,
+                    normalizedMetadata.DurationSeconds,
+                    normalization.ExitCode,
+                    true));
+            }
+            LogClipVerified(
+                logger,
+                index + 1,
+                normalizedMetadata.DurationSeconds);
+        }
+        if (request.DynamicEffectPlans is not null)
+        {
+            await File.WriteAllTextAsync(
+                Path.Combine(outputDirectory, "dynamic-effect-result.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    clips = effectResults,
+                    plannedEffects = effectResults.Sum(value => value.PlannedEffects),
+                    appliedEffects = effectResults.Sum(value => value.AppliedEffects),
+                    fallbackEffects = effectResults.Sum(value => value.FallbackEffects),
+                    skippedEffects = effectResults.Sum(value => value.SkippedEffects),
+                    verified = effectResults.Count > 0 &&
+                        effectResults.All(value => value.Verified)
+                }, JsonOptions),
+                cancellationToken);
         }
         if (normalized.Count == 0)
             return Failure(
@@ -364,6 +544,11 @@ public sealed class FfmpegHighlightCompilationService(
             }
         }
         File.Move(temporary, final, true);
+        LogCompositionVerified(
+            logger,
+            normalized.Count,
+            finalMetadata.DurationSeconds,
+            file.Length);
         if (request.MovieSettings is not null)
         {
             string? lutPath = trustedLuts.Resolve(request.MovieSettings.LutAssetKey);
@@ -453,6 +638,33 @@ public sealed class FfmpegHighlightCompilationService(
             cancellationToken);
         progress?.Report(new CompilationProgress(100, "Completed"));
         return result;
+    }
+
+    private static DynamicEffectClipResult EffectResult(
+        DynamicEffectPlan plan,
+        long renderDurationMilliseconds,
+        double outputDurationSeconds,
+        int ffmpegExitCode,
+        bool verified,
+        IReadOnlyList<string>? additionalWarnings = null)
+    {
+        string[] warnings = plan.Warnings
+            .Concat(additionalWarnings ?? [])
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        int fallback = warnings.Count(value =>
+            value.Contains("FALLBACK", StringComparison.Ordinal));
+        return new DynamicEffectClipResult(
+            plan.ClipId,
+            plan.Effects.Count,
+            verified ? plan.Effects.Count : 0,
+            fallback,
+            plan.RejectedEffects.Count,
+            renderDurationMilliseconds,
+            outputDurationSeconds,
+            ffmpegExitCode,
+            verified,
+            warnings);
     }
 
     private async Task<MediaMetadata> ProbeAsync(string path, CancellationToken cancellationToken)

@@ -15,6 +15,7 @@ public sealed class CheckoutModel(
     public int DemoCount { get; private set; }
     public int SelectedCount { get; private set; }
     public IReadOnlyList<string> Categories { get; private set; } = [];
+    public GenerationMovieSettings? MovieSettings { get; private set; }
 
     public async Task<IActionResult> OnGetAsync(string publicId, CancellationToken cancellationToken)
     {
@@ -25,6 +26,10 @@ public sealed class CheckoutModel(
         if (generation.Status != GenerationStatus.AwaitingPayment)
             return RedirectToPage("/Generation", new { publicId });
         Generation = generation;
+        MovieSettings = await db.GenerationMovieSettings.AsNoTracking()
+            .SingleOrDefaultAsync(
+                value => value.GenerationId == generation.Id,
+                cancellationToken);
         DemoCount = await db.GenerationDemos.CountAsync(
             value => value.GenerationId == generation.Id,
             cancellationToken);
