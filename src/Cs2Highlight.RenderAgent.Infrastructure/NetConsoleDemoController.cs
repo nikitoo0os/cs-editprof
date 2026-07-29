@@ -114,6 +114,10 @@ public sealed class NetConsoleDemoController(
                 StartReadyMarker,
                 TimeSpan.FromSeconds(options.Warmup.MaximumGameplayReadyWaitSeconds),
                 cancellationToken);
+            // mirv_cmd keeps scheduled commands until they are explicitly removed.
+            // If the start-tick pause remains registered, demo_resume at the same
+            // tick immediately executes the pause again and recording never advances.
+            await connection.SendAsync("mirv_cmd clear", cancellationToken);
         }
 
         await stateJournal.WriteAsync(

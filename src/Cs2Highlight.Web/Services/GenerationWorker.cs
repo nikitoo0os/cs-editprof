@@ -36,6 +36,12 @@ public sealed class GenerationWorker(
             LogLevel.Error,
             new EventId(4002, nameof(LogGenerationFailure)),
             "Generation {PublicId} failed.");
+    private static readonly Action<ILogger, string, GenerationStatus, int, string, Exception?>
+        LogGenerationStage =
+            LoggerMessage.Define<string, GenerationStatus, int, string>(
+                LogLevel.Information,
+                new EventId(4003, nameof(LogGenerationStage)),
+                "[Generation:{GenerationId}] {Status} {Progress}% — {Stage}");
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
         WriteIndented = true,
@@ -1041,6 +1047,7 @@ public sealed class GenerationWorker(
         string stage,
         CancellationToken cancellationToken)
     {
+        LogGenerationStage(logger, publicId, status, progress, stage, null);
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation generation = await db.Generations.SingleAsync(value => value.PublicId == publicId, cancellationToken);
         if (generation.Status != status)

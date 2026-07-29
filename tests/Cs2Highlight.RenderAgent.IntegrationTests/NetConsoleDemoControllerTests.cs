@@ -80,6 +80,17 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         Assert.Contains(commands, command =>
             command.Contains("addAtTick 100", StringComparison.Ordinal) &&
             command.Contains("AFX_RENDER_START_READY", StringComparison.Ordinal));
+        int startSchedule = commands.FindIndex(command =>
+            command.Contains("addAtTick 100", StringComparison.Ordinal) &&
+            command.Contains("AFX_RENDER_START_READY", StringComparison.Ordinal));
+        int clearStartSchedule = commands.FindIndex(
+            startSchedule + 1,
+            command => command == "mirv_cmd clear");
+        int endSchedule = commands.FindIndex(command =>
+            command.Contains("addAtTick 200", StringComparison.Ordinal) &&
+            command.Contains("AFX_RENDER_RECORDING_END", StringComparison.Ordinal));
+        Assert.True(clearStartSchedule > startSchedule);
+        Assert.True(endSchedule > clearStartSchedule);
         Assert.Contains("mirv_cvar_unhide_all", commands);
         Assert.Contains("spec_mode 1", commands);
         Assert.Contains("spec_lock_to_accountid 39734273", commands);
@@ -108,6 +119,7 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             NewLine = "\n"
         };
         bool warmedUp = false;
+        bool startPauseScheduled = false;
         int readinessAttempts = 0;
         int demoStatusAttempts = 0;
         int seekAttempts = 0;
@@ -119,6 +131,15 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
                 return;
             }
             commands.Add(command);
+            if (command.Contains("addAtTick 100", StringComparison.Ordinal) &&
+                command.Contains("AFX_RENDER_START_READY", StringComparison.Ordinal))
+            {
+                startPauseScheduled = true;
+            }
+            if (command == "mirv_cmd clear")
+            {
+                startPauseScheduled = false;
+            }
             if (command == "echo AFX_RENDER_NETCON_READY")
             {
                 readinessAttempts++;
@@ -167,6 +188,12 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
                 {
                     warmedUp = true;
                     await writer.WriteLineAsync("AFX_RENDER_START_READY");
+                    continue;
+                }
+                if (startPauseScheduled)
+                {
+                    await writer.WriteLineAsync(
+                        "AFXERROR: start-tick pause was triggered again");
                     continue;
                 }
                 await writer.WriteLineAsync("AFX_RENDER_RECORDING_END");

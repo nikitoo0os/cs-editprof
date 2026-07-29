@@ -117,12 +117,25 @@ public sealed class ProcessRenderAgentClient(string renderAgentPath) : IRenderAg
         using Process process = new() { StartInfo = startInfo };
         try
         {
+            Console.WriteLine(
+                $"[RenderAgent] Starting job {job.JobId}, attempt {attempt}: " +
+                $"ticks {job.Segment.StartTick}-{job.Segment.EndTick}");
             if (!process.Start())
             {
                 return Failure("RENDER_AGENT_START_FAILED", "Render Agent did not start.", true, -1);
             }
-            Task<string> stdoutTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
-            Task<string> stderrTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            Task stdoutTask = PumpOutputAsync(
+                process.StandardOutput,
+                stdoutPath,
+                Console.Out,
+                "[RenderAgent] ",
+                cancellationToken);
+            Task stderrTask = PumpOutputAsync(
+                process.StandardError,
+                stderrPath,
+                Console.Error,
+                "[RenderAgent:stderr] ",
+                cancellationToken);
             try
             {
                 await process.WaitForExitAsync(cancellationToken);
@@ -136,10 +149,9 @@ public sealed class ProcessRenderAgentClient(string renderAgentPath) : IRenderAg
                 }
                 throw;
             }
-            string stdout = await stdoutTask;
-            string stderr = await stderrTask;
-            await File.WriteAllTextAsync(stdoutPath, stdout, Encoding.UTF8, cancellationToken);
-            await File.WriteAllTextAsync(stderrPath, stderr, Encoding.UTF8, cancellationToken);
+            await Task.WhenAll(stdoutTask, stderrTask);
+            Console.WriteLine(
+                $"[RenderAgent] Job {job.JobId}, attempt {attempt} exited with code {process.ExitCode}.");
             string resultPath = Path.Combine(job.OutputDirectory, "render-result.json");
             if (!File.Exists(resultPath))
             {
@@ -211,6 +223,32 @@ public sealed class ProcessRenderAgentClient(string renderAgentPath) : IRenderAg
             exception is IOException or UnauthorizedAccessException or InvalidOperationException)
         {
             return Failure("TEMPORARY_PROCESS_FAILURE", exception.Message, true, -1);
+        }
+    }
+
+    private static async Task PumpOutputAsync(
+        StreamReader reader,
+        string path,
+        TextWriter terminal,
+        string prefix,
+        CancellationToken cancellationToken)
+    {
+        await using StreamWriter log = new(
+            new FileStream(
+                path,
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.Read,
+                16 * 1024,
+                FileOptions.Asynchronous),
+            new UTF8Encoding(false))
+        {
+            AutoFlush = true
+        };
+        while (await reader.ReadLineAsync(cancellationToken) is { } line)
+        {
+            await log.WriteLineAsync(line.AsMemory(), cancellationToken);
+            await terminal.WriteLineAsync($"{prefix}{line}");
         }
     }
 
