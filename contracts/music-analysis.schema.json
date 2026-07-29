@@ -1,14 +1,27 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/nikitoo0os/cs-editprof/contracts/music-analysis.schema.json",
-  "title": "Stage 6 MusicAnalysis",
+  "title": "Stage 8 MusicAnalysis",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "analyzer", "audio", "beats", "downbeats", "onsets", "sections", "dropCandidates", "warnings"],
+  "required": [
+    "schemaVersion",
+    "analyzer",
+    "audio",
+    "frameHopSeconds",
+    "frames",
+    "beats",
+    "downbeats",
+    "onsets",
+    "sections",
+    "dropCandidates",
+    "warnings"
+  ],
   "properties": {
-    "schemaVersion": { "const": "1.0" },
+    "schemaVersion": { "const": "2.0" },
     "analyzer": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["name", "version", "engine"],
       "properties": {
         "name": { "type": "string" },
@@ -18,35 +31,195 @@
     },
     "audio": {
       "type": "object",
-      "required": ["fileName", "durationSeconds", "sampleRate", "channels", "tempoBpm", "tempoConfidence", "integratedLoudnessLufs"],
+      "additionalProperties": false,
+      "required": [
+        "fileName",
+        "durationSeconds",
+        "sampleRate",
+        "channels",
+        "tempoBpm",
+        "tempoConfidence",
+        "integratedLoudnessLufs"
+      ],
       "properties": {
         "fileName": { "type": "string" },
         "durationSeconds": { "type": "number", "exclusiveMinimum": 0 },
         "sampleRate": { "type": "integer", "minimum": 1 },
         "channels": { "type": "integer", "minimum": 1 },
         "tempoBpm": { "type": ["number", "null"] },
-        "tempoConfidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "tempoConfidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
+        },
         "integratedLoudnessLufs": { "type": ["number", "null"] }
       }
     },
+    "frameHopSeconds": {
+      "type": "number",
+      "minimum": 0.02,
+      "maximum": 0.05
+    },
+    "frames": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/musicFrame" }
+    },
     "beats": { "$ref": "#/$defs/beats" },
     "downbeats": { "$ref": "#/$defs/beats" },
-    "onsets": { "type": "array", "items": { "type": "object" } },
-    "sections": { "type": "array", "items": { "type": "object" } },
-    "dropCandidates": { "type": "array", "items": { "type": "object" } },
-    "warnings": { "type": "array", "items": { "type": "string" } }
+    "onsets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/onset" }
+    },
+    "sections": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/section" }
+    },
+    "dropCandidates": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/drop" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
   },
   "$defs": {
+    "unit": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "musicFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timeSeconds",
+        "energy",
+        "bassEnergy",
+        "onsetStrength",
+        "spectralFlux",
+        "spectralBrightness",
+        "novelty",
+        "rhythmicDensity",
+        "harmonicChange"
+      ],
+      "properties": {
+        "timeSeconds": { "type": "number", "minimum": 0 },
+        "energy": { "$ref": "#/$defs/unit" },
+        "bassEnergy": { "$ref": "#/$defs/unit" },
+        "onsetStrength": { "$ref": "#/$defs/unit" },
+        "spectralFlux": { "$ref": "#/$defs/unit" },
+        "spectralBrightness": { "$ref": "#/$defs/unit" },
+        "novelty": { "$ref": "#/$defs/unit" },
+        "rhythmicDensity": { "$ref": "#/$defs/unit" },
+        "harmonicChange": { "$ref": "#/$defs/unit" }
+      }
+    },
     "beats": {
       "type": "array",
       "items": {
         "type": "object",
+        "additionalProperties": false,
         "required": ["index", "timeSeconds", "strength", "confidence"],
         "properties": {
           "index": { "type": "integer", "minimum": 1 },
           "timeSeconds": { "type": "number", "minimum": 0 },
-          "strength": { "type": "number", "minimum": 0, "maximum": 1 },
-          "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+          "strength": { "$ref": "#/$defs/unit" },
+          "confidence": {
+            "type": ["number", "null"],
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      }
+    },
+    "onset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "timeSeconds", "strength"],
+      "properties": {
+        "index": { "type": "integer", "minimum": 1 },
+        "timeSeconds": { "type": "number", "minimum": 0 },
+        "strength": { "$ref": "#/$defs/unit" }
+      }
+    },
+    "section": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "id",
+        "startSeconds",
+        "endSeconds",
+        "label",
+        "type",
+        "energy",
+        "rhythmicDensity",
+        "bassEnergy",
+        "spectralBrightness",
+        "dynamicContrast",
+        "confidence",
+        "anchors",
+        "scoreBreakdown"
+      ],
+      "properties": {
+        "index": { "type": "integer", "minimum": 1 },
+        "id": { "type": "string", "minLength": 1 },
+        "startSeconds": { "type": "number", "minimum": 0 },
+        "endSeconds": { "type": "number", "exclusiveMinimum": 0 },
+        "label": { "type": "string" },
+        "type": {
+          "enum": [
+            "Intro",
+            "Calm",
+            "Verse",
+            "BuildUp",
+            "PreDrop",
+            "Chorus",
+            "Drop",
+            "HighEnergy",
+            "Breakdown",
+            "Outro",
+            "Unknown"
+          ]
+        },
+        "energy": { "$ref": "#/$defs/unit" },
+        "rhythmicDensity": { "$ref": "#/$defs/unit" },
+        "bassEnergy": { "$ref": "#/$defs/unit" },
+        "spectralBrightness": { "$ref": "#/$defs/unit" },
+        "dynamicContrast": { "$ref": "#/$defs/unit" },
+        "confidence": { "$ref": "#/$defs/unit" },
+        "anchors": { "type": "array" },
+        "scoreBreakdown": {
+          "type": "object",
+          "additionalProperties": { "type": "number" }
+        }
+      }
+    },
+    "drop": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "timeSeconds",
+        "score",
+        "energyChange",
+        "onsetStrength",
+        "lowFrequencyImpact",
+        "confidence"
+      ],
+      "properties": {
+        "index": { "type": "integer", "minimum": 1 },
+        "timeSeconds": { "type": "number", "minimum": 0 },
+        "score": { "$ref": "#/$defs/unit" },
+        "energyChange": { "$ref": "#/$defs/unit" },
+        "onsetStrength": { "$ref": "#/$defs/unit" },
+        "lowFrequencyImpact": { "$ref": "#/$defs/unit" },
+        "confidence": {
+          "type": ["number", "null"],
+          "minimum": 0,
+          "maximum": 1
         }
       }
     }

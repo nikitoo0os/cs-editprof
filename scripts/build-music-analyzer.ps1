@@ -102,8 +102,11 @@ try {
             throw "Packaged music analyzer smoke test failed."
         }
         $smoke = Get-Content -LiteralPath $smokeOutput -Raw | ConvertFrom-Json
-        if ($smoke.schemaVersion -ne "1.0" -or
-            $smoke.analyzer.version -ne "0.1.1") {
+        if ($smoke.schemaVersion -ne "2.0" -or
+            $smoke.analyzer.version -ne "0.2.0" -or
+            $smoke.frameHopSeconds -lt 0.02 -or
+            $smoke.frameHopSeconds -gt 0.05 -or
+            $smoke.frames.Count -eq 0) {
             throw "Packaged music analyzer returned an unexpected contract."
         }
         $smokeSucceeded = $true

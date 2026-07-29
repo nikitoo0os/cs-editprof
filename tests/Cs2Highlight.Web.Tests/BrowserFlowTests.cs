@@ -28,11 +28,15 @@ public sealed class BrowserFlowTests
     [Fact(Timeout = 1_200_000)]
     [Trait("Category", "Stage6BrowserE2E")]
     [Trait("Category", "Stage7BrowserE2E")]
+    [Trait("Category", "Stage8BrowserE2E")]
     public async Task MusicDrivenFlowCompletesWithoutManualReloadWhenOptedIn()
     {
         if (Environment.GetEnvironmentVariable("CS2_STAGE6_BROWSER_E2E") != "1" &&
-            Environment.GetEnvironmentVariable("CS2_STAGE7_BROWSER_E2E") != "1")
+            Environment.GetEnvironmentVariable("CS2_STAGE7_BROWSER_E2E") != "1" &&
+            Environment.GetEnvironmentVariable("CS2_STAGE8_BROWSER_E2E") != "1")
             return;
+        bool cinematicDirector =
+            Environment.GetEnvironmentVariable("CS2_STAGE8_BROWSER_E2E") == "1";
         string baseUrl = Required("CS2_WEB_BASE_URL").TrimEnd('/');
         string music = Path.GetFullPath(Required("CS2_STAGE6_MUSIC"));
         string[] demos = Required("CS2_STAGE6_DEMOS")
@@ -70,7 +74,23 @@ public sealed class BrowserFlowTests
             .ClickAsync();
         await ClickWhenAvailableAsync(page, "Музыка и стиль");
         await Assertions.Expect(page.GetByText("Трек проанализирован")).ToHaveCountAsync(1);
-        await page.Locator("input[name=MovieStyle][value=Dynamic]").CheckAsync();
+        await page.Locator(
+                $"input[name=MovieStyle][value={(cinematicDirector ? "CinematicDirector" : "Dynamic")}]")
+            .CheckAsync();
+        if (cinematicDirector)
+        {
+            await Assertions.Expect(page.Locator("[data-cinematic-director-settings]"))
+                .ToBeVisibleAsync();
+            await page.Locator(
+                    "input[name=CinematicDuration][value=Auto]")
+                .CheckAsync();
+            await page.Locator(
+                    "input[name=CinematicEditIntensity][value=Balanced]")
+                .CheckAsync();
+            await page.Locator(
+                    "input[name=AutomaticCinematicCameras]")
+                .UncheckAsync();
+        }
         await page.Locator("input[name=EffectIntensity][value=Balanced]").CheckAsync();
         await page.Locator("details").EvaluateAsync(
             "(element) => { element.open = true; }");

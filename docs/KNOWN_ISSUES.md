@@ -21,3 +21,23 @@
   tests, but clean captured pixels and visual effect timing still require the
   real Stage 5 checklist on the installed CS2/HLAE/FFmpeg versions.
 - Process ownership cleanup is limited to the process tree started by `ProcessSupervisor`; no broad name-based killing is performed.
+- Stage 8 contains placeholder catalogs for `de_mirage`, `de_inferno` and
+  `de_dust2`, but none has calibrated safe camera volumes or a passed manual
+  HLAE spike. They are therefore unsupported for non-POV shots and fall back
+  to the selected player's POV.
+- Camera capability discovery, command dispatch, low-resolution preview and
+  retry are modelled fail-closed, but this development machine had no HLAE or
+  CS2 installation. A real campath render, preview-quality result and high-FPS
+  camera capture are not claimed.
+- Stage 8 frame/section classification has deterministic unit coverage. Full
+  `librosa` analysis must still be rebuilt with Python 3.10/3.11 and tested
+  against the production music file; low-confidence sections are intentionally
+  reported rather than promoted to Drop.
+- The demo parser exposes movement, alive/freeze state and nearby gameplay
+  actions, but it does not prove smoke occlusion, wall visibility or captured
+  loading/UI pixels. B-roll candidates therefore still require the clean
+  capture profile plus real visual review.
+- `cinematic-alignment-report.json` records planned timing with
+  `VerifiedFromRenderedMedia=false`. FFprobe plus manual visual/audio review of
+  the final gameplay MP4 is required before claiming kill-to-peak alignment,
+  unclipped audio, clean HUD or professional motion quality.

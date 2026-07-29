@@ -259,7 +259,7 @@ public sealed class ProcessMusicAnalyzerClient(PipelineOptions pipeline) : IMusi
         };
         foreach (string argument in new[]
         {
-            "analyze", "--input", inputPath, "--output", outputPath, "--pretty"
+            "analyze", "--input", inputPath, "--output", outputPath
         })
             start.ArgumentList.Add(argument);
         using Process process = new() { StartInfo = start };
@@ -303,9 +303,36 @@ public sealed class ProcessMusicAnalyzerClient(PipelineOptions pipeline) : IMusi
             await JsonSerializer.DeserializeAsync<MusicAnalysis>(
                 stream, JsonOptions, cancellationToken) ??
             throw new InvalidOperationException("MUSIC_ANALYSIS_INVALID");
-        if (analysis.SchemaVersion != "1.0" ||
+        if (analysis.SchemaVersion is not ("1.0" or "2.0") ||
+            analysis.Audio.DurationSeconds <= 0 ||
+            analysis.Audio.SampleRate <= 0 ||
+            analysis.Audio.Channels <= 0 ||
+            (analysis.SchemaVersion == "2.0" &&
+                (analysis.FrameHopSeconds is < 0.02 or > 0.05 ||
+                 analysis.Frames.Count == 0)) ||
             analysis.Beats.Zip(analysis.Beats.Skip(1))
-                .Any(pair => pair.First.TimeSeconds > pair.Second.TimeSeconds))
+                .Any(pair => pair.First.TimeSeconds > pair.Second.TimeSeconds) ||
+            analysis.Frames.Zip(analysis.Frames.Skip(1))
+                .Any(pair => pair.First.TimeSeconds > pair.Second.TimeSeconds) ||
+            analysis.Frames.Any(value =>
+                value.Energy is < 0 or > 1 ||
+                value.BassEnergy is < 0 or > 1 ||
+                value.OnsetStrength is < 0 or > 1 ||
+                value.SpectralFlux is < 0 or > 1 ||
+                value.SpectralBrightness is < 0 or > 1 ||
+                value.Novelty is < 0 or > 1 ||
+                value.RhythmicDensity is < 0 or > 1 ||
+                value.HarmonicChange is < 0 or > 1) ||
+            analysis.Sections.Any(value =>
+                value.StartSeconds < 0 ||
+                value.EndSeconds <= value.StartSeconds ||
+                value.EndSeconds > analysis.Audio.DurationSeconds + 0.05 ||
+                value.Energy is < 0 or > 1 ||
+                value.RhythmicDensity is < 0 or > 1 ||
+                value.BassEnergy is < 0 or > 1 ||
+                value.SpectralBrightness is < 0 or > 1 ||
+                value.DynamicContrast is < 0 or > 1 ||
+                value.Confidence is < 0 or > 1))
             throw new InvalidOperationException("MUSIC_ANALYSIS_INVALID");
         return analysis;
     }

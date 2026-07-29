@@ -32,11 +32,41 @@
         <div class="checkout-row"><span class="muted">Эффекты</span><strong>@UiText.Effect(Model.Generation.EffectPreset)</strong></div>
         @if (Model.MovieSettings is not null)
         {
-          <div class="checkout-row"><span class="muted">Стиль</span><strong>@Model.MovieSettings.MovieStyle</strong></div>
+          <div class="checkout-row"><span class="muted">Стиль</span><strong>@UiText.MovieStyle(Model.MovieSettings.MovieStyle)</strong></div>
           <div class="checkout-row" data-effect-summary><span class="muted">Интенсивность</span><strong>@UiText.EffectIntensity(Model.MovieSettings.EffectIntensity)</strong></div>
+          @if (Model.MovieSettings.MovieStyle == MovieStyle.CinematicDirector)
+          {
+            <div class="checkout-row"><span class="muted">Режиссура</span><strong>@UiText.CinematicEditIntensity(Model.MovieSettings.CinematicEditIntensity)</strong></div>
+          }
         }
         <div class="checkout-row"><span class="muted">Музыка</span><strong>Проанализирована</strong></div>
       </div>
+      @if (Model.CinematicPlan is not null)
+      {
+        <section class="surface" style="padding:16px;margin-top:20px" data-cinematic-timeline>
+          <span class="badge badge-violet">План до оплаты</span>
+          <h3 class="section-title" style="margin-top:12px">Cinematic timeline</h3>
+          <div class="checkout-list" style="margin-top:12px">
+            @foreach (CinematicTimelineItem item in Model.CinematicTimeline)
+            {
+              <div class="checkout-row">
+                <strong>@item.Label</strong>
+                <span>@item.DurationSeconds.ToString("0.0") sec</span>
+              </div>
+            }
+          </div>
+          <p class="muted" style="margin:14px 0 0">
+            Выбрано @Model.CinematicPlan.HighlightMatches.Count сильных музыкальных пика.
+            Все основные убийства запланированы в high-energy sections.
+          </p>
+          @if (Model.CinematicPlan.Segments.All(value => value.Camera.Type == CameraShotType.PlayerPov))
+          {
+            <p class="muted" style="margin:8px 0 0">
+              Cinematic camera пока не подтверждена средой рендера — зафиксирован безопасный POV fallback.
+            </p>
+          }
+        </section>
+      }
     </section>
 
     <aside class="surface surface--elevated surface-pad sticky-panel">
@@ -54,11 +84,21 @@
       @if (Model.MovieSettings is not null)
       {
         <div class="surface" style="padding:14px;margin-top:18px">
-          <strong>Возможные эффекты</strong>
-          <p class="muted" style="margin:7px 0 0;font-size:12px;line-height:1.55">
-            Плавные и ударные зумы, лёгкая тряска, короткие цветовые и ритмические акценты.
-            Конкретный набор зависит от убийств и музыкальных точек.
-          </p>
+          @if (Model.MovieSettings.MovieStyle == MovieStyle.CinematicDirector)
+          {
+            <strong>Мотивированные эффекты</strong>
+            <p class="muted" style="margin:7px 0 0;font-size:12px;line-height:1.55">
+              Не более одного заметного эффекта на highlight — только по зафиксированному музыкальному пику или финальному убийству.
+            </p>
+          }
+          else
+          {
+            <strong>Возможные эффекты</strong>
+            <p class="muted" style="margin:7px 0 0;font-size:12px;line-height:1.55">
+              Плавные и ударные зумы, лёгкая тряска, короткие цветовые и ритмические акценты.
+              Конкретный набор зависит от убийств и музыкальных точек.
+            </p>
+          }
         </div>
       }
       <form method="post" asp-antiforgery="true" data-loading-form>

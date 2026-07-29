@@ -19,8 +19,10 @@ public sealed partial class GenerationWorker(
     IMusicAnalyzerClient musicAnalyzer,
     IMusicalAnchorBuilder musicalAnchorBuilder,
     IMusicEditPlanner musicEditPlanner,
+    ICinematicMusicEditPlanAdapter cinematicMusicEditPlanAdapter,
     IEffectPlanner effectPlanner,
     IDynamicEffectPlanner dynamicEffectPlanner,
+    ICinematicDynamicEffectAdapter cinematicEffectAdapter,
     IFfmpegCapabilityScanner capabilityScanner,
     IHighlightCompilationService compilationService,
     IHubContext<GenerationHub> hub,
@@ -94,10 +96,12 @@ public sealed partial class GenerationWorker(
                 value.Status == GenerationStatus.QueuedForAnalysis ||
                 value.Status == GenerationStatus.Analyzing ||
                 value.Status == GenerationStatus.AnalyzingMusic ||
+                value.Status == GenerationStatus.AnalyzingMusicStructure ||
                 value.Status == GenerationStatus.QueuedForGeneration ||
                 value.Status == GenerationStatus.PreparingRenderPlan ||
                 value.Status == GenerationStatus.SelectingHighlights ||
                 value.Status == GenerationStatus.RenderingClips ||
+                value.Status == GenerationStatus.RenderingHighlights ||
                 value.Status == GenerationStatus.VerifyingClips ||
                 value.Status == GenerationStatus.PlanningMusicEdit ||
                 value.Status == GenerationStatus.ApplyingTimeWarp ||
@@ -105,6 +109,14 @@ public sealed partial class GenerationWorker(
                 value.Status == GenerationStatus.ComposingVideo ||
                 value.Status == GenerationStatus.MixingAudio ||
                 value.Status == GenerationStatus.ApplyingColorGrade ||
+                value.Status == GenerationStatus.SynchronizingPeaks ||
+                value.Status == GenerationStatus.RenderingCameraPreviews ||
+                value.Status == GenerationStatus.ValidatingCameraShots ||
+                value.Status == GenerationStatus.RenderingCinematicShots ||
+                value.Status == GenerationStatus.ComposingCinematicTimeline ||
+                value.Status == GenerationStatus.MixingNarrativeAudio ||
+                value.Status == GenerationStatus.ApplyingNarrativeColor ||
+                value.Status == GenerationStatus.VerifyingCinematicMovie ||
                 value.Status == GenerationStatus.VerifyingOutput ||
                 value.Status == GenerationStatus.Cancelling)
             .ToArrayAsync(cancellationToken);
@@ -126,7 +138,9 @@ public sealed partial class GenerationWorker(
         {
             if (generation.Status is GenerationStatus.QueuedForAnalysis or GenerationStatus.Analyzing)
                 await AnalyzeAsync(generation.PublicId, generationCancellation.Token);
-            else if (generation.Status == GenerationStatus.AnalyzingMusic)
+            else if (generation.Status is
+                GenerationStatus.AnalyzingMusic or
+                GenerationStatus.AnalyzingMusicStructure)
                 await AnalyzeMusicAsync(generation.PublicId, generationCancellation.Token);
             else
                 await GenerateAsync(generation.PublicId, generationCancellation.Token);
@@ -137,6 +151,8 @@ public sealed partial class GenerationWorker(
         }
         catch (InvalidOperationException exception) when (
             exception.Message.StartsWith("MUSIC_", StringComparison.Ordinal) ||
+            exception.Message.StartsWith("CINEMATIC_", StringComparison.Ordinal) ||
+            exception.Message.StartsWith("PRIMARY_KILL_", StringComparison.Ordinal) ||
             exception.Message.Contains("LUT_", StringComparison.Ordinal))
         {
             string code = exception.Message.Split(':', 2)[0].Trim();
@@ -181,17 +197,26 @@ public sealed partial class GenerationWorker(
                 cancellationToken);
             return;
         }
+        await SetStatusAsync(
+            publicId,
+            GenerationStatus.AnalyzingMusicStructure,
+            30,
+            "Analyzing frame-level music structure and peaks",
+            cancellationToken);
+        await db.Entry(generation).ReloadAsync(cancellationToken);
         string analysisDirectory =
             storage.EnsureDirectory(publicId, "analysis", "music");
         string logDirectory = storage.EnsureDirectory(publicId, "logs");
         string analysisPath = Path.Combine(analysisDirectory, "music-analysis.json");
-        MusicAnalysis analysis;
+        MusicAnalysis? analysis = null;
         if (File.Exists(analysisPath))
         {
             analysis = await ReadJsonAsync<MusicAnalysis>(
                 analysisPath, cancellationToken);
         }
-        else
+        if (analysis?.SchemaVersion != "2.0" ||
+            analysis.Frames.Count == 0 ||
+            analysis.FrameHopSeconds is < 0.02 or > 0.05)
         {
             analysis = await musicAnalyzer.AnalyzeAsync(
                 music.StoredPath,
@@ -451,8 +476,11 @@ public sealed partial class GenerationWorker(
             snapshot = await db.Generations
                 .Include(value => value.Demos)
                 .Include(value => value.Highlights)
+                .Include(value => value.MovieSettings)
                 .AsSplitQuery()
                 .SingleAsync(value => value.PublicId == publicId, cancellationToken);
+        bool cinematicDirector =
+            snapshot.MovieSettings?.MovieStyle == MovieStyle.CinematicDirector;
         if (snapshot.PaymentStatus != PaymentStatus.Succeeded)
         {
             await FailAsync(publicId, "PAYMENT_REQUIRED", "Successful payment is required.", cancellationToken);
@@ -509,19 +537,64 @@ public sealed partial class GenerationWorker(
             await FailAsync(publicId, "NO_HIGHLIGHTS_FOUND", "No highlights matched the settings.", cancellationToken);
             return;
         }
+        CinematicMoviePlan? cinematicPlan = null;
+        IReadOnlyList<GlobalHighlightCandidate> renderSelection = selected;
+        if (cinematicDirector)
+        {
+            await using GenerationDbContext cinematicDb =
+                await dbFactory.CreateDbContextAsync(cancellationToken);
+            GenerationCinematicPlan locked =
+                await cinematicDb.GenerationCinematicPlans.AsNoTracking()
+                    .SingleAsync(
+                        value =>
+                            value.GenerationId == snapshot.Id &&
+                            value.LockedAt != null,
+                        cancellationToken);
+            cinematicPlan = JsonSerializer.Deserialize<CinematicMoviePlan>(
+                locked.PlanJson,
+                JsonOptions) ??
+                throw new InvalidOperationException(
+                    "CINEMATIC_LOCKED_PLAN_INVALID");
+            GenerationBrollCandidate[] brollRows =
+                await cinematicDb.GenerationBrollCandidates.AsNoTracking()
+                    .Where(value =>
+                        value.GenerationId == snapshot.Id &&
+                        value.Selected)
+                    .OrderBy(value => value.CandidateId)
+                    .ToArrayAsync(cancellationToken);
+            renderSelection =
+            [
+                .. selected,
+                .. brollRows.Select(value => ToBrollRenderCandidate(
+                    value,
+                    demos[value.GenerationDemoId],
+                    snapshot.SelectedSteamId,
+                    snapshot.SelectedPlayerName))
+            ];
+        }
         await PersistSelectionAndPlanAsync(snapshot, selected, cancellationToken);
         if (snapshot.Status is GenerationStatus.QueuedForGeneration or
             GenerationStatus.PreparingRenderPlan or
             GenerationStatus.SelectingHighlights or
-            GenerationStatus.RenderingClips)
+            GenerationStatus.RenderingClips or
+            GenerationStatus.RenderingHighlights)
         {
             await SetStatusAsync(
-                publicId, GenerationStatus.RenderingClips, 40,
-                $"Rendering 0/{selected.Count} clips", cancellationToken);
+                publicId,
+                cinematicDirector
+                    ? GenerationStatus.RenderingHighlights
+                    : GenerationStatus.RenderingClips,
+                40,
+                $"Rendering 0/{renderSelection.Count} cinematic sources",
+                cancellationToken);
         }
+        GenerationStatus renderingStatus = cinematicDirector
+            ? GenerationStatus.RenderingHighlights
+            : GenerationStatus.RenderingClips;
         Dictionary<string, string> rendered = new(StringComparer.Ordinal);
         int renderedCount = 0;
-        foreach (IGrouping<long, GlobalHighlightCandidate> demoGroup in selected.GroupBy(value => value.SourceDemoId))
+        foreach (IGrouping<long, GlobalHighlightCandidate> demoGroup in
+                 renderSelection.GroupBy(value => value.SourceDemoId))
         {
             GenerationDemo demo = demos[demoGroup.Key];
             string batchRoot = storage.EnsureDirectory(
@@ -557,7 +630,39 @@ public sealed partial class GenerationWorker(
                 foreach (BatchRenderItem item in plan.Items)
                 {
                     Directory.CreateDirectory(Path.Combine(item.OutputDirectory, "logs"));
-                    await store.SaveAsync(item.RenderJobPath, build.RenderJobs[item.ItemId], cancellationToken);
+                    Cs2Highlight.RenderAgent.Application.RenderJob job =
+                        build.RenderJobs[item.ItemId];
+                    if (item.HighlightId.StartsWith(
+                            "broll-",
+                            StringComparison.Ordinal))
+                    {
+                        job = job with
+                        {
+                            CaptureUi = Cs2Highlight.RenderAgent.Application
+                                .CaptureUiProfile.Cinematic
+                        };
+                    }
+                    CinematicSequenceSegment? cinematicSource =
+                        cinematicPlan?.Segments.FirstOrDefault(value =>
+                            string.Equals(
+                                value.HighlightId ??
+                                value.BrollCandidateId,
+                                item.HighlightId,
+                                StringComparison.Ordinal));
+                    if (cinematicSource?.Camera.RequiresHighFpsCapture == true)
+                    {
+                        job = job with
+                        {
+                            Video = job.Video with
+                            {
+                                Fps = Math.Max(snapshot.Fps, 120)
+                            }
+                        };
+                    }
+                    await store.SaveAsync(
+                        item.RenderJobPath,
+                        job,
+                        cancellationToken);
                 }
             }
             BatchExecutionResult result = await new BatchRenderOrchestrator(
@@ -576,9 +681,9 @@ public sealed partial class GenerationWorker(
             }
             renderedCount += result.Report.Summary.Succeeded;
             await PublishAsync(
-                publicId, GenerationStatus.RenderingClips,
-                40 + (int)(45d * renderedCount / selected.Count),
-                $"Rendered {renderedCount}/{selected.Count} clips",
+                publicId, renderingStatus,
+                40 + (int)(45d * renderedCount / renderSelection.Count),
+                $"Rendered {renderedCount}/{renderSelection.Count} cinematic sources",
                 cancellationToken);
         }
         GlobalHighlightCandidate[] renderedSelection = selected
@@ -596,8 +701,94 @@ public sealed partial class GenerationWorker(
             publicId,
             renderedSelection,
             cancellationToken);
+        if (musicContext?.Settings.MovieStyle == MovieStyle.CinematicDirector)
+        {
+            if (cinematicPlan is null)
+                throw new InvalidOperationException(
+                    "CINEMATIC_LOCKED_PLAN_INVALID");
+            Dictionary<string, int> cinematicOrder =
+                musicContext.Plan.Segments.ToDictionary(
+                    value => value.HighlightId,
+                    value => value.Index,
+                    StringComparer.Ordinal);
+            renderedSelection = renderedSelection
+                .OrderBy(value => cinematicOrder.GetValueOrDefault(
+                    value.Highlight.Id,
+                    int.MaxValue))
+                .ThenBy(value => value.Highlight.Id, StringComparer.Ordinal)
+                .ToArray();
+            CinematicSequenceSegment[] orderedSegments =
+                cinematicPlan.Segments
+                    .OrderBy(value => value.OutputStartSeconds)
+                    .ThenBy(value => value.Id, StringComparer.Ordinal)
+                    .ToArray();
+            string[] missingSources = orderedSegments
+                .Select(value =>
+                    value.HighlightId ?? value.BrollCandidateId ??
+                    string.Empty)
+                .Where(value =>
+                    string.IsNullOrWhiteSpace(value) ||
+                    !rendered.ContainsKey(value))
+                .ToArray();
+            if (missingSources.Length > 0)
+                throw new InvalidOperationException(
+                    $"CINEMATIC_SOURCE_RENDER_MISSING:{string.Join(',', missingSources)}");
+            clips = orderedSegments
+                .Select(value => rendered[
+                    value.HighlightId ??
+                    value.BrollCandidateId!])
+                .ToArray();
+        }
         int resumeStage = GenerationStageOrder(snapshot.Status);
-        if (musicContext is not null)
+        if (snapshot.Status is
+            GenerationStatus.RenderingCameraPreviews or
+            GenerationStatus.ValidatingCameraShots or
+            GenerationStatus.RenderingCinematicShots)
+        {
+            if (cinematicPlan is null ||
+                cinematicPlan.Segments.Any(value =>
+                    value.Camera.Type != CameraShotType.PlayerPov))
+            {
+                throw new InvalidOperationException(
+                    "CINEMATIC_CAMERA_RECOVERY_REQUIRES_MANUAL_REVIEW");
+            }
+            if (snapshot.Status == GenerationStatus.RenderingCameraPreviews)
+            {
+                await SetStatusAsync(
+                    publicId,
+                    GenerationStatus.ValidatingCameraShots,
+                    87,
+                    "Recovered camera preview stage; locked plan uses POV fallback",
+                    cancellationToken);
+            }
+            await SetStatusAsync(
+                publicId,
+                GenerationStatus.ComposingCinematicTimeline,
+                88,
+                "Recovered locked POV cinematic plan",
+                cancellationToken);
+            resumeStage = GenerationStageOrder(
+                GenerationStatus.ComposingCinematicTimeline);
+        }
+        if (musicContext is not null &&
+            musicContext.Settings.MovieStyle == MovieStyle.CinematicDirector)
+        {
+            if (resumeStage <= GenerationStageOrder(GenerationStatus.VerifyingClips))
+                await SetStatusAsync(
+                    publicId,
+                    GenerationStatus.VerifyingClips,
+                    85,
+                    "Verifying safe highlight and post-kill boundaries",
+                    cancellationToken);
+            if (resumeStage <= GenerationStageOrder(GenerationStatus.SynchronizingPeaks))
+                await SetStatusAsync(
+                    publicId,
+                    GenerationStatus.SynchronizingPeaks,
+                    87,
+                    "Synchronizing primary kills with locked high-energy peaks",
+                    cancellationToken);
+        }
+        else if (musicContext is not null)
         {
             if (resumeStage <= GenerationStageOrder(GenerationStatus.VerifyingClips))
                 await SetStatusAsync(
@@ -628,11 +819,13 @@ public sealed partial class GenerationWorker(
                 value.Stage,
                 CancellationToken.None));
         IReadOnlyList<HighlightEffectPlan> effectPlans =
-            await GetOrCreateEffectPlansAsync(
-                publicId,
-                renderedSelection,
-                snapshot.EffectPreset,
-                cancellationToken);
+            cinematicPlan is null
+                ? await GetOrCreateEffectPlansAsync(
+                    publicId,
+                    renderedSelection,
+                    snapshot.EffectPreset,
+                    cancellationToken)
+                : [];
         FfmpegCapabilities? capabilities = null;
         IReadOnlyList<DynamicEffectPlan>? dynamicEffectPlans = null;
         if (musicContext is not null && snapshot.EffectPreset != EffectPreset.None)
@@ -647,7 +840,35 @@ public sealed partial class GenerationWorker(
                 capabilities,
                 cancellationToken);
         }
-        if (musicContext is not null)
+        if (musicContext is not null &&
+            musicContext.Settings.MovieStyle == MovieStyle.CinematicDirector)
+        {
+            if (resumeStage <= GenerationStageOrder(
+                    GenerationStatus.ComposingCinematicTimeline))
+                await SetStatusAsync(
+                    publicId,
+                    GenerationStatus.ComposingCinematicTimeline,
+                    88,
+                    "Composing locked cinematic timeline",
+                    cancellationToken);
+            if (resumeStage <= GenerationStageOrder(
+                    GenerationStatus.MixingNarrativeAudio))
+                await SetStatusAsync(
+                    publicId,
+                    GenerationStatus.MixingNarrativeAudio,
+                    92,
+                    "Mixing section-aware music and gameplay audio",
+                    cancellationToken);
+            if (resumeStage <= GenerationStageOrder(
+                    GenerationStatus.ApplyingNarrativeColor))
+                await SetStatusAsync(
+                    publicId,
+                    GenerationStatus.ApplyingNarrativeColor,
+                    96,
+                    "Applying restrained narrative color grade",
+                    cancellationToken);
+        }
+        else if (musicContext is not null)
         {
             if (resumeStage <= GenerationStageOrder(GenerationStatus.ComposingVideo))
                 await SetStatusAsync(
@@ -662,6 +883,40 @@ public sealed partial class GenerationWorker(
                     publicId, GenerationStatus.ApplyingColorGrade, 96,
                     "Applying consistent color grade", cancellationToken);
         }
+        IReadOnlyList<HighlightEffectPlan?> compilationEffectPlans =
+            effectPlans.Select(value => (HighlightEffectPlan?)value).ToArray();
+        IReadOnlyList<DynamicEffectPlan?>? compilationDynamicEffectPlans =
+            dynamicEffectPlans?
+                .Select(value => (DynamicEffectPlan?)value)
+                .ToArray();
+        if (cinematicPlan is not null)
+        {
+            Dictionary<string, DynamicEffectPlan> dynamicByHighlight =
+                dynamicEffectPlans is null
+                    ? new Dictionary<string, DynamicEffectPlan>(
+                        StringComparer.Ordinal)
+                    : renderedSelection
+                        .Zip(dynamicEffectPlans)
+                        .ToDictionary(
+                            value => value.First.Highlight.Id,
+                            value => value.Second,
+                            StringComparer.Ordinal);
+            CinematicSequenceSegment[] orderedSegments =
+                cinematicPlan.Segments
+                    .OrderBy(value => value.OutputStartSeconds)
+                    .ThenBy(value => value.Id, StringComparer.Ordinal)
+                    .ToArray();
+            compilationEffectPlans = orderedSegments
+                .Select(_ => (HighlightEffectPlan?)null)
+                .ToArray();
+            compilationDynamicEffectPlans = orderedSegments
+                .Select(value =>
+                    value.HighlightId is null
+                        ? null
+                        : dynamicByHighlight.GetValueOrDefault(
+                            value.HighlightId))
+                .ToArray();
+        }
         CompilationResult compilation = await compilationService.ComposeAsync(
             new CompilationRequest(
                 clips,
@@ -669,12 +924,13 @@ public sealed partial class GenerationWorker(
                 snapshot.Width,
                 snapshot.Height,
                 snapshot.Fps,
-                EffectPlans: effectPlans,
+                EffectPlans: compilationEffectPlans,
                 MusicEditPlan: musicContext?.Plan,
                 MusicPath: musicContext?.MusicPath,
                 MovieSettings: musicContext?.Settings,
-                DynamicEffectPlans: dynamicEffectPlans,
-                FfmpegCapabilities: capabilities),
+                DynamicEffectPlans: compilationDynamicEffectPlans,
+                FfmpegCapabilities: capabilities,
+                CinematicMoviePlan: cinematicPlan),
             progress,
             cancellationToken);
         if (!compilation.Success || compilation.OutputFile is null)
@@ -684,15 +940,53 @@ public sealed partial class GenerationWorker(
                 compilation.Error ?? "Compilation failed.", cancellationToken);
             return;
         }
+        if (cinematicPlan is not null)
+        {
+            if (compilation.IncludedClips != cinematicPlan.Segments.Count)
+            {
+                await FailAsync(
+                    publicId,
+                    "CINEMATIC_COMPOSITION_INCOMPLETE",
+                    $"Expected {cinematicPlan.Segments.Count} cinematic " +
+                    $"segments, compiled {compilation.IncludedClips}.",
+                    cancellationToken);
+                return;
+            }
+            double actualDuration = compilation.DurationMilliseconds / 1000d;
+            if (Math.Abs(
+                    actualDuration -
+                    cinematicPlan.TargetDurationSeconds) > 0.50)
+            {
+                await FailAsync(
+                    publicId,
+                    "CINEMATIC_OUTPUT_DURATION_MISMATCH",
+                    $"Planned {cinematicPlan.TargetDurationSeconds:F3}s, " +
+                    $"rendered {actualDuration:F3}s.",
+                    cancellationToken);
+                return;
+            }
+        }
         if (musicContext is null &&
             snapshot.Status != GenerationStatus.VerifyingOutput)
             await SetStatusAsync(
                 publicId, GenerationStatus.ComposingVideo, 97,
                 "Final composition completed", cancellationToken);
         await SetStatusAsync(
-            publicId, GenerationStatus.VerifyingOutput, 98,
-            "Verifying output", cancellationToken);
-        await CompleteAsync(publicId, selected.Count, clips.Length, compilation, cancellationToken);
+            publicId,
+            cinematicDirector
+                ? GenerationStatus.VerifyingCinematicMovie
+                : GenerationStatus.VerifyingOutput,
+            98,
+            cinematicDirector
+                ? "Verifying cinematic movie and alignment artifacts"
+                : "Verifying output",
+            cancellationToken);
+        await CompleteAsync(
+            publicId,
+            selected.Count,
+            renderedSelection.Length,
+            compilation,
+            cancellationToken);
     }
 
     private async Task<MusicMovieContext?> GetOrCreateMusicEditPlanAsync(
@@ -758,16 +1052,40 @@ public sealed partial class GenerationWorker(
                     bounds,
                     stored.SelectionOrder ?? index + 1));
             }
-            plan = musicEditPlanner.Create(
-                publicId,
-                music.StoredPath,
-                analysis,
-                inputs,
-                new MusicEditOptions
-                {
-                    Style = settings.MovieStyle,
-                    SyncIntensity = settings.SyncIntensity
-                });
+            if (settings.MovieStyle == MovieStyle.CinematicDirector)
+            {
+                GenerationCinematicPlan locked =
+                    await db.GenerationCinematicPlans.AsNoTracking()
+                        .SingleAsync(
+                            value =>
+                                value.GenerationId == generation.Id &&
+                                value.LockedAt != null,
+                            cancellationToken);
+                CinematicMoviePlan cinematic =
+                    JsonSerializer.Deserialize<CinematicMoviePlan>(
+                        locked.PlanJson,
+                        JsonOptions) ??
+                    throw new InvalidOperationException(
+                        "CINEMATIC_LOCKED_PLAN_INVALID");
+                plan = cinematicMusicEditPlanAdapter.Create(
+                    publicId,
+                    music.StoredPath,
+                    cinematic,
+                    inputs);
+            }
+            else
+            {
+                plan = musicEditPlanner.Create(
+                    publicId,
+                    music.StoredPath,
+                    analysis,
+                    inputs,
+                    new MusicEditOptions
+                    {
+                        Style = settings.MovieStyle,
+                        SyncIntensity = settings.SyncIntensity
+                    });
+            }
             string temporary = planPath + ".tmp";
             await File.WriteAllTextAsync(
                 temporary,
@@ -963,6 +1281,25 @@ public sealed partial class GenerationWorker(
             musicContext.Plan.Segments.ToDictionary(
                 value => value.HighlightId,
                 StringComparer.Ordinal);
+        CinematicMoviePlan? cinematic = null;
+        string expectedPlannerVersion = DynamicEffectPlanner.PlannerVersion;
+        if (musicContext.Settings.MovieStyle == MovieStyle.CinematicDirector)
+        {
+            GenerationCinematicPlan locked =
+                await db.GenerationCinematicPlans.AsNoTracking()
+                    .SingleAsync(
+                        value =>
+                            value.GenerationId == generation.Id &&
+                            value.LockedAt != null,
+                        cancellationToken);
+            cinematic = JsonSerializer.Deserialize<CinematicMoviePlan>(
+                locked.PlanJson,
+                JsonOptions) ??
+                throw new InvalidOperationException(
+                    "CINEMATIC_LOCKED_PLAN_INVALID");
+            expectedPlannerVersion =
+                CinematicDynamicEffectAdapter.PlannerVersion;
+        }
         List<DynamicEffectPlan> result = new(selected.Length);
         foreach (GlobalHighlightCandidate candidate in selected)
         {
@@ -976,12 +1313,12 @@ public sealed partial class GenerationWorker(
                     highlight.Id,
                     out GenerationEffectPlan? stored) &&
                 stored.LockedAt is not null &&
-                stored.PlannerVersion == DynamicEffectPlanner.PlannerVersion)
+                stored.PlannerVersion == expectedPlannerVersion)
             {
                 DynamicEffectPlan? locked = JsonSerializer.Deserialize<DynamicEffectPlan>(
                     stored.DynamicEffectPlanJson,
                     JsonOptions);
-                if (locked?.PlannerVersion == DynamicEffectPlanner.PlannerVersion)
+                if (locked?.PlannerVersion == expectedPlannerVersion)
                 {
                     LogLockedPlan(
                         logger,
@@ -993,21 +1330,27 @@ public sealed partial class GenerationWorker(
                     continue;
                 }
             }
-            DynamicEffectPlan plan = dynamicEffectPlanner.Build(
-                new DynamicEffectPlanningContext
-                {
-                    GenerationId = publicId,
-                    Highlight = highlight,
-                    TickRate = Math.Max(1, highlight.TickRate),
-                    Style = generation.EffectPreset == EffectPreset.Clean
-                        ? MovieStyle.Clean
-                        : musicContext.Settings.MovieStyle,
-                    Intensity = musicContext.Settings.EffectIntensity,
-                    EditSegment = editByHighlight.GetValueOrDefault(
-                        highlight.HighlightId),
-                    EnabledGroups = enabledGroups,
-                    Capabilities = capabilities
-                });
+            DynamicEffectPlan plan = cinematic is null
+                ? dynamicEffectPlanner.Build(
+                    new DynamicEffectPlanningContext
+                    {
+                        GenerationId = publicId,
+                        Highlight = highlight,
+                        TickRate = Math.Max(1, highlight.TickRate),
+                        Style = generation.EffectPreset == EffectPreset.Clean
+                            ? MovieStyle.Clean
+                            : musicContext.Settings.MovieStyle,
+                        Intensity = musicContext.Settings.EffectIntensity,
+                        EditSegment = editByHighlight.GetValueOrDefault(
+                            highlight.HighlightId),
+                        EnabledGroups = enabledGroups,
+                        Capabilities = capabilities
+                    })
+                : cinematicEffectAdapter.Create(
+                    publicId,
+                    highlight,
+                    cinematic,
+                    musicContext.Settings.EffectIntensity);
             LogEffectPlan(
                 logger,
                 publicId,
@@ -1048,7 +1391,7 @@ public sealed partial class GenerationWorker(
             JsonSerializer.Serialize(new
             {
                 schemaVersion = DynamicEffectPlanner.SchemaVersion,
-                plannerVersion = DynamicEffectPlanner.PlannerVersion,
+                plannerVersion = expectedPlannerVersion,
                 generationId = publicId,
                 plans = result
             }, JsonOptions),
@@ -1085,14 +1428,23 @@ public sealed partial class GenerationWorker(
         GenerationStatus.PreparingRenderPlan => 1,
         GenerationStatus.SelectingHighlights => 2,
         GenerationStatus.RenderingClips => 3,
+        GenerationStatus.RenderingHighlights => 3,
         GenerationStatus.VerifyingClips => 4,
         GenerationStatus.PlanningMusicEdit => 5,
         GenerationStatus.ApplyingTimeWarp => 6,
-        GenerationStatus.ApplyingEffects => 7,
-        GenerationStatus.ComposingVideo => 8,
-        GenerationStatus.MixingAudio => 9,
-        GenerationStatus.ApplyingColorGrade => 10,
-        GenerationStatus.VerifyingOutput => 11,
+        GenerationStatus.SynchronizingPeaks => 7,
+        GenerationStatus.RenderingCameraPreviews => 8,
+        GenerationStatus.ValidatingCameraShots => 9,
+        GenerationStatus.RenderingCinematicShots => 10,
+        GenerationStatus.ApplyingEffects => 11,
+        GenerationStatus.ComposingVideo => 12,
+        GenerationStatus.ComposingCinematicTimeline => 12,
+        GenerationStatus.MixingAudio => 13,
+        GenerationStatus.MixingNarrativeAudio => 13,
+        GenerationStatus.ApplyingColorGrade => 14,
+        GenerationStatus.ApplyingNarrativeColor => 14,
+        GenerationStatus.VerifyingOutput => 15,
+        GenerationStatus.VerifyingCinematicMovie => 15,
         _ => 0
     };
 
@@ -1206,6 +1558,12 @@ public sealed partial class GenerationWorker(
             value.AnalysisStatus == DemoAnalysisStatus.Succeeded);
         int skippedDemos = generation.Demos.Count(value =>
             value.AnalysisStatus is DemoAnalysisStatus.Skipped or DemoAnalysisStatus.Failed);
+        int cinematicBrollClips =
+            await db.GenerationBrollCandidates.CountAsync(
+                value =>
+                    value.GenerationId == generation.Id &&
+                    value.Selected,
+                cancellationToken);
         string compilationResultPath = Path.Combine(
             storage.EnsureDirectory(publicId, "output"), "compilation-result.json");
         string audioMixResultPath = Path.Combine(
@@ -1231,8 +1589,11 @@ public sealed partial class GenerationWorker(
                 skippedDemos,
                 totalCandidates = generation.Highlights.Count,
                 plannedHighlights = planned,
-                renderedClips = included,
-                includedClips = included,
+                renderedHighlights = included,
+                cinematicBrollClips,
+                renderedSources = compilation.IncludedClips,
+                renderedClips = compilation.IncludedClips,
+                includedClips = compilation.IncludedClips,
                 failedClips = planned - included,
                 compilation.DurationMilliseconds,
                 compilation.FileSizeBytes,
@@ -1394,6 +1755,53 @@ public sealed partial class GenerationWorker(
                 : value.EndTick,
             EstimatedDurationMilliseconds = value.EstimatedDurationMilliseconds
         };
+    }
+
+    private static GlobalHighlightCandidate ToBrollRenderCandidate(
+        GenerationBrollCandidate value,
+        GenerationDemo demo,
+        string playerSteamId,
+        string? playerName)
+    {
+        double score = Math.Clamp(value.CinematicScore, 0, 1) * 100;
+        HighlightCandidate candidate = new(
+            value.CandidateId,
+            HighlightType.SoloKill,
+            playerSteamId,
+            playerName ?? playerSteamId,
+            value.RoundNumber,
+            value.StartTick,
+            value.StartTick,
+            value.StartTick,
+            value.EndTick,
+            1,
+            0,
+            score,
+            new ScoreBreakdown(
+                score,
+                0,
+                0,
+                0,
+                0,
+                0,
+                score),
+            [],
+            ["CINEMATIC_BROLL"])
+        {
+            SourceDemoId = demo.Id.ToString(
+                System.Globalization.CultureInfo.InvariantCulture),
+            MapName = demo.MapName ?? string.Empty,
+            TickRate = demo.TickRate ?? 64,
+            PrimaryKillTick = value.StartTick,
+            SafeEndTick = value.EndTick,
+            BeautyScore = score,
+            Kills = []
+        };
+        return new GlobalHighlightCandidate(
+            demo.Id,
+            demo.StoredPath,
+            demo.UploadOrder,
+            candidate);
     }
 
     private static T DeserializeJson<T>(string json, T fallback)

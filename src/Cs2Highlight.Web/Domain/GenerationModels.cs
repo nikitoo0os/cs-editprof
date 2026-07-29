@@ -14,6 +14,11 @@ public enum GenerationStatus
     QueuedForGeneration, PreparingRenderPlan, SelectingHighlights,
     RenderingClips, VerifyingClips, PlanningMusicEdit, ApplyingTimeWarp,
     ApplyingEffects, ComposingVideo, MixingAudio, ApplyingColorGrade,
+    AnalyzingMusicStructure, SelectingMusicExcerpt, AnalyzingGameplayTimeline,
+    DetectingBroll, PlanningNarrative, PlanningCameraShots,
+    RenderingCameraPreviews, ValidatingCameraShots, RenderingCinematicShots,
+    RenderingHighlights, SynchronizingPeaks, ComposingCinematicTimeline,
+    MixingNarrativeAudio, ApplyingNarrativeColor, VerifyingCinematicMovie,
     VerifyingOutput, Completed, CompletedWithWarnings, Cancelling, Cancelled,
     Failed, Expired
 }
@@ -39,7 +44,8 @@ public enum ArtifactType
     BatchReport, IntermediateClip, CompilationResult, GenerationReport, FinalVideo, Log,
     MusicUpload, MusicAnalysis, MusicEditPlan, ProcessedClip, AudioMixResult,
     MusicAlignmentResult, ColorGradeResult, DynamicEffectPlan, DynamicEffectResult,
-    FfmpegCapabilities
+    FfmpegCapabilities, CinematicMusicNarrative, CinematicMoviePlan,
+    CinematicAlignmentReport, CameraCapabilities, CameraPreview
 }
 
 public sealed class Generation
@@ -85,6 +91,10 @@ public sealed class Generation
     public GenerationMovieSettings? MovieSettings { get; set; }
     public List<GenerationMusicAnchor> MusicAnchors { get; set; } = [];
     public List<GenerationEditSegment> EditSegments { get; set; } = [];
+    public List<GenerationMusicSection> MusicSections { get; set; } = [];
+    public List<GenerationBrollCandidate> BrollCandidates { get; set; } = [];
+    public List<GenerationCameraShot> CameraShots { get; set; } = [];
+    public GenerationCinematicPlan? CinematicPlan { get; set; }
     public List<Payment> Payments { get; set; } = [];
     public List<GenerationEvent> Events { get; set; } = [];
 }
@@ -130,8 +140,80 @@ public sealed class GenerationMovieSettings
     public double GameplayGainDb { get; set; } = -16;
     [MaxLength(32)] public string TransitionPreference { get; set; } = "Automatic";
     public MusicDurationPolicy MusicDurationPolicy { get; set; } = MusicDurationPolicy.TrimMusicToVideo;
+    public MovieDurationSelection CinematicDuration { get; set; } =
+        MovieDurationSelection.Auto;
+    public bool AutomaticCinematicCameras { get; set; } = true;
+    public CinematicEditIntensity CinematicEditIntensity { get; set; } =
+        CinematicEditIntensity.Balanced;
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset? LockedAt { get; set; }
+}
+
+public sealed class GenerationMusicSection
+{
+    public long Id { get; set; }
+    public long GenerationId { get; set; }
+    public Generation Generation { get; set; } = null!;
+    [MaxLength(64)] public string SectionId { get; set; } = string.Empty;
+    public MusicSectionType Type { get; set; }
+    public long StartMilliseconds { get; set; }
+    public long EndMilliseconds { get; set; }
+    public double Energy { get; set; }
+    public double RhythmicDensity { get; set; }
+    public double BassEnergy { get; set; }
+    public double Confidence { get; set; }
+}
+
+public sealed class GenerationBrollCandidate
+{
+    public long Id { get; set; }
+    public long GenerationId { get; set; }
+    public Generation Generation { get; set; } = null!;
+    public long GenerationDemoId { get; set; }
+    public GenerationDemo Demo { get; set; } = null!;
+    [MaxLength(256)] public string CandidateId { get; set; } = string.Empty;
+    public BrollCandidateType Type { get; set; }
+    public int RoundNumber { get; set; }
+    public long StartTick { get; set; }
+    public long EndTick { get; set; }
+    public double MovementScore { get; set; }
+    public double CinematicScore { get; set; }
+    public double ActionDensity { get; set; }
+    public string TrajectoryJson { get; set; } = "{}";
+    public bool Selected { get; set; }
+}
+
+public sealed class GenerationCameraShot
+{
+    public long Id { get; set; }
+    public long GenerationId { get; set; }
+    public Generation Generation { get; set; } = null!;
+    public long? GenerationBrollCandidateId { get; set; }
+    public GenerationBrollCandidate? BrollCandidate { get; set; }
+    [MaxLength(128)] public string ShotId { get; set; } = string.Empty;
+    public CameraShotType Type { get; set; }
+    public long StartTick { get; set; }
+    public long EndTick { get; set; }
+    public string KeyframesJson { get; set; } = "[]";
+    public double FovStart { get; set; }
+    public double FovEnd { get; set; }
+    public CameraPreviewStatus PreviewStatus { get; set; } =
+        CameraPreviewStatus.NotAttempted;
+    public CameraShotType FallbackType { get; set; } = CameraShotType.PlayerPov;
+    public int PreviewAttempts { get; set; }
+    [MaxLength(1024)] public string? PreviewPath { get; set; }
+}
+
+public sealed class GenerationCinematicPlan
+{
+    public long Id { get; set; }
+    public long GenerationId { get; set; }
+    public Generation Generation { get; set; } = null!;
+    [MaxLength(32)] public string PlannerVersion { get; set; } = "8.0";
+    public string MusicExcerptJson { get; set; } = "{}";
+    public string PlanJson { get; set; } = "{}";
+    public DateTimeOffset? LockedAt { get; set; }
+    public DateTimeOffset CreatedAt { get; set; }
 }
 
 public sealed class GenerationMusicAnchor

@@ -19,8 +19,14 @@ public static class UiText
         "AwaitingHighlightSelection" => "Выберите моменты",
         "AwaitingMusicUpload" => "Добавьте музыку",
         "AnalyzingMusic" => "Анализируем музыку",
+        "AnalyzingMusicStructure" => "Разбираем структуру трека",
         "AwaitingMovieConfiguration" => "Настройте мувик",
         "ValidatingMoviePlan" => "Проверяем настройки",
+        "SelectingMusicExcerpt" => "Выбираем лучший фрагмент трека",
+        "AnalyzingGameplayTimeline" => "Анализируем движение в демке",
+        "DetectingBroll" => "Ищем игровые подъезды",
+        "PlanningNarrative" => "Строим драматургию",
+        "PlanningCameraShots" => "Планируем камеры",
         "AwaitingPayment" => "Ожидаем оплату",
         "PaymentProcessing" => "Проверяем оплату",
         "Paid" => "Оплачено",
@@ -28,6 +34,7 @@ public static class UiText
         "PreparingRenderPlan" => "Готовим монтаж",
         "SelectingHighlights" => "Собираем моменты",
         "RenderingClips" => "Рендерим моменты",
+        "RenderingHighlights" => "Рендерим основные highlights",
         "VerifyingClips" => "Проверяем клипы",
         "PlanningMusicEdit" => "Подстраиваем монтаж под трек",
         "ApplyingTimeWarp" => "Подстраиваем моменты под ритм",
@@ -35,6 +42,14 @@ public static class UiText
         "ComposingVideo" => "Собираем финальный монтаж",
         "MixingAudio" => "Смешиваем звук",
         "ApplyingColorGrade" => "Применяем цвет",
+        "SynchronizingPeaks" => "Синхронизируем убийства с пиками",
+        "RenderingCameraPreviews" => "Рендерим превью камер",
+        "ValidatingCameraShots" => "Проверяем траектории камер",
+        "RenderingCinematicShots" => "Рендерим cinematic shots",
+        "ComposingCinematicTimeline" => "Собираем cinematic timeline",
+        "MixingNarrativeAudio" => "Смешиваем звук по структуре трека",
+        "ApplyingNarrativeColor" => "Применяем цветовую драматургию",
+        "VerifyingCinematicMovie" => "Проверяем финальный cinematic movie",
         "VerifyingOutput" => "Проверяем готовое видео",
         "Completed" => "Готово",
         "CompletedWithWarnings" => "Готово с замечаниями",
@@ -55,8 +70,14 @@ public static class UiText
         GenerationStatus.AwaitingHighlightSelection => 3,
         GenerationStatus.AwaitingMusicUpload or
         GenerationStatus.AnalyzingMusic or
+        GenerationStatus.AnalyzingMusicStructure or
         GenerationStatus.AwaitingMovieConfiguration or
-        GenerationStatus.ValidatingMoviePlan => 4,
+        GenerationStatus.ValidatingMoviePlan or
+        GenerationStatus.SelectingMusicExcerpt or
+        GenerationStatus.AnalyzingGameplayTimeline or
+        GenerationStatus.DetectingBroll or
+        GenerationStatus.PlanningNarrative or
+        GenerationStatus.PlanningCameraShots => 4,
         GenerationStatus.AwaitingPayment or
         GenerationStatus.PaymentProcessing or
         GenerationStatus.Paid => 5,
@@ -127,8 +148,18 @@ public static class UiText
         Cs2Highlight.Music.MovieStyle.Dynamic => "Динамичный",
         Cs2Highlight.Music.MovieStyle.Cinematic => "Кинематографичный",
         Cs2Highlight.Music.MovieStyle.Aggressive => "Агрессивный",
+        Cs2Highlight.Music.MovieStyle.CinematicDirector => "Cinematic Director",
         _ => "Динамичный"
     };
+
+    public static string CinematicEditIntensity(
+        CinematicEditIntensity intensity) =>
+        intensity switch
+        {
+            Cs2Highlight.Music.CinematicEditIntensity.Calm => "Спокойная",
+            Cs2Highlight.Music.CinematicEditIntensity.Dynamic => "Динамичная",
+            _ => "Сбалансированная"
+        };
 
     public static string Sync(MusicSyncIntensity intensity) => intensity switch
     {

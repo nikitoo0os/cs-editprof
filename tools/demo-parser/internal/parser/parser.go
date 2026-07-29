@@ -18,15 +18,20 @@ import (
 )
 
 const (
-	SchemaVersion = "1.1"
+	SchemaVersion = "1.2"
 	ParserName    = "cs2-demo-parser"
-	ParserVersion = "0.2.0"
+	ParserVersion = "0.3.0"
 )
 
 type roundBuilder struct {
 	number        int
 	startTick     int64
 	freezeEndTick *int64
+}
+
+type sampledPosition struct {
+	tick     int64
+	position contract.GameplayVector3
 }
 
 func Analyze(path string) (contract.Analysis, error) {
@@ -46,6 +51,7 @@ func Analyze(path string) (contract.Analysis, error) {
 		Players:       []contract.Player{},
 		Rounds:        []contract.Round{},
 		Kills:         []contract.Kill{},
+		Timeline:      []contract.GameplayTimelineFrame{},
 		Warnings:      []string{},
 	}
 	players := make(map[string]contract.Player)
@@ -54,6 +60,9 @@ func Analyze(path string) (contract.Analysis, error) {
 	roundNumber := 0
 	shotsSinceLastKill := make(map[string]int)
 	weaponFireEvents := 0
+	pendingEvents := make(map[string][]contract.GameplayEventReference)
+	lastPositions := make(map[string]sampledPosition)
+	lastTimelineTick := int64(-1)
 
 	currentTick := func() int64 {
 		return int64(p.GameState().IngameTick())
@@ -79,7 +88,24 @@ func Analyze(path string) (contract.Analysis, error) {
 		currentRound = nil
 		result.Rounds = result.Rounds[:0]
 		result.Kills = result.Kills[:0]
+		result.Timeline = result.Timeline[:0]
+		clear(pendingEvents)
+		clear(lastPositions)
+		lastTimelineTick = -1
 		collectParticipants()
+	}
+	recordAction := func(player *common.Player, eventType string, weaponCode *string) {
+		if player == nil || !matchStarted || currentRound == nil {
+			return
+		}
+		mapped := mapPlayer(player)
+		pendingEvents[mapped.PlayerID] = append(
+			pendingEvents[mapped.PlayerID],
+			contract.GameplayEventReference{
+				Type:       eventType,
+				Tick:       currentTick(),
+				WeaponCode: weaponCode,
+			})
 	}
 
 	p.RegisterNetMessageHandler(func(serverInfo *msg.CSVCMsg_ServerInfo) {
@@ -135,6 +161,28 @@ func Analyze(path string) (contract.Analysis, error) {
 		player := mapPlayer(event.Shooter)
 		shotsSinceLastKill[player.PlayerID]++
 		weaponFireEvents++
+		weapon := "unknown"
+		if event.Weapon != nil {
+			weapon = canonicalWeapon(event.Weapon.String())
+		}
+		recordAction(event.Shooter, "WeaponFire", &weapon)
+	})
+	p.RegisterEventHandler(func(event events.WeaponReload) {
+		recordAction(event.Player, "WeaponReload", nil)
+	})
+	p.RegisterEventHandler(func(event events.PlayerJump) {
+		recordAction(event.Player, "PlayerJump", nil)
+	})
+	p.RegisterEventHandler(func(event events.BombPlantBegin) {
+		recordAction(event.Player, "BombPlant", nil)
+	})
+	p.RegisterEventHandler(func(event events.BombDefuseStart) {
+		recordAction(event.Player, "BombDefuse", nil)
+	})
+	p.RegisterEventHandler(func(event events.GrenadeProjectileThrow) {
+		if event.Projectile != nil {
+			recordAction(event.Projectile.Thrower, "UtilityThrow", nil)
+		}
 	})
 	p.RegisterEventHandler(func(event events.Kill) {
 		if !matchStarted || currentRound == nil || event.Victim == nil {
@@ -196,6 +244,83 @@ func Analyze(path string) (contract.Analysis, error) {
 			DistanceMeters:     distanceMeters,
 			ShotsSinceLastKill: shots,
 		})
+		recordAction(event.Killer, "Kill", &weapon)
+	})
+	p.RegisterEventHandler(func(events.FrameDone) {
+		if !matchStarted || currentRound == nil {
+			return
+		}
+		tick := currentTick()
+		tickRate := int(math.Round(p.TickRate()))
+		if tickRate <= 0 {
+			return
+		}
+		sampleInterval := int64(max(1, tickRate/5))
+		if lastTimelineTick >= 0 && tick-lastTimelineTick < sampleInterval {
+			return
+		}
+		lastTimelineTick = tick
+		inFreezeTime := currentRound.freezeEndTick == nil ||
+			tick < *currentRound.freezeEndTick
+		for _, player := range p.GameState().Participants().All() {
+			if player == nil || !player.IsConnected ||
+				player.PlayerPawnEntity() == nil {
+				continue
+			}
+			mapped := mapPlayer(player)
+			position := player.Position()
+			currentPosition := contract.GameplayVector3{
+				X: position.X,
+				Y: position.Y,
+				Z: position.Z,
+			}
+			velocity := contract.GameplayVector3{}
+			movementSpeed := 0.0
+			if previous, ok := lastPositions[mapped.PlayerID]; ok &&
+				tick > previous.tick {
+				elapsedSeconds := float64(tick-previous.tick) / float64(tickRate)
+				velocity = contract.GameplayVector3{
+					X: (currentPosition.X - previous.position.X) / elapsedSeconds,
+					Y: (currentPosition.Y - previous.position.Y) / elapsedSeconds,
+					Z: (currentPosition.Z - previous.position.Z) / elapsedSeconds,
+				}
+				movementSpeed = math.Sqrt(
+					velocity.X*velocity.X +
+						velocity.Y*velocity.Y +
+						velocity.Z*velocity.Z)
+			}
+			lastPositions[mapped.PlayerID] = sampledPosition{
+				tick:     tick,
+				position: currentPosition,
+			}
+			frameEvents := pendingEvents[mapped.PlayerID]
+			if frameEvents == nil {
+				frameEvents = []contract.GameplayEventReference{}
+			}
+			actionDensity := math.Min(1, float64(len(frameEvents))/4)
+			result.Timeline = append(
+				result.Timeline,
+				contract.GameplayTimelineFrame{
+					Tick:        tick,
+					RoundNumber: currentRound.number,
+					Player: contract.PlayerTransform{
+						PlayerID: mapped.PlayerID,
+						Position: currentPosition,
+						Velocity: velocity,
+						ViewAngles: contract.GameplayVector3{
+							X: float64(player.ViewDirectionY()),
+							Y: float64(player.ViewDirectionX()),
+						},
+					},
+					MovementSpeed: movementSpeed,
+					ActionDensity: actionDensity,
+					Alive:         player.IsAlive(),
+					InFreezeTime:  inFreezeTime,
+					NearKillEvent: false,
+					Events:        frameEvents,
+				})
+			delete(pendingEvents, mapped.PlayerID)
+		}
 	})
 
 	if err := p.ParseToEnd(); err != nil {
@@ -236,6 +361,7 @@ func Analyze(path string) (contract.Analysis, error) {
 		result.Kills[index].EventIndex = index + 1
 	}
 	markRoundEndingKills(&result)
+	markNearKillTimelineFrames(&result)
 	if weaponFireEvents == 0 {
 		result.Warnings = append(
 			result.Warnings,
@@ -243,7 +369,12 @@ func Analyze(path string) (contract.Analysis, error) {
 	}
 	result.Warnings = append(
 		result.Warnings,
-		"lastEnemyKill is unavailable in parser v0.2.0 and remains null.")
+		"lastEnemyKill is unavailable in parser v0.3.0 and remains null.")
+	if len(result.Timeline) == 0 {
+		result.Warnings = append(
+			result.Warnings,
+			"Gameplay timeline was unavailable; cinematic B-roll must use POV fallback.")
+	}
 
 	if result.Demo.TickRate <= 0 {
 		return contract.Analysis{}, fmt.Errorf("required tick rate could not be extracted")
@@ -252,6 +383,25 @@ func Analyze(path string) (contract.Analysis, error) {
 		return contract.Analysis{}, fmt.Errorf("required round events could not be extracted")
 	}
 	return result, nil
+}
+
+func markNearKillTimelineFrames(result *contract.Analysis) {
+	if result.Demo.TickRate <= 0 || len(result.Kills) == 0 {
+		return
+	}
+	tolerance := int64(result.Demo.TickRate * 2)
+	killTicks := make([]int64, len(result.Kills))
+	for index, kill := range result.Kills {
+		killTicks[index] = kill.Tick
+	}
+	for index := range result.Timeline {
+		frame := &result.Timeline[index]
+		nearest := sort.Search(len(killTicks), func(i int) bool {
+			return killTicks[i] >= frame.Tick-tolerance
+		})
+		frame.NearKillEvent = nearest < len(killTicks) &&
+			killTicks[nearest] <= frame.Tick+tolerance
+	}
 }
 
 func markRoundEndingKills(result *contract.Analysis) {

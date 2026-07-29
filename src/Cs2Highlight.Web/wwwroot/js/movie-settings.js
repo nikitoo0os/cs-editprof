@@ -6,4 +6,15 @@ if (settings) {
     input.addEventListener("input", update);
     update();
   });
+
+  const directorPanel = settings.querySelector("[data-cinematic-director-settings]");
+  const styleInputs = settings.querySelectorAll("input[name=MovieStyle]");
+  const updateDirectorPanel = () => {
+    const selected = settings.querySelector("input[name=MovieStyle]:checked");
+    if (directorPanel) {
+      directorPanel.hidden = selected?.value !== "CinematicDirector";
+    }
+  };
+  styleInputs.forEach(input => input.addEventListener("change", updateDirectorPanel));
+  updateDirectorPanel();
 }

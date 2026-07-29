@@ -9,7 +9,53 @@ public sealed record DemoAnalysis(
     IReadOnlyList<DemoPlayer> Players,
     IReadOnlyList<DemoRound> Rounds,
     IReadOnlyList<KillEvent> Kills,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    public IReadOnlyList<GameplayTimelineFrame> Timeline { get; init; } = [];
+}
+
+public sealed record GameplayVector3(double X, double Y, double Z)
+{
+    public static readonly GameplayVector3 Zero = new(0, 0, 0);
+
+    public double DistanceTo(GameplayVector3 other)
+    {
+        double x = X - other.X;
+        double y = Y - other.Y;
+        double z = Z - other.Z;
+        return Math.Sqrt(x * x + y * y + z * z);
+    }
+}
+
+public sealed record PlayerTransform(
+    string PlayerId,
+    GameplayVector3 Position,
+    GameplayVector3 Velocity,
+    GameplayVector3 ViewAngles);
+
+public sealed record GameplayEventReference(
+    string Type,
+    long Tick,
+    string? WeaponCode = null);
+
+public sealed record GameplayTimelineFrame(
+    long Tick,
+    int RoundNumber,
+    PlayerTransform Player,
+    double MovementSpeed,
+    double ActionDensity,
+    bool Alive,
+    bool InFreezeTime,
+    bool NearKillEvent,
+    IReadOnlyList<GameplayEventReference> Events);
+
+public sealed record PlayerTrajectory(
+    IReadOnlyList<PlayerTransformSample> Samples);
+
+public sealed record PlayerTransformSample(
+    long Tick,
+    GameplayVector3 Position,
+    GameplayVector3 ViewAngles);
 
 public sealed record ParserInfo(string Name, string Version);
 

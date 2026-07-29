@@ -7,6 +7,7 @@ public sealed class AnalysisValidatorTests
     [Theory]
     [InlineData("1.0")]
     [InlineData("1.1")]
+    [InlineData("1.2")]
     public void SupportedParserSchemasAreAccepted(string schemaVersion)
     {
         DemoAnalysis analysis = ValidAnalysis(schemaVersion);

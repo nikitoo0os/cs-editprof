@@ -17,12 +17,13 @@ public sealed record CompilationRequest(
     int Height,
     int Fps,
     int MinimumOutputBytes = 1024,
-    IReadOnlyList<HighlightEffectPlan>? EffectPlans = null,
+    IReadOnlyList<HighlightEffectPlan?>? EffectPlans = null,
     MusicEditPlan? MusicEditPlan = null,
     string? MusicPath = null,
     GenerationMovieSettings? MovieSettings = null,
-    IReadOnlyList<DynamicEffectPlan>? DynamicEffectPlans = null,
-    FfmpegCapabilities? FfmpegCapabilities = null);
+    IReadOnlyList<DynamicEffectPlan?>? DynamicEffectPlans = null,
+    FfmpegCapabilities? FfmpegCapabilities = null,
+    CinematicMoviePlan? CinematicMoviePlan = null);
 public sealed record CompilationProgress(int Percent, string Stage);
 public sealed record CompilationVideo(int Width, int Height, int Fps, string Codec);
 public sealed record CompilationAudio(string? Codec, int? SampleRate);
@@ -202,6 +203,12 @@ public sealed partial class FfmpegHighlightCompilationService(
                 index < request.MusicEditPlan.Segments.Count
                     ? request.MusicEditPlan.Segments[index].TimeWarp
                     : null;
+            if (request.CinematicMoviePlan is not null &&
+                index < request.CinematicMoviePlan.Segments.Count)
+            {
+                timeWarp =
+                    request.CinematicMoviePlan.Segments[index].TimeWarp;
+            }
             double speed = timeWarp?.BaseSpeedFactor ?? 1;
             string videoFilters = graph.Video;
             string audioFilters = graph.Audio;
@@ -211,6 +218,23 @@ public sealed partial class FfmpegHighlightCompilationService(
             {
                 string color = FfmpegMovieFilterBuilder.Color(
                     request.MovieSettings.ColorGradePreset);
+                if (request.CinematicMoviePlan is not null &&
+                    index < request.CinematicMoviePlan.Segments.Count)
+                {
+                    CinematicSequenceSegment cinematicSegment =
+                        request.CinematicMoviePlan.Segments[index];
+                    ColorNarrativeSection? narrativeColor =
+                        request.CinematicMoviePlan.Color.Sections
+                            .FirstOrDefault(value => string.Equals(
+                                value.MusicSectionId,
+                                cinematicSegment.MusicSectionId,
+                                StringComparison.Ordinal));
+                    if (narrativeColor is not null)
+                    {
+                        color += FormattableString.Invariant(
+                            $",eq=contrast={narrativeColor.ContrastMultiplier:0.######}:brightness={narrativeColor.ExposureOffset:0.######}");
+                    }
+                }
                 if (dynamicEffectPlan is null)
                     videoFilters += "," + color;
                 else
@@ -499,15 +523,33 @@ public sealed partial class FfmpegHighlightCompilationService(
             string mix = FfmpegMovieFilterBuilder.AudioMix(
                 request.MovieSettings,
                 request.MusicEditPlan,
-                mixOptions);
+                mixOptions,
+                request.CinematicMoviePlan);
+            List<string> mixArguments =
+            [
+                "-y", "-hide_banner", "-loglevel", "error",
+                "-i", gameplay
+            ];
+            if (request.MusicEditPlan?.MusicStartSeconds > 0)
+            {
+                mixArguments.Add("-ss");
+                mixArguments.Add(
+                    request.MusicEditPlan.MusicStartSeconds.ToString(
+                        "0.######",
+                        CultureInfo.InvariantCulture));
+            }
+            mixArguments.AddRange(
+            [
+                "-i", request.MusicPath,
+                "-filter_complex", mix,
+                "-map", "0:v:0", "-map", "[mixed]",
+                "-c:v", "copy", "-c:a", "aac", "-ar", "48000",
+                "-ac", "2", "-b:a", "256k",
+                "-shortest", "-movflags", "+faststart", temporary
+            ]);
             composition = await RunAsync(
                 options.FfmpegPath,
-                ["-y", "-hide_banner", "-loglevel", "error",
-                 "-i", gameplay, "-i", request.MusicPath,
-                 "-filter_complex", mix,
-                 "-map", "0:v:0", "-map", "[mixed]",
-                 "-c:v", "copy", "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "256k",
-                 "-shortest", "-movflags", "+faststart", temporary],
+                mixArguments,
                 cancellationToken);
             await WriteProcessLogAsync(
                 Path.Combine(outputDirectory, "ffmpeg-mix.log"),
@@ -632,7 +674,14 @@ public sealed partial class FfmpegHighlightCompilationService(
                 cancellationToken);
         }
         CompilationResult result = new(
-            "1.1", true, final, normalized.Count, skipped, watch.ElapsedMilliseconds,
+            "1.1",
+            true,
+            final,
+            normalized.Count,
+            skipped,
+            (long)Math.Round(
+                finalMetadata.DurationSeconds * 1000,
+                MidpointRounding.AwayFromZero),
             new FileInfo(final).Length,
             new CompilationVideo(request.Width, request.Height, request.Fps, finalMetadata.VideoCodec ?? "h264"),
             new CompilationAudio(finalMetadata.AudioCodec, finalMetadata.AudioSampleRate),
@@ -869,7 +918,8 @@ public static class FfmpegMovieFilterBuilder
     public static string AudioMix(
         GenerationMovieSettings settings,
         MusicEditPlan? plan = null,
-        AudioMixOptions? options = null)
+        AudioMixOptions? options = null,
+        CinematicMoviePlan? cinematic = null)
     {
         options ??= new AudioMixOptions
         {
@@ -888,14 +938,27 @@ public static class FfmpegMovieFilterBuilder
             options.GameplayKillAccentGainDb));
         double musicBase = Linear(options.MusicGainDb);
         double duckFactor = Linear(options.MusicDuckOnKillDb);
-        string gameplayVolume = Number(gameplayBase);
-        string musicVolume = Number(musicBase);
+        string gameplayVolume = cinematic is null
+            ? Number(gameplayBase)
+            : NarrativeVolume(
+                cinematic,
+                gameplay: true,
+                fallbackDb: options.GameplayBaseGainDb,
+                adjustmentDb:
+                    options.GameplayBaseGainDb - (-16));
+        string musicVolume = cinematic is null
+            ? Number(musicBase)
+            : NarrativeVolume(
+                cinematic,
+                gameplay: false,
+                fallbackDb: options.MusicGainDb,
+                adjustmentDb: options.MusicGainDb - (-3));
         if (killTimes.Length > 0)
         {
             gameplayVolume =
-                $"{Number(gameplayBase)}*(1+({Number(gameplayAccent / gameplayBase)}-1)*({pulse}))";
+                $"({gameplayVolume})*(1+({Number(gameplayAccent / gameplayBase)}-1)*({pulse}))";
             musicVolume =
-                $"{Number(musicBase)}*(1-(1-{Number(duckFactor)})*({pulse}))";
+                $"({musicVolume})*(1-(1-{Number(duckFactor)})*({pulse}))";
         }
         StringBuilder graph = new();
         graph.Append("[0:a:0]aresample=48000,volume='")
@@ -912,6 +975,35 @@ public static class FfmpegMovieFilterBuilder
                 .Append(":attack=5:release=50");
         graph.Append("[mixed]");
         return graph.ToString();
+    }
+
+    private static string NarrativeVolume(
+        CinematicMoviePlan cinematic,
+        bool gameplay,
+        double fallbackDb,
+        double adjustmentDb)
+    {
+        Dictionary<string, SoundDesignSection> soundBySection =
+            cinematic.SoundDesign.Sections.ToDictionary(
+                value => value.MusicSectionId,
+                StringComparer.Ordinal);
+        string expression = Number(Linear(fallbackDb));
+        foreach (CinematicSequenceSegment segment in cinematic.Segments
+                     .OrderByDescending(value => value.OutputStartSeconds))
+        {
+            if (!soundBySection.TryGetValue(
+                    segment.MusicSectionId,
+                    out SoundDesignSection? sound))
+                continue;
+            double decibels = (gameplay
+                    ? sound.GameplayGainDb
+                    : sound.MusicGainDb) +
+                adjustmentDb;
+            expression = string.Create(
+                CultureInfo.InvariantCulture,
+                $"if(between(t\\,{segment.OutputStartSeconds:0.######}\\,{segment.OutputEndSeconds:0.######})\\,{Linear(decibels):0.######}\\,{expression})");
+        }
+        return expression;
     }
 
     public static string TimeWarp(

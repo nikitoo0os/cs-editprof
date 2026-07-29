@@ -1,3 +1,5 @@
+using System.Text.Json;
+using Cs2Highlight.Music;
 using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
 using Cs2Highlight.Web.Services;
@@ -11,11 +13,16 @@ public sealed class CheckoutModel(
     IDbContextFactory<GenerationDbContext> dbFactory,
     PaymentService payments) : PageModel
 {
+    private static readonly JsonSerializerOptions WebJson =
+        new(JsonSerializerDefaults.Web);
+
     public Generation Generation { get; private set; } = null!;
     public int DemoCount { get; private set; }
     public int SelectedCount { get; private set; }
     public IReadOnlyList<string> Categories { get; private set; } = [];
     public GenerationMovieSettings? MovieSettings { get; private set; }
+    public CinematicMoviePlan? CinematicPlan { get; private set; }
+    public IReadOnlyList<CinematicTimelineItem> CinematicTimeline { get; private set; } = [];
 
     public async Task<IActionResult> OnGetAsync(string publicId, CancellationToken cancellationToken)
     {
@@ -30,6 +37,19 @@ public sealed class CheckoutModel(
             .SingleOrDefaultAsync(
                 value => value.GenerationId == generation.Id,
                 cancellationToken);
+        GenerationCinematicPlan? storedCinematic =
+            await db.GenerationCinematicPlans.AsNoTracking()
+                .SingleOrDefaultAsync(
+                    value => value.GenerationId == generation.Id,
+                    cancellationToken);
+        if (storedCinematic is not null)
+        {
+            CinematicPlan = JsonSerializer.Deserialize<CinematicMoviePlan>(
+                storedCinematic.PlanJson,
+                WebJson);
+            if (CinematicPlan is not null)
+                CinematicTimeline = BuildTimeline(CinematicPlan);
+        }
         DemoCount = await db.GenerationDemos.CountAsync(
             value => value.GenerationId == generation.Id,
             cancellationToken);
@@ -49,9 +69,48 @@ public sealed class CheckoutModel(
         return Page();
     }
 
+    private static CinematicTimelineItem[] BuildTimeline(
+        CinematicMoviePlan plan)
+    {
+        double Duration(params CinematicSequenceRole[] roles) =>
+            plan.Segments
+                .Where(value => roles.Contains(value.Role))
+                .Sum(value =>
+                    value.OutputEndSeconds -
+                    value.OutputStartSeconds);
+        return new[]
+        {
+            new CinematicTimelineItem(
+                "INTRO",
+                Duration(
+                    CinematicSequenceRole.Intro,
+                    CinematicSequenceRole.CalmBroll)),
+            new CinematicTimelineItem(
+                "BUILD-UP",
+                Duration(
+                    CinematicSequenceRole.BuildUp,
+                    CinematicSequenceRole.PreKill)),
+            new CinematicTimelineItem(
+                "HIGHLIGHTS",
+                Duration(
+                    CinematicSequenceRole.Highlight,
+                    CinematicSequenceRole.PeakHighlight)),
+            new CinematicTimelineItem(
+                "OUTRO",
+                Duration(
+                    CinematicSequenceRole.Breakdown,
+                    CinematicSequenceRole.Resolution,
+                    CinematicSequenceRole.Outro))
+        }.Where(value => value.DurationSeconds > 0.01).ToArray();
+    }
+
     public async Task<IActionResult> OnPostAsync(string publicId, CancellationToken cancellationToken)
     {
         await payments.CreateAsync(publicId, cancellationToken);
         return RedirectToPage("/TestPayment", new { publicId });
     }
 }
+
+public sealed record CinematicTimelineItem(
+    string Label,
+    double DurationSeconds);

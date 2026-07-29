@@ -15,6 +15,8 @@ public sealed class MusicModel(
     MusicUploadService uploads,
     GenerationStorage storage,
     IMusicEditPlanner musicEditPlanner,
+    ICinematicMusicEditPlanAdapter cinematicMusicEditPlanAdapter,
+    ICinematicPlanService cinematicPlans,
     IEffectSeedProvider effectSeedProvider,
     TrustedLutCatalog trustedLuts,
     GenerationWakeSignal queue,
@@ -44,6 +46,11 @@ public sealed class MusicModel(
     [BindProperty] public string? LutAssetKey { get; set; }
     [BindProperty] public int GameplayGainPercent { get; set; } = 16;
     [BindProperty] public int MusicGainPercent { get; set; } = 71;
+    [BindProperty] public MovieDurationSelection CinematicDuration { get; set; } =
+        MovieDurationSelection.Auto;
+    [BindProperty] public bool AutomaticCinematicCameras { get; set; } = true;
+    [BindProperty] public CinematicEditIntensity CinematicEditIntensity { get; set; } =
+        CinematicEditIntensity.Balanced;
 
     public async Task<IActionResult> OnGetAsync(string publicId, CancellationToken cancellationToken) =>
         await LoadAsync(publicId, cancellationToken);
@@ -141,10 +148,12 @@ public sealed class MusicModel(
             ModelState.AddModelError(string.Empty, "MUSIC_TOO_SHORT_FOR_SELECTION");
             return await LoadAsync(publicId, cancellationToken);
         }
+        await using var transaction =
+            await db.Database.BeginTransactionAsync(cancellationToken);
         DateTimeOffset now = timeProvider.GetUtcNow();
         GenerationStateMachine.Transition(
             generation, GenerationStatus.ValidatingMoviePlan, now);
-        db.GenerationMovieSettings.Add(new GenerationMovieSettings
+        GenerationMovieSettings movieSettings = new()
         {
             GenerationId = generation.Id,
             MovieStyle = MovieStyle,
@@ -166,8 +175,12 @@ public sealed class MusicModel(
                 : LutAssetKey,
             GameplayGainDb = PercentToDb(GameplayGainPercent),
             MusicGainDb = PercentToDb(MusicGainPercent),
+            CinematicDuration = CinematicDuration,
+            AutomaticCinematicCameras = AutomaticCinematicCameras,
+            CinematicEditIntensity = CinematicEditIntensity,
             CreatedAt = now
-        });
+        };
+        db.GenerationMovieSettings.Add(movieSettings);
         await db.SaveChangesAsync(cancellationToken);
         try
         {
@@ -175,27 +188,54 @@ public sealed class MusicModel(
                 db,
                 generation,
                 music,
-                MovieStyle,
-                SyncIntensity,
+                movieSettings,
                 cancellationToken);
+            if (movieSettings.MovieStyle == MovieStyle.CinematicDirector)
+            {
+                GenerationCinematicPlan? lockedCinematic =
+                    db.GenerationCinematicPlans.Local.SingleOrDefault(value =>
+                        value.GenerationId == generation.Id) ??
+                    await db.GenerationCinematicPlans.SingleOrDefaultAsync(
+                        value => value.GenerationId == generation.Id,
+                        cancellationToken);
+                CinematicMoviePlan? cinematicPlan = lockedCinematic is null
+                    ? null
+                    : JsonSerializer.Deserialize<CinematicMoviePlan>(
+                        lockedCinematic.PlanJson,
+                        WebJson);
+                if (cinematicPlan is null)
+                {
+                    throw new InvalidOperationException(
+                        "CINEMATIC_LOCKED_PLAN_INVALID");
+                }
+                generation.EstimatedDurationMilliseconds =
+                    (long)Math.Round(
+                        cinematicPlan.TargetDurationSeconds * 1000);
+            }
+            GenerationStateMachine.Transition(
+                generation, GenerationStatus.AwaitingPayment, now);
+            generation.ProgressPercent = Math.Max(
+                generation.ProgressPercent,
+                35);
+            await db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
         }
         catch (InvalidOperationException exception)
         {
-            GenerationMovieSettings failedSettings =
-                await db.GenerationMovieSettings.SingleAsync(
-                    value => value.GenerationId == generation.Id,
-                    cancellationToken);
-            db.GenerationMovieSettings.Remove(failedSettings);
-            GenerationStateMachine.Transition(
-                generation, GenerationStatus.AwaitingMovieConfiguration, now);
+            await transaction.RollbackAsync(cancellationToken);
+            db.ChangeTracker.Clear();
+            Generation resetGeneration = await db.Generations.SingleAsync(
+                value => value.Id == generation.Id,
+                cancellationToken);
+            resetGeneration.Status =
+                GenerationStatus.AwaitingMovieConfiguration;
+            resetGeneration.CurrentStage =
+                GenerationStatus.AwaitingMovieConfiguration.ToString();
+            resetGeneration.UpdatedAt = now;
             await db.SaveChangesAsync(cancellationToken);
             ModelState.AddModelError(string.Empty, exception.Message);
             return await LoadAsync(publicId, cancellationToken);
         }
-        GenerationStateMachine.Transition(
-            generation, GenerationStatus.AwaitingPayment, now);
-        generation.ProgressPercent = Math.Max(generation.ProgressPercent, 35);
-        await db.SaveChangesAsync(cancellationToken);
         return RedirectToPage("/Checkout", new { publicId });
     }
 
@@ -238,8 +278,7 @@ public sealed class MusicModel(
         GenerationDbContext db,
         Generation generation,
         GenerationMusic music,
-        MovieStyle style,
-        MusicSyncIntensity intensity,
+        GenerationMovieSettings settings,
         CancellationToken cancellationToken)
     {
         GenerationArtifact artifact = await db.GenerationArtifacts.SingleAsync(
@@ -304,12 +343,34 @@ public sealed class MusicModel(
                     Seconds(value.EndTick)),
                 value.SelectionOrder ?? selected.Count + 1));
         }
-        MusicEditPlan plan = musicEditPlanner.Create(
-            generation.PublicId,
-            music.StoredPath,
-            analysis,
-            selected,
-            new MusicEditOptions { Style = style, SyncIntensity = intensity });
+        CinematicLockedPlan? cinematic = null;
+        if (settings.MovieStyle == MovieStyle.CinematicDirector)
+        {
+            cinematic = await cinematicPlans.CreateAndLockAsync(
+                db,
+                generation,
+                music,
+                settings,
+                analysis,
+                selected,
+                cancellationToken);
+        }
+        MusicEditPlan plan = cinematic is null
+            ? musicEditPlanner.Create(
+                generation.PublicId,
+                music.StoredPath,
+                analysis,
+                selected,
+                new MusicEditOptions
+                {
+                    Style = settings.MovieStyle,
+                    SyncIntensity = settings.SyncIntensity
+                })
+            : cinematicMusicEditPlanAdapter.Create(
+                generation.PublicId,
+                music.StoredPath,
+                cinematic.Plan,
+                selected);
         string directory = storage.EnsureDirectory(generation.PublicId, "plan");
         string path = Path.Combine(directory, "music-edit-plan.json");
         string temporary = path + ".tmp";
@@ -320,7 +381,7 @@ public sealed class MusicModel(
                 plan,
                 IndentedWebJson),
             cancellationToken);
-        System.IO.File.Move(temporary, path);
+        System.IO.File.Move(temporary, path, true);
         Dictionary<string, GenerationHighlight> byId =
             stored.ToDictionary(value => value.HighlightId, StringComparer.Ordinal);
         foreach (MusicEditSegment segment in plan.Segments)

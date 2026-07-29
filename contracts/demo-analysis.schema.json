@@ -1,13 +1,40 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/nikitoo0os/cs-editprof/contracts/demo-analysis.schema.json",
-  "title": "CS2 demo analysis",
+  "title": "CS2 demo analysis with gameplay timeline",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "parser", "demo", "players", "rounds", "kills", "warnings"],
+  "required": [
+    "schemaVersion", "parser", "demo", "players", "rounds", "kills",
+    "timeline", "warnings"
+  ],
   "properties": {
-    "schemaVersion": { "const": "1.0" },
-    "parser": {
+    "schemaVersion": { "const": "1.2" },
+    "parser": { "$ref": "#/$defs/parserInfo" },
+    "demo": { "$ref": "#/$defs/demoMetadata" },
+    "players": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/player" }
+    },
+    "rounds": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/round" }
+    },
+    "kills": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/kill" }
+    },
+    "timeline": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/gameplayTimelineFrame" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "$defs": {
+    "parserInfo": {
       "type": "object",
       "additionalProperties": false,
       "required": ["name", "version"],
@@ -16,72 +43,141 @@
         "version": { "type": "string", "minLength": 1 }
       }
     },
-    "demo": {
+    "demoMetadata": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["fileName", "mapName", "tickRate", "durationTicks", "durationMilliseconds"],
+      "required": [
+        "fileName", "mapName", "tickRate", "durationTicks",
+        "durationMilliseconds"
+      ],
       "properties": {
         "fileName": { "type": "string", "minLength": 1 },
         "mapName": { "type": "string" },
         "tickRate": { "type": "integer", "minimum": 1 },
         "durationTicks": { "type": "integer", "minimum": 1 },
-        "durationMilliseconds": { "type": ["integer", "null"], "minimum": 1 }
-      }
-    },
-    "players": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["playerId", "steamId", "name"],
-        "properties": {
-          "playerId": { "type": "string", "minLength": 1 },
-          "steamId": { "type": ["string", "null"] },
-          "name": { "type": "string", "maxLength": 128 }
+        "durationMilliseconds": {
+          "type": ["integer", "null"],
+          "minimum": 1
         }
       }
     },
-    "rounds": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["roundNumber", "startTick", "freezeEndTick", "endTick", "winner", "reason"],
-        "properties": {
-          "roundNumber": { "type": "integer", "minimum": 1 },
-          "startTick": { "type": "integer", "minimum": 0 },
-          "freezeEndTick": { "type": ["integer", "null"], "minimum": 0 },
-          "endTick": { "type": "integer", "minimum": 1 },
-          "winner": { "enum": ["T", "CT", null] },
-          "reason": { "type": ["string", "null"] }
+    "player": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["playerId", "steamId", "name"],
+      "properties": {
+        "playerId": { "type": "string", "minLength": 1 },
+        "steamId": { "type": ["string", "null"] },
+        "name": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "round": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "roundNumber", "startTick", "freezeEndTick", "endTick",
+        "winner", "reason"
+      ],
+      "properties": {
+        "roundNumber": { "type": "integer", "minimum": 1 },
+        "startTick": { "type": "integer", "minimum": 0 },
+        "freezeEndTick": { "type": ["integer", "null"], "minimum": 0 },
+        "endTick": { "type": "integer", "minimum": 1 },
+        "winner": { "enum": ["T", "CT", null] },
+        "reason": { "type": ["string", "null"] }
+      }
+    },
+    "kill": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eventIndex", "tick", "roundNumber", "killerPlayerId",
+        "killerName", "victimPlayerId", "victimName", "assisterPlayerId",
+        "weapon", "headshot", "killerTeam", "victimTeam", "wallbang",
+        "oneTap", "noScope", "throughSmoke", "roundEndingKill",
+        "lastEnemyKill", "killerHealth", "distanceMeters",
+        "shotsSinceLastKill"
+      ],
+      "properties": {
+        "eventIndex": { "type": "integer", "minimum": 1 },
+        "tick": { "type": "integer", "minimum": 0 },
+        "roundNumber": { "type": "integer", "minimum": 1 },
+        "killerPlayerId": { "type": ["string", "null"] },
+        "killerName": { "type": ["string", "null"] },
+        "victimPlayerId": { "type": "string", "minLength": 1 },
+        "victimName": { "type": "string" },
+        "assisterPlayerId": { "type": ["string", "null"] },
+        "weapon": { "type": "string" },
+        "headshot": { "type": "boolean" },
+        "killerTeam": { "enum": ["T", "CT", null] },
+        "victimTeam": { "enum": ["T", "CT", null] },
+        "wallbang": { "type": ["boolean", "null"] },
+        "oneTap": { "type": ["boolean", "null"] },
+        "noScope": { "type": ["boolean", "null"] },
+        "throughSmoke": { "type": ["boolean", "null"] },
+        "roundEndingKill": { "type": ["boolean", "null"] },
+        "lastEnemyKill": { "type": ["boolean", "null"] },
+        "killerHealth": { "type": ["integer", "null"], "minimum": 0 },
+        "distanceMeters": { "type": ["number", "null"], "minimum": 0 },
+        "shotsSinceLastKill": {
+          "type": ["integer", "null"],
+          "minimum": 0
         }
       }
     },
-    "kills": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": [
-          "eventIndex", "tick", "roundNumber", "killerPlayerId", "killerName",
-          "victimPlayerId", "victimName", "assisterPlayerId", "weapon",
-          "headshot", "killerTeam", "victimTeam"
-        ],
-        "properties": {
-          "eventIndex": { "type": "integer", "minimum": 1 },
-          "tick": { "type": "integer", "minimum": 0 },
-          "roundNumber": { "type": "integer", "minimum": 1 },
-          "killerPlayerId": { "type": ["string", "null"] },
-          "killerName": { "type": ["string", "null"] },
-          "victimPlayerId": { "type": "string", "minLength": 1 },
-          "victimName": { "type": "string" },
-          "assisterPlayerId": { "type": ["string", "null"] },
-          "weapon": { "type": "string" },
-          "headshot": { "type": "boolean" },
-          "killerTeam": { "enum": ["T", "CT", null] },
-          "victimTeam": { "enum": ["T", "CT", null] }
-        }
+    "vector3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["x", "y", "z"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "z": { "type": "number" }
       }
     },
-    "warnings": { "type": "array", "items": { "type": "string" } }
+    "playerTransform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["playerId", "position", "velocity", "viewAngles"],
+      "properties": {
+        "playerId": { "type": "string", "minLength": 1 },
+        "position": { "$ref": "#/$defs/vector3" },
+        "velocity": { "$ref": "#/$defs/vector3" },
+        "viewAngles": { "$ref": "#/$defs/vector3" }
+      }
+    },
+    "gameplayEventReference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "tick", "weaponCode"],
+      "properties": {
+        "type": { "type": "string", "minLength": 1 },
+        "tick": { "type": "integer", "minimum": 0 },
+        "weaponCode": { "type": ["string", "null"] }
+      }
+    },
+    "gameplayTimelineFrame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tick", "roundNumber", "player", "movementSpeed",
+        "actionDensity", "alive", "inFreezeTime", "nearKillEvent",
+        "events"
+      ],
+      "properties": {
+        "tick": { "type": "integer", "minimum": 0 },
+        "roundNumber": { "type": "integer", "minimum": 1 },
+        "player": { "$ref": "#/$defs/playerTransform" },
+        "movementSpeed": { "type": "number", "minimum": 0 },
+        "actionDensity": { "type": "number", "minimum": 0, "maximum": 1 },
+        "alive": { "type": "boolean" },
+        "inFreezeTime": { "type": "boolean" },
+        "nearKillEvent": { "type": "boolean" },
+        "events": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/gameplayEventReference" }
+        }
+      }
+    }
   }
 }

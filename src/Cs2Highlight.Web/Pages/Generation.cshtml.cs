@@ -52,6 +52,12 @@ public sealed class GenerationModel(
             or GenerationStatus.AnalyzingMusic or GenerationStatus.VerifyingClips
             or GenerationStatus.PlanningMusicEdit or GenerationStatus.ApplyingTimeWarp
             or GenerationStatus.MixingAudio or GenerationStatus.ApplyingColorGrade
+            or GenerationStatus.RenderingHighlights or GenerationStatus.SynchronizingPeaks
+            or GenerationStatus.RenderingCameraPreviews or GenerationStatus.ValidatingCameraShots
+            or GenerationStatus.RenderingCinematicShots
+            or GenerationStatus.ComposingCinematicTimeline
+            or GenerationStatus.MixingNarrativeAudio
+            or GenerationStatus.ApplyingNarrativeColor
             or GenerationStatus.BuildingHighlightCatalog
             or GenerationStatus.PreparingRenderPlan or GenerationStatus.SelectingHighlights
             or GenerationStatus.QueuedForGeneration)

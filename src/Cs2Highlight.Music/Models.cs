@@ -8,7 +8,7 @@ public enum MusicalAnchorType { Beat, StrongBeat, Downbeat, Onset, SectionBounda
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum MusicSyncIntensity { Soft, Expressive, Aggressive }
 [JsonConverter(typeof(JsonStringEnumConverter))]
-public enum MovieStyle { Clean, Dynamic, Cinematic, Aggressive }
+public enum MovieStyle { Clean, Dynamic, Cinematic, Aggressive, CinematicDirector }
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum ColorGradePreset
 {
@@ -28,7 +28,11 @@ public sealed record MusicAnalysis(
     IReadOnlyList<MusicOnset> Onsets,
     IReadOnlyList<MusicSection> Sections,
     IReadOnlyList<MusicDropCandidate> DropCandidates,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    public double FrameHopSeconds { get; init; } = 0.04;
+    public IReadOnlyList<MusicFrame> Frames { get; init; } = [];
+}
 
 public sealed record MusicAnalyzerInfo(string Name, string Version, string Engine);
 public sealed record MusicAudioInfo(
@@ -42,7 +46,19 @@ public sealed record MusicAudioInfo(
 public sealed record MusicBeat(int Index, double TimeSeconds, double Strength, double? Confidence);
 public sealed record MusicOnset(int Index, double TimeSeconds, double Strength);
 public sealed record MusicSection(
-    int Index, double StartSeconds, double EndSeconds, string Label, double Energy);
+    int Index, double StartSeconds, double EndSeconds, string Label, double Energy)
+{
+    public string Id { get; init; } = $"section-{Index:D3}";
+    public MusicSectionType Type { get; init; } = MusicSectionType.Unknown;
+    public double RhythmicDensity { get; init; }
+    public double BassEnergy { get; init; }
+    public double SpectralBrightness { get; init; }
+    public double DynamicContrast { get; init; }
+    public double Confidence { get; init; }
+    public IReadOnlyList<MusicalAnchor> Anchors { get; init; } = [];
+    public IReadOnlyDictionary<string, double> ScoreBreakdown { get; init; } =
+        new Dictionary<string, double>(StringComparer.Ordinal);
+}
 public sealed record MusicDropCandidate(
     int Index,
     double TimeSeconds,
@@ -112,7 +128,10 @@ public sealed record MusicEditPlan(
     MovieStyle Style,
     MusicSyncIntensity SyncIntensity,
     IReadOnlyList<MusicEditSegment> Segments,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    public double MusicStartSeconds { get; init; }
+}
 
 public sealed class MusicEditOptions
 {

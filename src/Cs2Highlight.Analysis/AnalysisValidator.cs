@@ -3,7 +3,7 @@ namespace Cs2Highlight.Analysis;
 public static class AnalysisValidator
 {
     private static readonly HashSet<string> SupportedSchemaVersions =
-        new(StringComparer.Ordinal) { "1.0", "1.1" };
+        new(StringComparer.Ordinal) { "1.0", "1.1", "1.2" };
 
     public static DemoAnalysis Validate(DemoAnalysis analysis)
     {
@@ -11,7 +11,7 @@ public static class AnalysisValidator
         {
             throw Error(
                 "UNSUPPORTED_ANALYSIS_SCHEMA",
-                $"Expected demo-analysis schema 1.0 or 1.1, got {analysis.SchemaVersion}.");
+                $"Expected demo-analysis schema 1.0, 1.1 or 1.2, got {analysis.SchemaVersion}.");
         }
         if (analysis.Demo.TickRate <= 0)
         {
@@ -41,6 +41,18 @@ public static class AnalysisValidator
         if (analysis.Kills.Select(kill => kill.EventIndex).Distinct().Count() != analysis.Kills.Count)
         {
             throw Error("INVALID_ANALYSIS_JSON", "Analysis contains duplicate event indexes.");
+        }
+        if (analysis.Timeline.Any(frame =>
+                frame.Tick < 0 ||
+                frame.Tick > analysis.Demo.DurationTicks ||
+                frame.RoundNumber <= 0 ||
+                frame.MovementSpeed < 0 ||
+                frame.ActionDensity is < 0 or > 1 ||
+                string.IsNullOrWhiteSpace(frame.Player.PlayerId)))
+        {
+            throw Error(
+                "INVALID_GAMEPLAY_TIMELINE",
+                "Analysis contains an invalid gameplay timeline frame.");
         }
         return analysis;
     }

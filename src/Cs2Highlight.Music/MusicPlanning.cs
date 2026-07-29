@@ -354,7 +354,7 @@ public sealed class MusicEditPlanner(
         IReadOnlyList<SelectedHighlight> highlights,
         MusicEditOptions options)
     {
-        if (music.SchemaVersion != "1.0")
+        if (music.SchemaVersion is not ("1.0" or "2.0"))
             throw new InvalidOperationException("UNSUPPORTED_MUSIC_ANALYSIS_SCHEMA");
         SelectedHighlight[] ordered = highlights
             .OrderBy(value => value.SelectionOrder)

@@ -59,6 +59,58 @@ dotnet build -c Release
 dotnet test -c Release --no-build
 ```
 
+## Stage 8: Cinematic Director
+
+Stage 8 adds an opt-in `Cinematic Director` movie style above the Stage 6–7
+pipeline. The music analyzer emits 20–50 ms frames with energy, bass, onset,
+spectral, novelty, rhythm and harmonic-change features. An explainable
+classifier derives sections and peaks, then selects one bounded contiguous
+excerpt. Primary kills may only be assigned to `Drop`, `Chorus` or
+`HighEnergy` sections.
+
+The demo-analysis `1.2` contract adds a sampled gameplay timeline with player
+transform, velocity, freeze/alive state and action density. Safe movement
+windows outside selected highlights become B-roll candidates. The locked
+`cinematic-movie-plan.json` covers the entire output timeline, limits short
+movies to 30 seconds, prevents B-roll from exceeding highlight duration, maps
+important highlights to strong peaks and preserves post-kill tails during
+bounded time warp.
+
+Director mode uses only effects motivated by the locked plan and applies at
+most one visible filter effect per highlight. Audio gain and restrained color
+adjustments follow the section narrative. B-roll and highlights from one demo
+are included in a single batch plan, so the Render Agent keeps one CS2 session
+per demo.
+
+Automatic non-POV cameras remain fail-closed. The official HLAE surface exposes
+`mirv_campath`, `mirv_camio`, `mirv_input`, `mirv_fov`, `mirv_cmd` and
+`mirv_streams`, but the included map profiles are intentionally unverified.
+Until a real manual spike, map-volume calibration and low-resolution preview
+pass succeed on the render machine, Director records POV fallback shots and
+does not claim a cinematic campath.
+
+Build the updated analyzers before running Web:
+
+```powershell
+.\scripts\build-demo-parser.ps1
+.\scripts\build-music-analyzer.ps1 -PythonVersion 3.11
+dotnet build .\Cs2Highlight.RenderPoC.sln -c Release
+dotnet test .\Cs2Highlight.RenderPoC.sln -c Release --no-build
+```
+
+An opt-in Stage 8 fixture executes the motivated effect, bounded time warp,
+section-aware audio mix, narrative color, final FFprobe and duration report:
+
+```powershell
+$env:CS2_STAGE8_FFMPEG = "C:\path\to\ffmpeg.exe"
+$env:CS2_STAGE8_FIXTURE_OUTPUT = "$PWD\artifacts\stage8-fixtures"
+dotnet test .\tests\Cs2Highlight.Web.Tests -c Release `
+  --filter "Category=Stage8Ffmpeg"
+```
+
+See [Stage 8 real E2E](docs/STAGE8_E2E.md). The generated JSON plan and planned
+alignment report are not substitutes for viewing and probing the real MP4.
+
 ## Stage 7: deterministic dynamic effects
 
 Stage 7 replaces the fixed Dynamic preset with a deterministic, typed effect

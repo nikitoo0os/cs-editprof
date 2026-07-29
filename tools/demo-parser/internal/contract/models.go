@@ -1,13 +1,14 @@
 package contract
 
 type Analysis struct {
-	SchemaVersion string       `json:"schemaVersion"`
-	Parser        ParserInfo   `json:"parser"`
-	Demo          DemoMetadata `json:"demo"`
-	Players       []Player     `json:"players"`
-	Rounds        []Round      `json:"rounds"`
-	Kills         []Kill       `json:"kills"`
-	Warnings      []string     `json:"warnings"`
+	SchemaVersion string                  `json:"schemaVersion"`
+	Parser        ParserInfo              `json:"parser"`
+	Demo          DemoMetadata            `json:"demo"`
+	Players       []Player                `json:"players"`
+	Rounds        []Round                 `json:"rounds"`
+	Kills         []Kill                  `json:"kills"`
+	Timeline      []GameplayTimelineFrame `json:"timeline"`
+	Warnings      []string                `json:"warnings"`
 }
 
 type ParserInfo struct {
@@ -60,4 +61,35 @@ type Kill struct {
 	KillerHealth       *int     `json:"killerHealth"`
 	DistanceMeters     *float64 `json:"distanceMeters"`
 	ShotsSinceLastKill *int     `json:"shotsSinceLastKill"`
+}
+
+type GameplayVector3 struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+}
+
+type PlayerTransform struct {
+	PlayerID   string          `json:"playerId"`
+	Position   GameplayVector3 `json:"position"`
+	Velocity   GameplayVector3 `json:"velocity"`
+	ViewAngles GameplayVector3 `json:"viewAngles"`
+}
+
+type GameplayEventReference struct {
+	Type       string  `json:"type"`
+	Tick       int64   `json:"tick"`
+	WeaponCode *string `json:"weaponCode"`
+}
+
+type GameplayTimelineFrame struct {
+	Tick          int64                    `json:"tick"`
+	RoundNumber   int                      `json:"roundNumber"`
+	Player        PlayerTransform          `json:"player"`
+	MovementSpeed float64                  `json:"movementSpeed"`
+	ActionDensity float64                  `json:"actionDensity"`
+	Alive         bool                     `json:"alive"`
+	InFreezeTime  bool                     `json:"inFreezeTime"`
+	NearKillEvent bool                     `json:"nearKillEvent"`
+	Events        []GameplayEventReference `json:"events"`
 }

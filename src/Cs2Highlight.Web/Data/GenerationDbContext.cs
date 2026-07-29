@@ -16,6 +16,10 @@ public sealed class GenerationDbContext(DbContextOptions<GenerationDbContext> op
     public DbSet<GenerationMovieSettings> GenerationMovieSettings => Set<GenerationMovieSettings>();
     public DbSet<GenerationMusicAnchor> GenerationMusicAnchors => Set<GenerationMusicAnchor>();
     public DbSet<GenerationEditSegment> GenerationEditSegments => Set<GenerationEditSegment>();
+    public DbSet<GenerationMusicSection> GenerationMusicSections => Set<GenerationMusicSection>();
+    public DbSet<GenerationBrollCandidate> GenerationBrollCandidates => Set<GenerationBrollCandidate>();
+    public DbSet<GenerationCameraShot> GenerationCameraShots => Set<GenerationCameraShot>();
+    public DbSet<GenerationCinematicPlan> GenerationCinematicPlans => Set<GenerationCinematicPlan>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<GenerationEvent> GenerationEvents => Set<GenerationEvent>();
 
@@ -47,11 +51,26 @@ public sealed class GenerationDbContext(DbContextOptions<GenerationDbContext> op
         modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.SyncIntensity).HasConversion<string>();
         modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.ColorGradePreset).HasConversion<string>();
         modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.MusicDurationPolicy).HasConversion<string>();
+        modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.CinematicDuration).HasConversion<string>();
+        modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.CinematicEditIntensity).HasConversion<string>();
         modelBuilder.Entity<GenerationMusicAnchor>().Property(value => value.Type).HasConversion<string>();
         modelBuilder.Entity<GenerationMusicAnchor>()
             .HasIndex(value => new { value.GenerationId, value.AnchorId }).IsUnique();
         modelBuilder.Entity<GenerationEditSegment>()
             .HasIndex(value => new { value.GenerationId, value.Sequence }).IsUnique();
+        modelBuilder.Entity<GenerationMusicSection>().Property(value => value.Type).HasConversion<string>();
+        modelBuilder.Entity<GenerationMusicSection>()
+            .HasIndex(value => new { value.GenerationId, value.SectionId }).IsUnique();
+        modelBuilder.Entity<GenerationBrollCandidate>().Property(value => value.Type).HasConversion<string>();
+        modelBuilder.Entity<GenerationBrollCandidate>()
+            .HasIndex(value => new { value.GenerationId, value.CandidateId }).IsUnique();
+        modelBuilder.Entity<GenerationCameraShot>().Property(value => value.Type).HasConversion<string>();
+        modelBuilder.Entity<GenerationCameraShot>().Property(value => value.PreviewStatus).HasConversion<string>();
+        modelBuilder.Entity<GenerationCameraShot>().Property(value => value.FallbackType).HasConversion<string>();
+        modelBuilder.Entity<GenerationCameraShot>()
+            .HasIndex(value => new { value.GenerationId, value.ShotId }).IsUnique();
+        modelBuilder.Entity<GenerationCinematicPlan>()
+            .HasIndex(value => value.GenerationId).IsUnique();
         modelBuilder.Entity<GenerationArtifact>().Property(value => value.Type).HasConversion<string>();
         modelBuilder.Entity<Payment>().Property(value => value.Status).HasConversion<string>();
         modelBuilder.Entity<Payment>().HasIndex(value => value.IdempotencyKey).IsUnique();
