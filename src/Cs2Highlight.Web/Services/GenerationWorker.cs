@@ -639,7 +639,10 @@ public sealed partial class GenerationWorker(
                         job = job with
                         {
                             CaptureUi = Cs2Highlight.RenderAgent.Application
-                                .CaptureUiProfile.Cinematic
+                                .CaptureUiProfile.Cinematic,
+                            PresentationMode = Cs2Highlight.RenderAgent.Application
+                                .CapturePresentationMode.CinematicBroll,
+                            ContainsFirstPersonWeaponFire = false
                         };
                     }
                     CinematicSequenceSegment? cinematicSource =

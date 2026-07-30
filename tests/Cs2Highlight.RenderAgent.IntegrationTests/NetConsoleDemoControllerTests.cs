@@ -112,6 +112,9 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         Assert.Contains("mirv_streams record start", commands);
         Assert.Contains("demo_resume", commands);
         Assert.Equal(4, commands.Count(command => command == "cl_drawhud 1"));
+        Assert.Equal(4, commands.Count(command => command == "cl_showdemooverlay 0"));
+        Assert.True(commands.Count(command => command == "r_drawviewmodel 1") >= 4);
+        Assert.DoesNotContain("demoui", commands);
         Assert.Equal(4, commands.Count(command => command == "hideconsole"));
         Assert.Contains(commands, command =>
             command.Contains("addAtTick 150", StringComparison.Ordinal) &&
@@ -256,6 +259,18 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             if (command == "echo AFX_RENDER_CAPTURE_PROFILE_APPLIED")
             {
                 await writer.WriteLineAsync("AFX_RENDER_CAPTURE_PROFILE_APPLIED");
+            }
+            if (command is "cl_showdemooverlay" or "spec_show_xray")
+            {
+                await writer.WriteLineAsync($"\"{command}\" = \"false\"");
+            }
+            if (command is "cl_drawhud" or "r_drawviewmodel")
+            {
+                await writer.WriteLineAsync($"\"{command}\" = \"true\"");
+            }
+            if (command == "echo AFX_RENDER_PRESENTATION_VERIFY_END")
+            {
+                await writer.WriteLineAsync("AFX_RENDER_PRESENTATION_VERIFY_END");
             }
             if (command == "demo_resume")
             {

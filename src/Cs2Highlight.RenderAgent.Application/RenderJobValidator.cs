@@ -63,6 +63,14 @@ public static partial class RenderJobValidator
             errors.Add("timeoutSeconds must be between 1 and 86400.");
         }
 
+        if (job.ContainsFirstPersonWeaponFire &&
+            job.EffectivePresentationMode != CapturePresentationMode.PovCombat)
+        {
+            errors.Add(
+                "WEAPON_HIDDEN_DURING_POV_COMBAT: render jobs containing first-person " +
+                "weapon fire must use the PovCombat presentation mode.");
+        }
+
         if (environment.NetConPort is < 1 or > 65535)
         {
             errors.Add("RenderEnvironment.NetConPort must be between 1 and 65535.");

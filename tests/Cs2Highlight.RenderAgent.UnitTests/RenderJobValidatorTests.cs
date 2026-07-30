@@ -99,6 +99,40 @@ public sealed class RenderJobValidatorTests : IDisposable
         Assert.Contains(result.Errors, error => error.Contains("not empty", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void FirstPersonWeaponFireWithHiddenWeaponIsRejected()
+    {
+        RenderJob job = ValidJob() with
+        {
+            PresentationMode = CapturePresentationMode.CinematicBroll,
+            ContainsFirstPersonWeaponFire = true
+        };
+
+        ValidationReport result =
+            RenderJobValidator.Validate(job, new RenderEnvironmentOptions());
+
+        Assert.Contains(
+            result.Errors,
+            error => error.StartsWith(
+                "WEAPON_HIDDEN_DURING_POV_COMBAT",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void PovCombatWithWeaponFireIsAccepted()
+    {
+        RenderJob job = ValidJob() with
+        {
+            PresentationMode = CapturePresentationMode.PovCombat,
+            ContainsFirstPersonWeaponFire = true
+        };
+
+        ValidationReport result =
+            RenderJobValidator.Validate(job, new RenderEnvironmentOptions());
+
+        Assert.True(result.IsValid, string.Join(", ", result.Errors));
+    }
+
     private RenderJob ValidJob() => new(
         "job-1", demo, new PlayerSelector("76561198000000001", "Player"),
         new RenderSegment(10, 20), new VideoSettings(1920, 1080, 60, 90),

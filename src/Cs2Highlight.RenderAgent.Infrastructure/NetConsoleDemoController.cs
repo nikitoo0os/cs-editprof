@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Cs2Highlight.RenderAgent.Application;
 
@@ -25,6 +26,10 @@ public sealed class NetConsoleDemoController(
     private const string StartReadyMarker = "AFX_RENDER_START_READY";
     private const string SafeTailMarker = "AFX_RENDER_SAFE_TAIL";
     private const string RecordingEndMarker = "AFX_RENDER_RECORDING_END";
+    private const string PresentationVerificationEndMarker =
+        "AFX_RENDER_PRESENTATION_VERIFY_END";
+    private static readonly JsonSerializerOptions ReportJsonOptions =
+        new(JsonSerializerDefaults.Web) { WriteIndented = true };
 
     public async Task ControlAsync(
         RenderJob job,
@@ -48,7 +53,7 @@ public sealed class NetConsoleDemoController(
             TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
             cancellationToken);
         await ConfigureRecordingAsync(connection, job, workspace, cancellationToken);
-        await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
+        await captureUi.ApplyAsync(job.EffectivePresentationMode, cancellationToken);
         if (loadMode == DemoLoadMode.Start)
         {
             await stateJournal.WriteAsync(
@@ -94,7 +99,7 @@ public sealed class NetConsoleDemoController(
             TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
             cancellationToken);
         await connection.SendAsync("demo_pause", cancellationToken);
-        await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
+        await captureUi.ApplyAsync(job.EffectivePresentationMode, cancellationToken);
 
         ulong steamId64 = GetSteamId64(job.Player);
         await stateJournal.WriteAsync(
@@ -109,7 +114,7 @@ public sealed class NetConsoleDemoController(
             $"spec_lock_to_accountid {accountId.ToString(CultureInfo.InvariantCulture)}",
             cancellationToken);
         await VerifySelectedPlayerAsync(connection, steamId64, cancellationToken);
-        await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
+        await captureUi.ApplyAsync(job.EffectivePresentationMode, cancellationToken);
 
         if (warmupTick < job.Segment.StartTick)
         {
@@ -152,10 +157,32 @@ public sealed class NetConsoleDemoController(
         await stateJournal.WriteAsync(
             workspace,
             RenderState.ApplyingCaptureProfile,
-            $"Applying {job.CaptureUi} UI profile ({CaptureUiProfileAdapter.TemplateVersion}).",
+            $"Applying {job.EffectivePresentationMode} presentation mode ({CaptureUiProfileAdapter.TemplateVersion}).",
             cancellationToken);
         if (options.Warmup.ReapplyCaptureProfileAfterWarmup)
-            await captureUi.ApplyAsync(job.CaptureUi, cancellationToken);
+            await captureUi.ApplyAsync(job.EffectivePresentationMode, cancellationToken);
+        await stateJournal.WriteAsync(
+            workspace,
+            RenderState.VerifyingCaptureProfile,
+            "Verifying presentation cvars before recording.",
+            cancellationToken);
+        PresentationStateReport presentationReport =
+            await VerifyPresentationStateAsync(
+                connection,
+                job,
+                cancellationToken);
+        await PersistPresentationReportAsync(
+            presentationReport,
+            workspace,
+            job.OutputDirectory,
+            cancellationToken);
+        if (job.ContainsFirstPersonWeaponFire &&
+            !presentationReport.State.WeaponStateValid)
+        {
+            throw new InvalidOperationException(
+                "WEAPON_HIDDEN_DURING_POV_COMBAT: r_drawviewmodel was not " +
+                "confirmed enabled before first-person combat recording.");
+        }
         await stateJournal.WriteAsync(
             workspace,
             RenderState.StabilizingCaptureProfile,
@@ -246,6 +273,92 @@ public sealed class NetConsoleDemoController(
             cancellationToken);
         await connection.SendAsync(
             $"mirv_streams record name \"{Source2ScriptGenerator.EscapeCfg(workspace.Raw)}\"",
+            cancellationToken);
+    }
+
+    private static async Task<PresentationStateReport> VerifyPresentationStateAsync(
+        NetConsoleConnection connection,
+        RenderJob job,
+        CancellationToken cancellationToken)
+    {
+        string[] names =
+        [
+            "cl_showdemooverlay",
+            "cl_drawhud",
+            "spec_show_xray",
+            "r_drawviewmodel"
+        ];
+        foreach (string name in names)
+            await connection.SendAsync(name, cancellationToken);
+        await connection.SendAsync(
+            $"echo {PresentationVerificationEndMarker}",
+            cancellationToken);
+        IReadOnlyList<string> output = await connection.ReadThroughAsync(
+            PresentationVerificationEndMarker,
+            TimeSpan.FromSeconds(5),
+            cancellationToken);
+
+        Dictionary<string, bool> values = new(StringComparer.OrdinalIgnoreCase);
+        foreach (string name in names)
+        {
+            Match match = Regex.Match(
+                string.Join('\n', output),
+                $"[\"']?{Regex.Escape(name)}[\"']?\\s*=\\s*[\"']?(?<value>true|false|0|1)",
+                RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (match.Success)
+            {
+                string value = match.Groups["value"].Value;
+                values[name] =
+                    value.Equals("true", StringComparison.OrdinalIgnoreCase) ||
+                    value == "1";
+            }
+        }
+
+        bool pov = job.EffectivePresentationMode == CapturePresentationMode.PovCombat;
+        bool timelineHidden =
+            values.TryGetValue("cl_showdemooverlay", out bool overlay) && !overlay;
+        bool spectatorHidden =
+            values.TryGetValue("spec_show_xray", out bool xray) && !xray;
+        bool hudValid =
+            values.TryGetValue("cl_drawhud", out bool hud) && hud == pov;
+        bool weaponValid =
+            values.TryGetValue("r_drawviewmodel", out bool weapon) && weapon == pov;
+        bool commandStateVerified =
+            timelineHidden && spectatorHidden && hudValid && weaponValid;
+
+        List<string> issues = [];
+        if (!commandStateVerified)
+            issues.Add("PRESENTATION_CVAR_STATE_MISMATCH");
+        issues.Add("PRESENTATION_PIXEL_VERIFICATION_PENDING");
+        return new PresentationStateReport(
+            job.EffectivePresentationMode,
+            new PresentationStateVerification(
+                timelineHidden,
+                DemoControlsHidden: false,
+                spectatorHidden,
+                DebugUiHidden: false,
+                MouseCursorHidden: false,
+                weaponValid),
+            commandStateVerified,
+            PixelStateVerified: false,
+            issues);
+    }
+
+    private static async Task PersistPresentationReportAsync(
+        PresentationStateReport report,
+        RenderWorkspace workspace,
+        string outputDirectory,
+        CancellationToken cancellationToken)
+    {
+        string json = JsonSerializer.Serialize(report, ReportJsonOptions);
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace.State, "presentation-state-report.json"),
+            json,
+            cancellationToken);
+        Directory.CreateDirectory(outputDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "presentation-state-report.json"),
+            json,
             cancellationToken);
     }
 
@@ -399,10 +512,10 @@ public sealed class NetConsoleDemoController(
         NetConsoleConnection connection) : ICaptureUiController
     {
         public async Task ApplyAsync(
-            CaptureUiProfile profile,
+            CapturePresentationMode mode,
             CancellationToken cancellationToken)
         {
-            foreach (string command in CaptureUiProfileAdapter.GetCommands(profile))
+            foreach (string command in CaptureUiProfileAdapter.GetCommands(mode))
                 await connection.SendAsync(command, cancellationToken);
         }
     }

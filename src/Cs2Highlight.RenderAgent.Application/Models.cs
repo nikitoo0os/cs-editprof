@@ -12,6 +12,19 @@ public sealed record RenderJob(
     int TimeoutSeconds = 600)
 {
     public CaptureUiProfile CaptureUi { get; init; } = CaptureUiProfile.Gameplay;
+    public CapturePresentationMode? PresentationMode { get; init; }
+    public bool ContainsFirstPersonWeaponFire { get; init; } =
+        Segment.PrimaryKillTick.HasValue;
+
+    [JsonIgnore]
+    public CapturePresentationMode EffectivePresentationMode =>
+        PresentationMode ?? CaptureUi switch
+        {
+            CaptureUiProfile.Gameplay => CapturePresentationMode.PovCombat,
+            CaptureUiProfile.Minimal => CapturePresentationMode.EstablishingShot,
+            CaptureUiProfile.Cinematic => CapturePresentationMode.CinematicBroll,
+            _ => throw new ArgumentOutOfRangeException(nameof(CaptureUi))
+        };
 }
 
 public sealed record RenderBatchManifest(IReadOnlyList<string> RenderJobPaths);
@@ -24,6 +37,39 @@ public enum CaptureUiProfile
     Minimal,
     Cinematic
 }
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum CapturePresentationMode
+{
+    CinematicBroll,
+    PovCombat,
+    ThirdPersonAction,
+    EstablishingShot
+}
+
+public sealed record PresentationStateVerification(
+    bool DemoTimelineHidden,
+    bool DemoControlsHidden,
+    bool SpectatorUiHidden,
+    bool DebugUiHidden,
+    bool MouseCursorHidden,
+    bool WeaponStateValid)
+{
+    public bool IsValid =>
+        DemoTimelineHidden &&
+        DemoControlsHidden &&
+        SpectatorUiHidden &&
+        DebugUiHidden &&
+        MouseCursorHidden &&
+        WeaponStateValid;
+}
+
+public sealed record PresentationStateReport(
+    CapturePresentationMode Mode,
+    PresentationStateVerification State,
+    bool CommandStateVerified,
+    bool PixelStateVerified,
+    IReadOnlyList<string> Issues);
 
 public sealed record PlayerSelector(string? SteamId, string? Name);
 public sealed record RenderSegment(long StartTick, long EndTick)

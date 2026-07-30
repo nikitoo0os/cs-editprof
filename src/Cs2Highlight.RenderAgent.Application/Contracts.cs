@@ -47,7 +47,7 @@ public interface IDemoController
 public interface ICaptureUiController
 {
     Task ApplyAsync(
-        CaptureUiProfile profile,
+        CapturePresentationMode mode,
         CancellationToken cancellationToken);
 }
 

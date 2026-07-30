@@ -30,7 +30,7 @@ public sealed class Source2ScriptGenerator(RenderEnvironmentOptions options) : I
         cfg.AppendLine(
             CultureInfo.InvariantCulture,
             $"mirv_streams settings edit afxDefault settings {FfmpegPresetName}");
-        AppendCaptureUiProfile(cfg, job.CaptureUi);
+        AppendCaptureUiProfile(cfg, job.EffectivePresentationMode);
         await File.WriteAllTextAsync(path, cfg.ToString(), new UTF8Encoding(false), cancellationToken);
         return new GeneratedRenderScript(path, job.Video.Width, job.Video.Height,
         [
@@ -40,12 +40,12 @@ public sealed class Source2ScriptGenerator(RenderEnvironmentOptions options) : I
 
     internal static void AppendCaptureUiProfile(
         StringBuilder cfg,
-        CaptureUiProfile profile)
+        CapturePresentationMode mode)
     {
         cfg.AppendLine(
             CultureInfo.InvariantCulture,
-            $"// Capture UI adapter: {CaptureUiProfileAdapter.TemplateVersion} ({profile}).");
-        foreach (string command in CaptureUiProfileAdapter.GetCommands(profile))
+            $"// Capture UI adapter: {CaptureUiProfileAdapter.TemplateVersion} ({mode}).");
+        foreach (string command in CaptureUiProfileAdapter.GetCommands(mode))
             cfg.AppendLine(command);
     }
 

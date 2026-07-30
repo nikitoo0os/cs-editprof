@@ -92,8 +92,10 @@ public sealed class Source2ScriptGeneratorTests
             Assert.DoesNotContain("demo_gototick", cfg);
             Assert.DoesNotContain("addAtTick", cfg);
             Assert.DoesNotContain("spec_player", cfg);
-            Assert.Contains("capture-gameplay-clean.v2 (Gameplay)", cfg);
+            Assert.Contains("capture-presentation-reset.v3 (PovCombat)", cfg);
+            Assert.Contains("cl_showdemooverlay 0", cfg);
             Assert.Contains("cl_drawhud 1", cfg);
+            Assert.Contains("r_drawviewmodel 1", cfg);
             Assert.Contains("cl_draw_only_deathnotices 0", cfg);
             Assert.Contains("gameui_hide", cfg);
             Assert.Contains("hideconsole", cfg);
