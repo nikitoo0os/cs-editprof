@@ -20,6 +20,8 @@ public sealed partial class GenerationWorker(
     IMusicalAnchorBuilder musicalAnchorBuilder,
     IMusicEditPlanner musicEditPlanner,
     ICinematicMusicEditPlanAdapter cinematicMusicEditPlanAdapter,
+    IMapCameraProfileCatalog mapCameraProfiles,
+    CinematicCameraRuntimeOptions cameraRuntime,
     IEffectPlanner effectPlanner,
     IDynamicEffectPlanner dynamicEffectPlanner,
     ICinematicDynamicEffectAdapter cinematicEffectAdapter,
@@ -660,6 +662,29 @@ public sealed partial class GenerationWorker(
                             {
                                 Fps = Math.Max(snapshot.Fps, 120)
                             }
+                        };
+                    }
+                    if (cinematicSource is not null &&
+                        cinematicSource.Camera.Type !=
+                            CameraShotType.PlayerPov)
+                    {
+                        string mapName = demo.MapName ?? string.Empty;
+                        MapCameraProfile profile =
+                            mapCameraProfiles.Find(mapName) ??
+                            throw new InvalidOperationException(
+                                $"CINEMATIC_CAMERA_MAP_PROFILE_MISSING:{mapName}");
+                        job = job with
+                        {
+                            CaptureUi = Cs2Highlight.RenderAgent.Application
+                                .CaptureUiProfile.Cinematic,
+                            PresentationMode = Cs2Highlight.RenderAgent.Application
+                                .CapturePresentationMode.CinematicBroll,
+                            ContainsFirstPersonWeaponFire = false,
+                            Camera = BuildRenderCameraPlan(
+                                cinematicSource.Camera,
+                                profile,
+                                job,
+                                cameraRuntime)
                         };
                     }
                     await store.SaveAsync(
@@ -1805,6 +1830,78 @@ public sealed partial class GenerationWorker(
             demo.StoredPath,
             demo.UploadOrder,
             candidate);
+    }
+
+    private static Cs2Highlight.RenderAgent.Application.RenderCameraPlan
+        BuildRenderCameraPlan(
+            CameraShotPlan camera,
+            MapCameraProfile profile,
+            Cs2Highlight.RenderAgent.Application.RenderJob job,
+            CinematicCameraRuntimeOptions runtime)
+    {
+        if (!profile.ManuallyVerified ||
+            !runtime.Enabled ||
+            string.IsNullOrWhiteSpace(runtime.HlaeVersion) ||
+            string.IsNullOrWhiteSpace(runtime.VerificationId))
+        {
+            throw new InvalidOperationException(
+                "CINEMATIC_CAMERA_RUNTIME_UNVERIFIED");
+        }
+        SafeCameraVolume? safeVolume = profile.SafeVolumes.FirstOrDefault(
+            volume => camera.Keyframes.All(keyframe =>
+                volume.Contains(keyframe.Position)));
+        if (safeVolume is null)
+        {
+            throw new InvalidOperationException(
+                "CINEMATIC_CAMERA_PATH_OUTSIDE_VERIFIED_VOLUME");
+        }
+        int tickRate = job.Segment.TickRate ??
+            throw new InvalidOperationException(
+                "CINEMATIC_CAMERA_TICK_RATE_MISSING");
+        Cs2Highlight.RenderAgent.Application.RenderCameraKeyframe[] keyframes =
+            camera.Keyframes
+                .OrderBy(value => value.TimeSeconds)
+                .Select(value =>
+                    new Cs2Highlight.RenderAgent.Application
+                        .RenderCameraKeyframe(
+                            Math.Clamp(
+                                camera.StartTick + (long)Math.Round(
+                                    value.TimeSeconds * tickRate,
+                                    MidpointRounding.AwayFromZero),
+                                job.Segment.StartTick,
+                                job.Segment.EndTick),
+                            new Cs2Highlight.RenderAgent.Application.RenderVector3(
+                                value.Position.X,
+                                value.Position.Y,
+                                value.Position.Z),
+                            new Cs2Highlight.RenderAgent.Application.RenderVector3(
+                                value.Rotation.X,
+                                value.Rotation.Y,
+                                value.Rotation.Z),
+                            value.Fov))
+                .ToArray();
+        return new Cs2Highlight.RenderAgent.Application.RenderCameraPlan
+        {
+            Mode = keyframes.Length == 1
+                ? Cs2Highlight.RenderAgent.Application.RenderCameraMode.Static
+                : Cs2Highlight.RenderAgent.Application.RenderCameraMode.Campath,
+            MapName = profile.MapName,
+            Keyframes = keyframes,
+            SafeVolume =
+                new Cs2Highlight.RenderAgent.Application.RenderCameraBounds(
+                    new Cs2Highlight.RenderAgent.Application.RenderVector3(
+                        safeVolume.Minimum.X,
+                        safeVolume.Minimum.Y,
+                        safeVolume.Minimum.Z),
+                    new Cs2Highlight.RenderAgent.Application.RenderVector3(
+                        safeVolume.Maximum.X,
+                        safeVolume.Maximum.Y,
+                        safeVolume.Maximum.Z)),
+            ManualSpikeVerified = true,
+            CalibrationSpike = false,
+            VerificationId = runtime.VerificationId,
+            HlaeVersionPrefix = runtime.HlaeVersion
+        };
     }
 
     private static T DeserializeJson<T>(string json, T fallback)

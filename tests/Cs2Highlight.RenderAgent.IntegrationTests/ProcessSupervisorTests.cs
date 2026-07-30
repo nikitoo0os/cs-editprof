@@ -35,5 +35,30 @@ public sealed class ProcessSupervisorTests : IDisposable
         Assert.True(result.TimedOut);
     }
 
+    [Fact]
+    public async Task TracksChildProcessAfterLauncherExits()
+    {
+        ProcessRequest request = new(
+            "powershell.exe",
+            [
+                "-NoProfile",
+                "-Command",
+                "Start-Process ping.exe -ArgumentList '127.0.0.1','-n','3' -NoNewWindow"
+            ],
+            root,
+            Path.Combine(root, "tracked-out.log"),
+            Path.Combine(root, "tracked-err.log"),
+            TimeSpan.FromSeconds(10),
+            TrackedProcessName: "ping",
+            TrackedProcessStartupTimeout: TimeSpan.FromSeconds(3));
+
+        ProcessExecutionResult result =
+            await new ProcessSupervisor().RunAsync(request, CancellationToken.None);
+
+        Assert.False(result.TimedOut);
+        Assert.NotNull(result.TrackedProcessId);
+        Assert.True(result.Duration >= TimeSpan.FromSeconds(1));
+    }
+
     public void Dispose() => Directory.Delete(root, true);
 }

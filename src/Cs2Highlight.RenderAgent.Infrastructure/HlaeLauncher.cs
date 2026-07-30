@@ -28,7 +28,10 @@ public sealed class HlaeLauncher(RenderEnvironmentOptions options, IProcessSuper
             workspace.Root,
             Path.Combine(workspace.Logs, "hlae.stdout.log"),
             Path.Combine(workspace.Logs, "hlae.stderr.log"),
-            TimeSpan.FromSeconds(job.TimeoutSeconds));
+            TimeSpan.FromSeconds(job.TimeoutSeconds),
+            TrackedProcessName: "cs2",
+            TrackedProcessStartupTimeout:
+                TimeSpan.FromSeconds(options.ProcessStartupTimeoutSeconds));
         return supervisor.RunAsync(request, cancellationToken);
     }
 

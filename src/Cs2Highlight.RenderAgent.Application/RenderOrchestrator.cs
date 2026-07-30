@@ -91,49 +91,102 @@ public sealed class RenderOrchestrator(
             warnings.AddRange(script.Warnings);
             await stateJournal.WriteAsync(workspace, RenderState.GeneratingScripts, $"Generated {script.Path}.", cancellationToken);
 
-            rendererCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            rendererTask = hlaeLauncher.LaunchAsync(job, workspace, script, rendererCancellation.Token);
-            await stateJournal.WriteAsync(
-                workspace,
-                RenderState.StartingHlae,
-                $"Starting HLAE and waiting for CS2 NetCon on port {environment.NetConPort}.",
-                cancellationToken);
-
-            Task controlTask = demoController.ControlAsync(
-                job,
-                workspace,
-                DemoLoadMode.Start,
-                cancellationToken);
-            Task first = await Task.WhenAny(controlTask, rendererTask);
-            if (first == rendererTask)
+            const int maximumStartupAttempts = 2;
+            for (int attempt = 1; attempt <= maximumStartupAttempts; attempt++)
             {
-                ProcessExecutionResult earlyExit = await rendererTask;
-                processes = processes with { HlaePid = earlyExit.ProcessId };
-                return await PersistFailureAsync(job, workspace, startedAt, stopwatch, RenderState.StartingHlae,
-                    "CS2_EXITED",
-                    $"HLAE/CS2 exited before demo control completed; code={earlyExit.ExitCode}, timedOut={earlyExit.TimedOut}.",
-                    true,
-                    processes,
-                    warnings);
-            }
-            try
-            {
-                await controlTask;
-            }
-            catch (Exception exception) when (exception is not OperationCanceledException)
-            {
-                return await PersistFailureAsync(
+                rendererCancellation =
+                    CancellationTokenSource.CreateLinkedTokenSource(
+                        cancellationToken);
+                rendererTask = hlaeLauncher.LaunchAsync(
                     job,
                     workspace,
-                    startedAt,
-                    stopwatch,
-                    RenderState.Recording,
-                    "DEMO_CONTROL_FAILED",
-                    exception.Message,
-                    true,
-                    processes,
-                    warnings);
+                    script,
+                    rendererCancellation.Token);
+                await stateJournal.WriteAsync(
+                    workspace,
+                    RenderState.StartingHlae,
+                    $"Starting HLAE attempt {attempt}/{maximumStartupAttempts} " +
+                    $"and waiting for CS2 NetCon on port {environment.NetConPort}.",
+                    cancellationToken);
+
+                Task controlTask = demoController.ControlAsync(
+                    job,
+                    workspace,
+                    DemoLoadMode.Start,
+                    cancellationToken);
+                Task first = await Task.WhenAny(controlTask, rendererTask);
+                if (first == rendererTask)
+                {
+                    ProcessExecutionResult earlyExit = await rendererTask;
+                    processes = processes with
+                    {
+                        HlaePid = earlyExit.ProcessId,
+                        Cs2Pid = earlyExit.TrackedProcessId
+                    };
+                    if (attempt < maximumStartupAttempts &&
+                        IsEarlyStartupFailure(workspace, stopwatch))
+                    {
+                        warnings.Add(
+                            $"CS2 startup attempt {attempt} exited before demo control; retrying once.");
+                        rendererCancellation.Dispose();
+                        rendererCancellation = null;
+                        rendererTask = null;
+                        await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+                        continue;
+                    }
+                    return await PersistFailureAsync(
+                        job,
+                        workspace,
+                        startedAt,
+                        stopwatch,
+                        RenderState.StartingHlae,
+                        "CS2_EXITED",
+                        $"HLAE/CS2 exited before demo control completed; code={earlyExit.ExitCode}, timedOut={earlyExit.TimedOut}.",
+                        true,
+                        processes,
+                        warnings);
+                }
+                try
+                {
+                    await controlTask;
+                    break;
+                }
+                catch (Exception exception) when (
+                    exception is not OperationCanceledException)
+                {
+                    if (attempt < maximumStartupAttempts &&
+                        exception is IOException &&
+                        IsEarlyStartupFailure(workspace, stopwatch))
+                    {
+                        warnings.Add(
+                            $"CS2 startup attempt {attempt} lost NetCon before recording; retrying once.");
+                        rendererCancellation.Cancel();
+                        await ObserveRendererTaskAsync(rendererTask);
+                        rendererCancellation.Dispose();
+                        rendererCancellation = null;
+                        rendererTask = null;
+                        await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+                        continue;
+                    }
+                    return await PersistFailureAsync(
+                        job,
+                        workspace,
+                        startedAt,
+                        stopwatch,
+                        RenderState.Recording,
+                        "DEMO_CONTROL_FAILED",
+                        exception.Message,
+                        true,
+                        processes,
+                        warnings);
+                }
             }
+            Task<ProcessExecutionResult> activeRendererTask =
+                rendererTask ?? throw new InvalidOperationException(
+                    "CS2 renderer task was not started.");
+            CancellationTokenSource activeRendererCancellation =
+                rendererCancellation ?? throw new InvalidOperationException(
+                    "CS2 renderer cancellation source was not started.");
 
             await stateJournal.WriteAsync(workspace, RenderState.VerifyingOutput, "Checking rendered artifact.", cancellationToken);
             var output = await outputWatcher.VerifyAsync(job, workspace, cancellationToken);
@@ -146,10 +199,14 @@ public sealed class RenderOrchestrator(
             await demoController.QuitAsync(cancellationToken);
             try
             {
-                ProcessExecutionResult completed = await rendererTask.WaitAsync(
+                ProcessExecutionResult completed = await activeRendererTask.WaitAsync(
                     TimeSpan.FromSeconds(environment.ProcessShutdownTimeoutSeconds),
                     cancellationToken);
-                processes = processes with { HlaePid = completed.ProcessId };
+                processes = processes with
+                {
+                    HlaePid = completed.ProcessId,
+                    Cs2Pid = completed.TrackedProcessId
+                };
                 if (completed.TimedOut)
                 {
                     warnings.Add("HLAE/CS2 required forced cleanup after recording.");
@@ -157,8 +214,8 @@ public sealed class RenderOrchestrator(
             }
             catch (TimeoutException)
             {
-                rendererCancellation.Cancel();
-                await ObserveRendererTaskAsync(rendererTask);
+                activeRendererCancellation.Cancel();
+                await ObserveRendererTaskAsync(activeRendererTask);
                 warnings.Add("HLAE/CS2 did not exit after the quit command and was forcefully cleaned up.");
             }
 
@@ -213,6 +270,15 @@ public sealed class RenderOrchestrator(
             // Cleanup must not replace the original render result with a secondary process-observation error.
         }
     }
+
+    private static bool IsEarlyStartupFailure(
+        RenderWorkspace workspace,
+        Stopwatch stopwatch) =>
+        stopwatch.Elapsed <= TimeSpan.FromSeconds(20) &&
+        !Directory.EnumerateFiles(
+            workspace.Raw,
+            "*.mp4",
+            SearchOption.AllDirectories).Any();
 
     private async Task<(RenderResult Result, int ExitCode)> PersistFailureAsync(
         RenderJob job,

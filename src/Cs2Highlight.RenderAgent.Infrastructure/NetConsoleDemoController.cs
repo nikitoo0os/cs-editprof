@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Sockets;
@@ -13,7 +14,7 @@ public sealed class NetConsoleDemoController(
     IStateJournal stateJournal) : IDemoController
 {
     private static readonly Regex SeekFinishedTickPattern = new(
-        @"Demo Skipping finished at tick\s+(?<tick>\d+)",
+        @"Demo Skipping (?:finished at tick\s+|flushing last .*?, tick\s+)(?<tick>\d+)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant |
         RegexOptions.IgnoreCase);
     private static readonly Regex ActiveGameLoopPattern = new(
@@ -23,6 +24,7 @@ public sealed class NetConsoleDemoController(
     private const string NetConReadyMarker = "AFX_RENDER_NETCON_READY";
     private const string DemoStatusEndMarker = "AFX_RENDER_DEMO_STATUS_END";
     private const string SeekFinishedMarker = "Demo Skipping finished at tick";
+    private const string SeekFlushedMarker = "Demo Skipping flushing last";
     private const string StartReadyMarker = "AFX_RENDER_START_READY";
     private const string SafeTailMarker = "AFX_RENDER_SAFE_TAIL";
     private const string RecordingEndMarker = "AFX_RENDER_RECORDING_END";
@@ -30,6 +32,34 @@ public sealed class NetConsoleDemoController(
         "AFX_RENDER_PRESENTATION_VERIFY_END";
     private static readonly JsonSerializerOptions ReportJsonOptions =
         new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private sealed record HlaeCameraCommandProbe(
+        string Command,
+        bool Supported,
+        IReadOnlyList<string> Output);
+    private sealed record HlaeCameraCommandReport(
+        DateTimeOffset ProbedAt,
+        string HlaeVersion,
+        IReadOnlyList<HlaeCameraCommandProbe> Commands);
+    private sealed record AppliedCameraKeyframe(
+        long Tick,
+        RenderVector3 Position,
+        RenderVector3 Rotation,
+        double Fov);
+    private sealed record AppliedCameraReport(
+        RenderCameraMode Mode,
+        string MapName,
+        string VerificationId,
+        bool CalibrationSpike,
+        bool ManualSpikeVerified,
+        bool ReturnedToWarmupAfterKeyframeBuild,
+        bool CampathEnabled,
+        IReadOnlyList<AppliedCameraKeyframe> Keyframes,
+        IReadOnlyList<string> CampathOutput);
+    private sealed record ParsedCampathKeyframe(
+        long Tick,
+        RenderVector3 Position,
+        RenderVector3 Rotation,
+        double Fov);
 
     public async Task ControlAsync(
         RenderJob job,
@@ -85,6 +115,22 @@ public sealed class NetConsoleDemoController(
                 cancellationToken);
         }
 
+        HlaeCameraCommandReport cameraCommandReport =
+            await ProbeCameraCommandsAsync(connection, cancellationToken);
+        await PersistCameraCommandReportAsync(
+            cameraCommandReport,
+            workspace,
+            job.OutputDirectory,
+            cancellationToken);
+        await stateJournal.WriteAsync(
+            workspace,
+            RenderState.WaitingForCs2,
+            $"HLAE camera commands probed: " +
+            $"{cameraCommandReport.Commands.Count(value => value.Supported)}/" +
+            $"{cameraCommandReport.Commands.Count} supported " +
+            $"(version {cameraCommandReport.HlaeVersion}).",
+            cancellationToken);
+
         long warmupTick = ComputeWarmupTick(job.Segment, options.Warmup);
         await stateJournal.WriteAsync(
             workspace,
@@ -114,6 +160,18 @@ public sealed class NetConsoleDemoController(
             $"spec_lock_to_accountid {accountId.ToString(CultureInfo.InvariantCulture)}",
             cancellationToken);
         await VerifySelectedPlayerAsync(connection, steamId64, cancellationToken);
+        await stateJournal.WriteAsync(
+            workspace,
+            RenderState.ApplyingCameraPlan,
+            $"Applying {job.Camera.Mode} camera plan with " +
+            $"{job.Camera.Keyframes.Count} keyframe(s).",
+            cancellationToken);
+        await ApplyCameraPlanAsync(
+            connection,
+            job,
+            workspace,
+            warmupTick,
+            cancellationToken);
         await captureUi.ApplyAsync(job.EffectivePresentationMode, cancellationToken);
 
         if (warmupTick < job.Segment.StartTick)
@@ -276,6 +334,351 @@ public sealed class NetConsoleDemoController(
             cancellationToken);
     }
 
+    private async Task ApplyCameraPlanAsync(
+        NetConsoleConnection connection,
+        RenderJob job,
+        RenderWorkspace workspace,
+        long warmupTick,
+        CancellationToken cancellationToken)
+    {
+        await connection.SendAsync("mirv_campath enabled 0", cancellationToken);
+        await connection.SendAsync("mirv_campath clear", cancellationToken);
+        await connection.SendAsync("mirv_input end", cancellationToken);
+        if (job.Camera.Mode == RenderCameraMode.PlayerPov)
+        {
+            await connection.SendAsync(
+                string.Create(
+                    CultureInfo.InvariantCulture,
+                    $"mirv_fov {job.Video.Fov}"),
+                cancellationToken);
+            await PersistAppliedCameraReportAsync(
+                new AppliedCameraReport(
+                    RenderCameraMode.PlayerPov,
+                    string.Empty,
+                    string.Empty,
+                    false,
+                    false,
+                    false,
+                    false,
+                    [],
+                    []),
+                workspace,
+                job.OutputDirectory,
+                cancellationToken);
+            return;
+        }
+
+        string installedHlaeVersion = File.Exists(options.HlaeExecutablePath)
+            ? FileVersionInfo.GetVersionInfo(options.HlaeExecutablePath)
+                .ProductVersion ?? string.Empty
+            : "unknown";
+        if (!installedHlaeVersion.StartsWith(
+                job.Camera.HlaeVersionPrefix,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                $"CAMERA_HLAE_VERSION_MISMATCH: required " +
+                $"{job.Camera.HlaeVersionPrefix}, installed " +
+                $"{installedHlaeVersion}.");
+        }
+        await connection.SendAsync("mirv_fov default", cancellationToken);
+        await connection.SendAsync("mirv_input camera", cancellationToken);
+        List<AppliedCameraKeyframe> applied = [];
+        List<string> campathOutput = [];
+        bool returnedToWarmup = false;
+        bool campathEnabled = false;
+        if (job.Camera.Mode == RenderCameraMode.Static)
+        {
+            RenderCameraKeyframe keyframe = job.Camera.Keyframes.Single();
+            await ApplyCameraTransformAsync(
+                connection,
+                keyframe,
+                cancellationToken);
+            applied.Add(ToApplied(keyframe));
+        }
+        else
+        {
+            for (int index = 0; index < job.Camera.Keyframes.Count; index++)
+            {
+                RenderCameraKeyframe keyframe = job.Camera.Keyframes[index];
+                await SeekToWarmupAsync(
+                    connection,
+                    keyframe.Tick,
+                    TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
+                    cancellationToken);
+                await connection.SendAsync("demo_pause", cancellationToken);
+                await ApplyCameraTransformAsync(
+                    connection,
+                    keyframe,
+                    cancellationToken);
+                await VerifyCameraTransformAsync(
+                    connection,
+                    keyframe,
+                    cancellationToken);
+                string addMarker =
+                    $"AFX_RENDER_CAMPATH_ADD_{index.ToString(CultureInfo.InvariantCulture)}";
+                await connection.SendAsync("mirv_campath add", cancellationToken);
+                await connection.SendAsync($"echo {addMarker}", cancellationToken);
+                await connection.WaitForAsync(
+                    addMarker,
+                    TimeSpan.FromSeconds(5),
+                    cancellationToken);
+                applied.Add(ToApplied(keyframe));
+            }
+
+            const string printMarker = "AFX_RENDER_CAMPATH_PRINT_END";
+            await connection.SendAsync("mirv_campath print", cancellationToken);
+            await connection.SendAsync($"echo {printMarker}", cancellationToken);
+            campathOutput.AddRange(await connection.ReadThroughAsync(
+                printMarker,
+                TimeSpan.FromSeconds(5),
+                cancellationToken));
+            VerifyCampathOutput(
+                campathOutput,
+                job.Camera.Keyframes);
+            await SeekToWarmupAsync(
+                connection,
+                warmupTick,
+                TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
+                cancellationToken);
+            returnedToWarmup = true;
+            await connection.SendAsync("demo_pause", cancellationToken);
+            await connection.SendAsync("mirv_input end", cancellationToken);
+            await connection.SendAsync("mirv_campath enabled 1", cancellationToken);
+            campathEnabled = true;
+        }
+
+        AppliedCameraReport report = new(
+            job.Camera.Mode,
+            job.Camera.MapName,
+            job.Camera.VerificationId,
+            job.Camera.CalibrationSpike,
+            job.Camera.ManualSpikeVerified,
+            returnedToWarmup,
+            campathEnabled,
+            applied,
+            campathOutput);
+        await PersistAppliedCameraReportAsync(
+            report,
+            workspace,
+            job.OutputDirectory,
+            cancellationToken);
+        await stateJournal.WriteAsync(
+            workspace,
+            RenderState.VerifyingCameraPlan,
+            job.Camera.Mode == RenderCameraMode.Campath
+                ? $"Campath built with {applied.Count} keyframes and seeked back to warmup tick {warmupTick}."
+                : "Static free-camera transform applied.",
+            cancellationToken);
+    }
+
+    private static async Task ApplyCameraTransformAsync(
+        NetConsoleConnection connection,
+        RenderCameraKeyframe keyframe,
+        CancellationToken cancellationToken)
+    {
+        await connection.SendAsync(
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"mirv_input position {keyframe.Position.X} {keyframe.Position.Y} {keyframe.Position.Z}"),
+            cancellationToken);
+        await connection.SendAsync(
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"mirv_input angles {keyframe.Rotation.X} {keyframe.Rotation.Y} {keyframe.Rotation.Z}"),
+            cancellationToken);
+        await connection.SendAsync(
+            string.Create(
+                CultureInfo.InvariantCulture,
+                $"mirv_input fov {keyframe.Fov}"),
+            cancellationToken);
+    }
+
+    private static async Task VerifyCameraTransformAsync(
+        NetConsoleConnection connection,
+        RenderCameraKeyframe expected,
+        CancellationToken cancellationToken)
+    {
+        string settleMarker =
+            $"AFX_RENDER_CAMERA_TRANSFORM_{expected.Tick.ToString(CultureInfo.InvariantCulture)}";
+        await connection.SendAsync($"echo {settleMarker}", cancellationToken);
+        await connection.WaitForAsync(
+            settleMarker,
+            TimeSpan.FromSeconds(5),
+            cancellationToken);
+        await Task.Delay(100, cancellationToken);
+
+        await connection.SendAsync("mirv_input position", cancellationToken);
+        await connection.SendAsync("mirv_input angles", cancellationToken);
+        await connection.SendAsync("mirv_input fov", cancellationToken);
+        string verifyMarker = $"{settleMarker}_VERIFY";
+        await connection.SendAsync($"echo {verifyMarker}", cancellationToken);
+        IReadOnlyList<string> output = await connection.ReadThroughAsync(
+            verifyMarker,
+            TimeSpan.FromSeconds(5),
+            cancellationToken);
+        List<double[]> vectors = output
+            .Select(ParseCurrentVector)
+            .Where(value => value is not null)
+            .Cast<double[]>()
+            .ToList();
+        double? fov = output
+            .Select(ParseCurrentScalar)
+            .LastOrDefault(value => value.HasValue);
+        if (vectors.Count < 2 ||
+            !Approximately(vectors[0], expected.Position) ||
+            !Approximately(vectors[1], expected.Rotation) ||
+            fov is null ||
+            Math.Abs(fov.Value - expected.Fov) > 0.02)
+        {
+            throw new InvalidOperationException(
+                $"CAMERA_TRANSFORM_MISMATCH at tick {expected.Tick}: " +
+                $"expected position={expected.Position}, " +
+                $"rotation={expected.Rotation}, fov={expected.Fov}; " +
+                $"HLAE output={string.Join(" | ", output)}");
+        }
+        await Task.Delay(50, cancellationToken);
+    }
+
+    private static double[]? ParseCurrentVector(string line)
+    {
+        Match match = Regex.Match(
+            line,
+            @"Current value:\s*(?<x>[-+]?\d+(?:\.\d+)?)\s+" +
+            @"(?<y>[-+]?\d+(?:\.\d+)?)\s+" +
+            @"(?<z>[-+]?\d+(?:\.\d+)?)",
+            RegexOptions.CultureInvariant);
+        if (!match.Success)
+            return null;
+        return
+        [
+            double.Parse(match.Groups["x"].Value, CultureInfo.InvariantCulture),
+            double.Parse(match.Groups["y"].Value, CultureInfo.InvariantCulture),
+            double.Parse(match.Groups["z"].Value, CultureInfo.InvariantCulture)
+        ];
+    }
+
+    private static double? ParseCurrentScalar(string line)
+    {
+        Match match = Regex.Match(
+            line,
+            @"Current value:\s*(?<value>[-+]?\d+(?:\.\d+)?)\s*$",
+            RegexOptions.CultureInvariant);
+        return match.Success
+            ? double.Parse(
+                match.Groups["value"].Value,
+                CultureInfo.InvariantCulture)
+            : null;
+    }
+
+    private static bool Approximately(
+        double[] actual,
+        RenderVector3 expected) =>
+        Math.Abs(actual[0] - expected.X) <= 0.02 &&
+        Math.Abs(actual[1] - expected.Y) <= 0.02 &&
+        Math.Abs(actual[2] - expected.Z) <= 0.02;
+
+    private static void VerifyCampathOutput(
+        IReadOnlyList<string> output,
+        IReadOnlyList<RenderCameraKeyframe> expected)
+    {
+        ParsedCampathKeyframe[] actual = output
+            .Select(ParseCampathKeyframe)
+            .Where(value => value is not null)
+            .Cast<ParsedCampathKeyframe>()
+            .ToArray();
+        if (actual.Length != expected.Count)
+        {
+            throw new InvalidOperationException(
+                $"CAMERA_CAMPATH_KEYFRAME_COUNT_MISMATCH: " +
+                $"expected={expected.Count}, actual={actual.Length}.");
+        }
+        for (int index = 0; index < expected.Count; index++)
+        {
+            RenderCameraKeyframe expectedValue = expected[index];
+            ParsedCampathKeyframe actualValue = actual[index];
+            if (actualValue.Tick != expectedValue.Tick ||
+                !Approximately(
+                    [
+                        actualValue.Position.X,
+                        actualValue.Position.Y,
+                        actualValue.Position.Z
+                    ],
+                    expectedValue.Position) ||
+                !Approximately(
+                    [
+                        actualValue.Rotation.X,
+                        actualValue.Rotation.Y,
+                        actualValue.Rotation.Z
+                    ],
+                    expectedValue.Rotation) ||
+                Math.Abs(actualValue.Fov - expectedValue.Fov) > 0.02)
+            {
+                throw new InvalidOperationException(
+                    $"CAMERA_CAMPATH_KEYFRAME_MISMATCH at index {index}: " +
+                    $"expected={expectedValue}; actual={actualValue}.");
+            }
+        }
+    }
+
+    private static ParsedCampathKeyframe? ParseCampathKeyframe(string line)
+    {
+        const string number = @"[-+]?\d+(?:\.\d+)?";
+        Match match = Regex.Match(
+            line,
+            $@"^\s*[YN]\s+[yn]\s+\d+\s*:\s*(?<tick>\d+).*?-\>\s*" +
+            $@"\(\s*(?<x>{number})\s+(?<y>{number})\s+(?<z>{number})\s*\)\s*" +
+            $@"(?<fov>{number})\s*\(\s*(?<pitch>{number})\s+" +
+            $@"(?<yaw>{number})\s+(?<roll>{number})\s*\)",
+            RegexOptions.CultureInvariant);
+        if (!match.Success)
+            return null;
+        return new ParsedCampathKeyframe(
+            long.Parse(
+                match.Groups["tick"].Value,
+                CultureInfo.InvariantCulture),
+            new RenderVector3(
+                ParseDouble(match, "x"),
+                ParseDouble(match, "y"),
+                ParseDouble(match, "z")),
+            new RenderVector3(
+                ParseDouble(match, "pitch"),
+                ParseDouble(match, "yaw"),
+                ParseDouble(match, "roll")),
+            ParseDouble(match, "fov"));
+    }
+
+    private static double ParseDouble(Match match, string group) =>
+        double.Parse(
+            match.Groups[group].Value,
+            CultureInfo.InvariantCulture);
+
+    private static AppliedCameraKeyframe ToApplied(
+        RenderCameraKeyframe keyframe) =>
+        new(
+            keyframe.Tick,
+            keyframe.Position,
+            keyframe.Rotation,
+            keyframe.Fov);
+
+    private static async Task PersistAppliedCameraReportAsync(
+        AppliedCameraReport report,
+        RenderWorkspace workspace,
+        string outputDirectory,
+        CancellationToken cancellationToken)
+    {
+        string json = JsonSerializer.Serialize(report, ReportJsonOptions);
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace.State, "applied-camera-report.json"),
+            json,
+            cancellationToken);
+        Directory.CreateDirectory(outputDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "applied-camera-report.json"),
+            json,
+            cancellationToken);
+    }
+
     private static async Task<PresentationStateReport> VerifyPresentationStateAsync(
         NetConsoleConnection connection,
         RenderJob job,
@@ -362,6 +765,80 @@ public sealed class NetConsoleDemoController(
             cancellationToken);
     }
 
+    private async Task<HlaeCameraCommandReport> ProbeCameraCommandsAsync(
+        NetConsoleConnection connection,
+        CancellationToken cancellationToken)
+    {
+        string[] commandNames =
+        [
+            "mirv_campath",
+            "mirv_camio",
+            "mirv_input",
+            "mirv_input position",
+            "mirv_input angles",
+            "mirv_input fov",
+            "mirv_fov",
+            "mirv_cmd",
+            "mirv_streams"
+        ];
+        List<HlaeCameraCommandProbe> probes = [];
+        for (int index = 0; index < commandNames.Length; index++)
+        {
+            string command = commandNames[index];
+            string endMarker =
+                $"AFX_RENDER_CAMERA_PROBE_{index.ToString(CultureInfo.InvariantCulture)}_END";
+            await connection.SendAsync(command, cancellationToken);
+            await connection.SendAsync($"echo {endMarker}", cancellationToken);
+            IReadOnlyList<string> output = await connection.ReadThroughAsync(
+                endMarker,
+                TimeSpan.FromSeconds(5),
+                cancellationToken);
+            string[] relevant = output
+                .Where(line =>
+                    !line.Contains(endMarker, StringComparison.Ordinal))
+                .ToArray();
+            bool supported = relevant.Length > 0 &&
+                !relevant.Any(line =>
+                    line.Contains(
+                        "Unknown command",
+                        StringComparison.OrdinalIgnoreCase) ||
+                    line.Contains(
+                        "Command not found",
+                        StringComparison.OrdinalIgnoreCase));
+            probes.Add(new HlaeCameraCommandProbe(
+                command,
+                supported,
+                relevant));
+        }
+
+        string version = File.Exists(options.HlaeExecutablePath)
+            ? FileVersionInfo.GetVersionInfo(options.HlaeExecutablePath)
+                .ProductVersion ?? "unknown"
+            : "unknown";
+        return new HlaeCameraCommandReport(
+            DateTimeOffset.UtcNow,
+            version,
+            probes);
+    }
+
+    private static async Task PersistCameraCommandReportAsync(
+        HlaeCameraCommandReport report,
+        RenderWorkspace workspace,
+        string outputDirectory,
+        CancellationToken cancellationToken)
+    {
+        string json = JsonSerializer.Serialize(report, ReportJsonOptions);
+        await File.WriteAllTextAsync(
+            Path.Combine(workspace.State, "hlae-camera-command-report.json"),
+            json,
+            cancellationToken);
+        Directory.CreateDirectory(outputDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "hlae-camera-command-report.json"),
+            json,
+            cancellationToken);
+    }
+
     private static async Task WaitForNetConReadyAsync(
         NetConsoleConnection connection,
         TimeSpan timeout,
@@ -423,8 +900,8 @@ public sealed class NetConsoleDemoController(
             try
             {
                 IReadOnlyList<string> output =
-                    await connection.ReadThroughAsync(
-                    SeekFinishedMarker,
+                    await connection.ReadThroughAnyAsync(
+                    [SeekFinishedMarker, SeekFlushedMarker],
                     remaining < TimeSpan.FromSeconds(5)
                         ? remaining
                         : TimeSpan.FromSeconds(5),
@@ -670,7 +1147,7 @@ public sealed class NetConsoleDemoController(
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
                 log = new StreamWriter(
-                    new FileStream(logPath, FileMode.Create, FileAccess.Write, FileShare.Read),
+                    new FileStream(logPath, FileMode.Append, FileAccess.Write, FileShare.Read),
                     new UTF8Encoding(false))
                 {
                     AutoFlush = true
@@ -697,6 +1174,12 @@ public sealed class NetConsoleDemoController(
 
         public async Task<IReadOnlyList<string>> ReadThroughAsync(
             string marker,
+            TimeSpan timeout,
+            CancellationToken cancellationToken) =>
+            await ReadThroughAnyAsync([marker], timeout, cancellationToken);
+
+        public async Task<IReadOnlyList<string>> ReadThroughAnyAsync(
+            IReadOnlyList<string> markers,
             TimeSpan timeout,
             CancellationToken cancellationToken)
         {
@@ -725,7 +1208,8 @@ public sealed class NetConsoleDemoController(
                     {
                         throw new InvalidOperationException($"CS2 demo playback failed: {line}");
                     }
-                    if (line.Contains(marker, StringComparison.Ordinal))
+                    if (markers.Any(marker =>
+                        line.Contains(marker, StringComparison.Ordinal)))
                     {
                         return lines;
                     }
@@ -734,7 +1218,8 @@ public sealed class NetConsoleDemoController(
             catch (OperationCanceledException) when (
                 timeoutSource.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
             {
-                throw new TimeoutException($"Timed out waiting for CS2 console marker: {marker}");
+                throw new TimeoutException(
+                    $"Timed out waiting for CS2 console marker: {string.Join(" or ", markers)}");
             }
         }
 

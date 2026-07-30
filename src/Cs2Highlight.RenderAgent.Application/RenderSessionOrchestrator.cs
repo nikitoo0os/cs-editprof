@@ -192,7 +192,11 @@ public sealed class RenderSessionOrchestrator(
                 if (firstCompleted == rendererTask)
                 {
                     ProcessExecutionResult earlyExit = await rendererTask;
-                    processes = processes with { HlaePid = earlyExit.ProcessId };
+                    processes = processes with
+                    {
+                        HlaePid = earlyExit.ProcessId,
+                        Cs2Pid = earlyExit.TrackedProcessId
+                    };
                     outcomes[item.Index] = await FailAsync(
                         item,
                         RenderState.StartingHlae,
@@ -285,12 +289,38 @@ public sealed class RenderSessionOrchestrator(
                     ProcessExecutionResult completed = await rendererTask.WaitAsync(
                         TimeSpan.FromSeconds(environment.ProcessShutdownTimeoutSeconds),
                         cancellationToken);
-                    processes = processes with { HlaePid = completed.ProcessId };
+                    processes = processes with
+                    {
+                        HlaePid = completed.ProcessId,
+                        Cs2Pid = completed.TrackedProcessId
+                    };
                 }
                 catch (TimeoutException)
                 {
                     rendererCancellation.Cancel();
                     await ObserveRendererTaskAsync(rendererTask);
+                }
+            }
+            if (processes.HlaePid.HasValue || processes.Cs2Pid.HasValue)
+            {
+                foreach (PreparedRender item in prepared)
+                {
+                    RenderJobOutcome? outcome = outcomes[item.Index];
+                    if (outcome?.Result.Success != true)
+                        continue;
+                    RenderResult updatedResult = outcome.Result with
+                    {
+                        Processes = processes
+                    };
+                    outcomes[item.Index] = outcome with
+                    {
+                        Result = updatedResult
+                    };
+                    await PersistResultAsync(
+                        item.Workspace,
+                        item.Job.OutputDirectory,
+                        updatedResult,
+                        cancellationToken);
                 }
             }
         }

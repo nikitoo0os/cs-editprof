@@ -13,6 +13,7 @@ public sealed record RenderJob(
 {
     public CaptureUiProfile CaptureUi { get; init; } = CaptureUiProfile.Gameplay;
     public CapturePresentationMode? PresentationMode { get; init; }
+    public RenderCameraPlan Camera { get; init; } = RenderCameraPlan.PlayerPov;
     public bool ContainsFirstPersonWeaponFire { get; init; } =
         Segment.PrimaryKillTick.HasValue;
 
@@ -72,6 +73,54 @@ public sealed record PresentationStateReport(
     IReadOnlyList<string> Issues);
 
 public sealed record PlayerSelector(string? SteamId, string? Name);
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum RenderCameraMode
+{
+    PlayerPov,
+    Static,
+    Campath
+}
+
+public sealed record RenderVector3(double X, double Y, double Z)
+{
+    [JsonIgnore]
+    public bool IsFinite =>
+        double.IsFinite(X) &&
+        double.IsFinite(Y) &&
+        double.IsFinite(Z);
+}
+
+public sealed record RenderCameraKeyframe(
+    long Tick,
+    RenderVector3 Position,
+    RenderVector3 Rotation,
+    double Fov);
+
+public sealed record RenderCameraBounds(
+    RenderVector3 Minimum,
+    RenderVector3 Maximum)
+{
+    public bool Contains(RenderVector3 point) =>
+        point.X >= Minimum.X && point.X <= Maximum.X &&
+        point.Y >= Minimum.Y && point.Y <= Maximum.Y &&
+        point.Z >= Minimum.Z && point.Z <= Maximum.Z;
+}
+
+public sealed record RenderCameraPlan
+{
+    public static RenderCameraPlan PlayerPov { get; } = new();
+
+    public RenderCameraMode Mode { get; init; } = RenderCameraMode.PlayerPov;
+    public string MapName { get; init; } = string.Empty;
+    public IReadOnlyList<RenderCameraKeyframe> Keyframes { get; init; } = [];
+    public RenderCameraBounds? SafeVolume { get; init; }
+    public bool ManualSpikeVerified { get; init; }
+    public bool CalibrationSpike { get; init; }
+    public string VerificationId { get; init; } = string.Empty;
+    public string HlaeVersionPrefix { get; init; } = string.Empty;
+}
+
 public sealed record RenderSegment(long StartTick, long EndTick)
 {
     public int? TickRate { get; init; }
@@ -134,7 +183,9 @@ public enum RenderState
     WaitingForGameplayReady,
     SelectingPlayer,
     ApplyingCaptureProfile,
+    ApplyingCameraPlan,
     VerifyingCaptureProfile,
+    VerifyingCameraPlan,
     StabilizingCaptureProfile,
     AdvancingToStartTick,
     Recording,
@@ -201,13 +252,16 @@ public sealed record ProcessRequest(
     string StandardOutputPath,
     string StandardErrorPath,
     TimeSpan Timeout,
-    IReadOnlyDictionary<string, string?>? Environment = null);
+    IReadOnlyDictionary<string, string?>? Environment = null,
+    string? TrackedProcessName = null,
+    TimeSpan? TrackedProcessStartupTimeout = null);
 
 public sealed record ProcessExecutionResult(
     int ProcessId,
     int ExitCode,
     bool TimedOut,
-    TimeSpan Duration);
+    TimeSpan Duration,
+    int? TrackedProcessId = null);
 
 public enum DemoLoadMode
 {

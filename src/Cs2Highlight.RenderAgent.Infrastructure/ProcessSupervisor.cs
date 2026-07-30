@@ -30,6 +30,8 @@ public sealed class ProcessSupervisor : IProcessSupervisor
             }
         }
 
+        HashSet<int> existingTrackedProcessIds =
+            GetProcessIds(request.TrackedProcessName);
         using Process process = new() { StartInfo = startInfo, EnableRaisingEvents = true };
         Stopwatch stopwatch = Stopwatch.StartNew();
         if (!process.Start())
@@ -43,26 +45,94 @@ public sealed class ProcessSupervisor : IProcessSupervisor
         using CancellationTokenSource timeout = new(request.Timeout);
         using CancellationTokenSource linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, timeout.Token);
         bool timedOut = false;
+        Process? trackedProcess = null;
+        int? trackedProcessId = null;
         try
         {
-            await process.WaitForExitAsync(linked.Token);
+            if (!string.IsNullOrWhiteSpace(request.TrackedProcessName))
+            {
+                trackedProcess = await WaitForTrackedProcessAsync(
+                    request.TrackedProcessName,
+                    existingTrackedProcessIds,
+                    request.TrackedProcessStartupTimeout ??
+                        TimeSpan.FromSeconds(30),
+                    linked.Token);
+                trackedProcessId = trackedProcess?.Id;
+            }
+
+            if (trackedProcess is not null)
+                await trackedProcess.WaitForExitAsync(linked.Token);
+            else
+                await process.WaitForExitAsync(linked.Token);
         }
         catch (OperationCanceledException) when (timeout.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
             timedOut = true;
+            if (trackedProcess is not null)
+                TryKill(trackedProcess);
             TryKill(process);
         }
         catch (OperationCanceledException)
         {
+            if (trackedProcess is not null)
+                TryKill(trackedProcess);
             TryKill(process);
             throw;
         }
         finally
         {
+            trackedProcess?.Dispose();
             await Task.WhenAll(stdout, stderr);
         }
 
-        return new ProcessExecutionResult(processId, process.HasExited ? process.ExitCode : -1, timedOut, stopwatch.Elapsed);
+        int exitCode = trackedProcess is null && process.HasExited
+            ? process.ExitCode
+            : 0;
+        return new ProcessExecutionResult(
+            processId,
+            exitCode,
+            timedOut,
+            stopwatch.Elapsed,
+            trackedProcessId);
+    }
+
+    private static async Task<Process?> WaitForTrackedProcessAsync(
+        string processName,
+        HashSet<int> existingProcessIds,
+        TimeSpan startupTimeout,
+        CancellationToken cancellationToken)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow.Add(startupTimeout);
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            foreach (Process candidate in Process.GetProcessesByName(processName))
+            {
+                if (!existingProcessIds.Contains(candidate.Id) &&
+                    !candidate.HasExited)
+                {
+                    return candidate;
+                }
+                candidate.Dispose();
+            }
+            await Task.Delay(100, cancellationToken);
+        }
+
+        return null;
+    }
+
+    private static HashSet<int> GetProcessIds(string? processName)
+    {
+        if (string.IsNullOrWhiteSpace(processName))
+            return [];
+
+        HashSet<int> result = [];
+        foreach (Process process in Process.GetProcessesByName(processName))
+        {
+            result.Add(process.Id);
+            process.Dispose();
+        }
+        return result;
     }
 
     private static async Task CopyAsync(StreamReader reader, string path, CancellationToken cancellationToken)

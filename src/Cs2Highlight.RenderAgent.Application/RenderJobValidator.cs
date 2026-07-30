@@ -71,6 +71,8 @@ public static partial class RenderJobValidator
                 "weapon fire must use the PovCombat presentation mode.");
         }
 
+        ValidateCamera(job, errors);
+
         if (environment.NetConPort is < 1 or > 65535)
         {
             errors.Add("RenderEnvironment.NetConPort must be between 1 and 65535.");
@@ -101,6 +103,88 @@ public static partial class RenderJobValidator
 
         ValidateOutput(job.OutputDirectory, environment.Cs2ExecutablePath, errors);
         return new ValidationReport(errors);
+    }
+
+    private static void ValidateCamera(RenderJob job, List<string> errors)
+    {
+        if (job.Camera is null)
+        {
+            errors.Add("camera is required.");
+            return;
+        }
+        RenderCameraPlan camera = job.Camera;
+        if (camera.Keyframes is null)
+        {
+            errors.Add("camera.keyframes is required.");
+            return;
+        }
+        if (camera.Mode == RenderCameraMode.PlayerPov)
+        {
+            if (camera.Keyframes.Count > 0)
+                errors.Add("PlayerPov camera must not contain keyframes.");
+            return;
+        }
+
+        if (job.ContainsFirstPersonWeaponFire)
+        {
+            errors.Add(
+                "Non-POV cameras cannot be used for first-person weapon-fire clips.");
+        }
+        if (job.EffectivePresentationMode == CapturePresentationMode.PovCombat)
+        {
+            errors.Add(
+                "Non-POV cameras require a cinematic presentation mode.");
+        }
+        if (!camera.ManualSpikeVerified && !camera.CalibrationSpike)
+        {
+            errors.Add(
+                "Non-POV camera requires manual-spike verification or an explicit calibration spike.");
+        }
+        if (string.IsNullOrWhiteSpace(camera.MapName))
+            errors.Add("Non-POV camera requires mapName.");
+        if (string.IsNullOrWhiteSpace(camera.HlaeVersionPrefix))
+            errors.Add("Non-POV camera requires hlaeVersionPrefix.");
+        if (camera.SafeVolume is null)
+            errors.Add("Non-POV camera requires a calibrated safeVolume.");
+        else if (!camera.SafeVolume.Minimum.IsFinite ||
+                 !camera.SafeVolume.Maximum.IsFinite ||
+                 camera.SafeVolume.Minimum.X > camera.SafeVolume.Maximum.X ||
+                 camera.SafeVolume.Minimum.Y > camera.SafeVolume.Maximum.Y ||
+                 camera.SafeVolume.Minimum.Z > camera.SafeVolume.Maximum.Z)
+        {
+            errors.Add("Camera safeVolume bounds are invalid.");
+        }
+
+        int requiredKeyframes = camera.Mode == RenderCameraMode.Static ? 1 : 4;
+        if (camera.Keyframes.Count != requiredKeyframes)
+        {
+            errors.Add(
+                $"{camera.Mode} camera requires exactly {requiredKeyframes} keyframe(s).");
+        }
+        long previousTick = -1;
+        foreach (RenderCameraKeyframe keyframe in camera.Keyframes)
+        {
+            if (keyframe.Tick < job.Segment.StartTick ||
+                keyframe.Tick > job.Segment.EndTick)
+            {
+                errors.Add("Camera keyframe ticks must stay inside the render segment.");
+            }
+            if (keyframe.Tick <= previousTick)
+                errors.Add("Camera keyframe ticks must be strictly increasing.");
+            previousTick = keyframe.Tick;
+            if (!keyframe.Position.IsFinite ||
+                !keyframe.Rotation.IsFinite ||
+                !double.IsFinite(keyframe.Fov) ||
+                keyframe.Fov is < 20 or > 140)
+            {
+                errors.Add("Camera keyframe transform or FOV is invalid.");
+            }
+            if (camera.SafeVolume is not null &&
+                !camera.SafeVolume.Contains(keyframe.Position))
+            {
+                errors.Add("Camera keyframe is outside the calibrated safeVolume.");
+            }
+        }
     }
 
     private static void ValidateOutput(string outputDirectory, string cs2ExecutablePath, List<string> errors)

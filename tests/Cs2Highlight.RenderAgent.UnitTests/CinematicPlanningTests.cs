@@ -361,6 +361,24 @@ public sealed class CinematicPlanningTests
     }
 
     [Fact]
+    public void Dust2CatalogContainsVerifiedStage81Campath()
+    {
+        MapCameraProfile? profile =
+            new MapCameraProfileCatalog().Find("de_dust2");
+
+        Assert.NotNull(profile);
+        Assert.True(profile.ManuallyVerified);
+        EstablishingCameraPreset preset =
+            Assert.Single(profile.EstablishingShots);
+        Assert.Equal(4, preset.Keyframes.Count);
+        Assert.All(
+            preset.Keyframes,
+            keyframe => Assert.Contains(
+                profile.SafeVolumes,
+                volume => volume.Contains(keyframe.Position)));
+    }
+
+    [Fact]
     public void UnsupportedMapOrUnverifiedHlaeFallsBackToPov()
     {
         CameraPlanningContext context = VerifiedCameraContext() with

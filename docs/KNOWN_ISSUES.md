@@ -1,12 +1,8 @@
 # Known issues
 
-- No HLAE installation or CS2 test demo was available on the development machine, so real E2E rendering is not claimed.
-- The unattended HLAE custom-loader CLI is confirmed from upstream source and used with `-insecure` plus isolated `USRLOCALCSGO`.
-- `mirv_streams`, `mirv_cmd`, and `mirv_fov` are documented for
-  AfxHookSource2. The NetCon sequencing of `playdemo`, `demo_gototick`, and
-  first-person AccountID locking, with SteamID64 conversion and
-  post-selection verification, has automated tests but still
-  requires repeated real-machine E2E acceptance.
+- HLAE 2.191.1 / AfxHookSource2 0.40.1, CS2, NetCon and FFmpeg were exercised
+  on the target Windows render machine with `-insecure` and isolated
+  `USRLOCALCSGO`. Other HLAE or CS2 versions remain unverified.
 - Current CS2 clients can reject legacy entity message type 138 in otherwise
   valid demos. The agent applies the narrow, fail-closed
   `cs2-demo-playback-fix` v0.1.1 rewrite to its isolated copy before playback.
@@ -21,14 +17,16 @@
   tests, but clean captured pixels and visual effect timing still require the
   real Stage 5 checklist on the installed CS2/HLAE/FFmpeg versions.
 - Process ownership cleanup is limited to the process tree started by `ProcessSupervisor`; no broad name-based killing is performed.
-- Stage 8 contains placeholder catalogs for `de_mirage`, `de_inferno` and
-  `de_dust2`, but none has calibrated safe camera volumes or a passed manual
-  HLAE spike. They are therefore unsupported for non-POV shots and fall back
-  to the selected player's POV.
-- Camera capability discovery, command dispatch, low-resolution preview and
-  retry are modelled fail-closed, but this development machine had no HLAE or
-  CS2 installation. A real campath render, preview-quality result and high-FPS
-  camera capture are not claimed.
+- Stage 8.1 has one calibrated non-POV profile: the `de_dust2` upper-tunnel
+  safe volume documented in `STAGE8_1_ACCEPTANCE.md`. `de_mirage`,
+  `de_inferno` and every unverified Dust2 volume remain POV-only.
+- The CS2 demo playback control strip can remain visible even when
+  `cl_showdemooverlay 0` is confirmed. Physical `Shift+F2` hides it on the
+  accepted machine, but synthetic input is filtered by CS2. Stage 8.1 was
+  accepted with this explicit pixel-cleanliness exception.
+- A forced CS2 cleanup after a failed HLAE camera calibration can leave Steam
+  unable to start the next injected session until Steam is restarted. Normal
+  completed sessions exit cleanly; one early NetCon startup retry is automatic.
 - Stage 8 frame/section classification has deterministic unit coverage. Full
   `librosa` analysis must still be rebuilt with Python 3.10/3.11 and tested
   against the production music file; low-confidence sections are intentionally

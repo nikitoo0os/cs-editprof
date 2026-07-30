@@ -133,6 +133,92 @@ public sealed class RenderJobValidatorTests : IDisposable
         Assert.True(result.IsValid, string.Join(", ", result.Errors));
     }
 
+    [Fact]
+    public void CalibrationStaticCameraInsideSafeVolumeIsAccepted()
+    {
+        RenderJob job = ValidJob() with
+        {
+            PresentationMode = CapturePresentationMode.EstablishingShot,
+            ContainsFirstPersonWeaponFire = false,
+            Camera = StaticCamera(calibrationSpike: true)
+        };
+
+        ValidationReport result =
+            RenderJobValidator.Validate(job, new RenderEnvironmentOptions());
+
+        Assert.True(result.IsValid, string.Join(", ", result.Errors));
+    }
+
+    [Fact]
+    public void UnverifiedProductionCameraIsRejected()
+    {
+        RenderJob job = ValidJob() with
+        {
+            PresentationMode = CapturePresentationMode.CinematicBroll,
+            ContainsFirstPersonWeaponFire = false,
+            Camera = StaticCamera(calibrationSpike: false)
+        };
+
+        ValidationReport result =
+            RenderJobValidator.Validate(job, new RenderEnvironmentOptions());
+
+        Assert.Contains(
+            result.Errors,
+            error => error.Contains(
+                "manual-spike verification",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void CameraOutsideSafeVolumeIsRejected()
+    {
+        RenderCameraPlan camera = StaticCamera(calibrationSpike: true) with
+        {
+            Keyframes =
+            [
+                new RenderCameraKeyframe(
+                    15,
+                    new RenderVector3(999, 2, 3),
+                    new RenderVector3(0, 0, 0),
+                    90)
+            ]
+        };
+        RenderJob job = ValidJob() with
+        {
+            PresentationMode = CapturePresentationMode.EstablishingShot,
+            ContainsFirstPersonWeaponFire = false,
+            Camera = camera
+        };
+
+        ValidationReport result =
+            RenderJobValidator.Validate(job, new RenderEnvironmentOptions());
+
+        Assert.Contains(
+            result.Errors,
+            error => error.Contains("outside", StringComparison.Ordinal));
+    }
+
+    private static RenderCameraPlan StaticCamera(bool calibrationSpike) =>
+        new()
+        {
+            Mode = RenderCameraMode.Static,
+            MapName = "de_dust2",
+            CalibrationSpike = calibrationSpike,
+            VerificationId = "test",
+            HlaeVersionPrefix = "2.191.1",
+            SafeVolume = new RenderCameraBounds(
+                new RenderVector3(0, 0, 0),
+                new RenderVector3(10, 10, 10)),
+            Keyframes =
+            [
+                new RenderCameraKeyframe(
+                    15,
+                    new RenderVector3(1, 2, 3),
+                    new RenderVector3(0, 90, 0),
+                    90)
+            ]
+        };
+
     private RenderJob ValidJob() => new(
         "job-1", demo, new PlayerSelector("76561198000000001", "Player"),
         new RenderSegment(10, 20), new VideoSettings(1920, 1080, 60, 90),

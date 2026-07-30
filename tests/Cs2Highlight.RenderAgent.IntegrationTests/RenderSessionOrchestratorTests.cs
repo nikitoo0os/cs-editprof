@@ -49,6 +49,13 @@ public sealed class RenderSessionOrchestratorTests : IDisposable
             [DemoLoadMode.Start, DemoLoadMode.ReuseCurrent, DemoLoadMode.ReuseCurrent],
             runtime.LoadModes);
         Assert.Equal(1, runtime.QuitCount);
+        Assert.All(
+            outcomes,
+            outcome =>
+            {
+                Assert.Equal(123, outcome.Result.Processes.HlaePid);
+                Assert.Equal(456, outcome.Result.Processes.Cs2Pid);
+            });
     }
 
     private RenderJob Job(
@@ -181,7 +188,8 @@ public sealed class RenderSessionOrchestratorTests : IDisposable
                 123,
                 0,
                 false,
-                TimeSpan.FromSeconds(1)));
+                TimeSpan.FromSeconds(1),
+                456));
             return Task.CompletedTask;
         }
     }

@@ -34,6 +34,7 @@ public sealed partial class CinematicPlanService(
     IMapCameraProfileCatalog mapProfiles,
     ICinematicDurationPolicy durationPolicy,
     GenerationStorage storage,
+    CinematicCameraRuntimeOptions cameraRuntime,
     TimeProvider timeProvider,
     ILogger<CinematicPlanService> logger) : ICinematicPlanService
 {
@@ -285,16 +286,22 @@ public sealed partial class CinematicPlanService(
             : null;
         HlaeCameraCapabilities capabilities = new()
         {
-            Available = false,
-            SupportsCampath = false,
-            SupportsInput = false,
-            SupportsFov = false,
-            SupportsHighFpsCapture = false,
-            ManualSpikeVerified = false,
+            Available = cameraRuntime.Enabled &&
+                cameraRuntime.VerifiedMaps.Contains(
+                    mapName,
+                    StringComparer.OrdinalIgnoreCase),
+            Version = cameraRuntime.HlaeVersion,
+            SupportsCampath = cameraRuntime.Enabled,
+            SupportsInput = cameraRuntime.Enabled,
+            SupportsFov = cameraRuntime.Enabled,
+            SupportsHighFpsCapture = cameraRuntime.Enabled,
+            ManualSpikeVerified = cameraRuntime.Enabled &&
+                !string.IsNullOrWhiteSpace(cameraRuntime.VerificationId),
             Warnings =
             [
-                settings.AutomaticCinematicCameras
-                    ? "HLAE_RUNTIME_CAPABILITIES_DEFERRED_TO_RENDER_AGENT"
+                settings.AutomaticCinematicCameras &&
+                cameraRuntime.Enabled
+                    ? $"HLAE_CAMERA_VERIFIED:{cameraRuntime.VerificationId}"
                     : "AUTOMATIC_CINEMATIC_CAMERAS_DISABLED"
             ]
         };

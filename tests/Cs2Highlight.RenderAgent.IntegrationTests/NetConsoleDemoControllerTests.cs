@@ -114,7 +114,7 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         Assert.Equal(4, commands.Count(command => command == "cl_drawhud 1"));
         Assert.Equal(4, commands.Count(command => command == "cl_showdemooverlay 0"));
         Assert.True(commands.Count(command => command == "r_drawviewmodel 1") >= 4);
-        Assert.DoesNotContain("demoui", commands);
+        Assert.DoesNotContain("demoui false", commands);
         Assert.Equal(4, commands.Count(command => command == "hideconsole"));
         Assert.Contains(commands, command =>
             command.Contains("addAtTick 150", StringComparison.Ordinal) &&
@@ -181,10 +181,108 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
 
         Assert.DoesNotContain(commands, command =>
             command.StartsWith("playdemo ", StringComparison.Ordinal));
+        Assert.DoesNotContain("demoui false", commands);
         Assert.Contains("status", commands);
         Assert.Contains("demo_gototick 70", commands);
         Assert.Contains("mirv_streams record start", commands);
     }
+
+    [Fact]
+    public async Task BuildsAndVerifiesFourKeyframeCampath()
+    {
+        using TcpListener listener = new(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        List<string> commands = [];
+        Task server = RunFakeNetConAsync(listener, commands);
+        RenderEnvironmentOptions options = new()
+        {
+            NetConPort = port,
+            ProcessStartupTimeoutSeconds = 3,
+            DemoLoadTimeoutSeconds = 3,
+            DemoInitializationStabilizationSeconds = 0,
+            Warmup = new RenderWarmupOptions
+            {
+                WarmupGameSeconds = 3,
+                MinimumWallClockStabilizationSeconds = 0,
+                MaximumGameplayReadyWaitSeconds = 3
+            }
+        };
+        RenderWorkspace workspace = new(
+            root,
+            Path.Combine(root, "input"),
+            Path.Combine(root, "config"),
+            Path.Combine(root, "raw"),
+            Path.Combine(root, "output"),
+            Path.Combine(root, "logs"),
+            Path.Combine(root, "state"),
+            Path.Combine(root, "input", "demo.dem"));
+        RenderCameraKeyframe[] keyframes =
+        [
+            Keyframe(100, 1, 2, 3, 80),
+            Keyframe(133, 2, 3, 4, 79),
+            Keyframe(166, 3, 4, 5, 78),
+            Keyframe(200, 4, 5, 6, 77)
+        ];
+        RenderJob job = new(
+            "campath-test",
+            workspace.PreparedDemoPath,
+            new PlayerSelector("76561198000000001", "Player One"),
+            new RenderSegment(100, 200)
+            {
+                TickRate = 10,
+                RoundStartTick = 0,
+                LastKillTick = 150
+            },
+            new VideoSettings(1920, 1080, 60, 90),
+            workspace.Output,
+            10)
+        {
+            CaptureUi = CaptureUiProfile.Cinematic,
+            PresentationMode = CapturePresentationMode.CinematicBroll,
+            ContainsFirstPersonWeaponFire = false,
+            Camera = new RenderCameraPlan
+            {
+                Mode = RenderCameraMode.Campath,
+                MapName = "de_dust2",
+                Keyframes = keyframes,
+                SafeVolume = new RenderCameraBounds(
+                    new RenderVector3(0, 0, 0),
+                    new RenderVector3(10, 10, 10)),
+                CalibrationSpike = true,
+                VerificationId = "test",
+                HlaeVersionPrefix = "unknown"
+            }
+        };
+        NetConsoleDemoController controller =
+            new(options, new StateJournal(TimeProvider.System));
+
+        await controller.ControlAsync(
+            job,
+            workspace,
+            DemoLoadMode.Start,
+            CancellationToken.None);
+        await server;
+
+        Assert.Equal(4, commands.Count(value => value == "mirv_campath add"));
+        Assert.Contains("mirv_campath enabled 1", commands);
+        Assert.Contains("mirv_input end", commands);
+        Assert.Contains("mirv_input fov 77", commands);
+        Assert.True(File.Exists(
+            Path.Combine(workspace.State, "applied-camera-report.json")));
+    }
+
+    private static RenderCameraKeyframe Keyframe(
+        long tick,
+        double x,
+        double y,
+        double z,
+        double fov) =>
+        new(
+            tick,
+            new RenderVector3(x, y, z),
+            new RenderVector3(x, y, 0),
+            fov);
 
     private static async Task RunFakeNetConAsync(TcpListener listener, List<string> commands)
     {
@@ -201,6 +299,12 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         int readinessAttempts = 0;
         int demoStatusAttempts = 0;
         int seekAttempts = 0;
+        long currentTick = 0;
+        double[] cameraPosition = [0, 0, 0];
+        double[] cameraAngles = [0, 0, 0];
+        double cameraFov = 90;
+        List<(long Tick, double[] Position, double[] Angles, double Fov)>
+            campath = [];
         while (true)
         {
             string? command = await reader.ReadLineAsync();
@@ -239,14 +343,107 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             {
                 await writer.WriteLineAsync("AFX_RENDER_DEMO_STATUS_END");
             }
+            if (command.StartsWith(
+                    "echo AFX_RENDER_CAMERA_PROBE_",
+                    StringComparison.Ordinal))
+            {
+                await writer.WriteLineAsync(command["echo ".Length..]);
+            }
+            if (command.StartsWith(
+                    "echo AFX_RENDER_CAMPATH_ADD_",
+                    StringComparison.Ordinal))
+            {
+                await writer.WriteLineAsync(command["echo ".Length..]);
+            }
+            if (command.StartsWith(
+                    "echo AFX_RENDER_CAMERA_TRANSFORM_",
+                    StringComparison.Ordinal))
+            {
+                await writer.WriteLineAsync(command["echo ".Length..]);
+            }
+            if (command == "echo AFX_RENDER_CAMPATH_PRINT_END")
+            {
+                await writer.WriteLineAsync("AFX_RENDER_CAMPATH_PRINT_END");
+            }
             if (command.StartsWith("demo_gototick ", StringComparison.Ordinal))
             {
                 seekAttempts++;
                 string requestedTick = command.Split(' ', 2)[1];
+                currentTick = long.Parse(
+                    requestedTick,
+                    System.Globalization.CultureInfo.InvariantCulture);
                 await writer.WriteLineAsync(
                     seekAttempts == 1
                         ? "[Demo] Demo Skipping finished at tick 0"
-                        : $"[Demo] Demo Skipping finished at tick {requestedTick}");
+                        : $"Demo Skipping flushing last 42 messages, tick {requestedTick} start 0 goal {requestedTick}");
+            }
+            if (command.StartsWith(
+                    "mirv_input position ",
+                    StringComparison.Ordinal))
+            {
+                cameraPosition = command.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Skip(2)
+                    .Select(value => double.Parse(
+                        value,
+                        System.Globalization.CultureInfo.InvariantCulture))
+                    .ToArray();
+            }
+            else if (command == "mirv_input position")
+            {
+                await writer.WriteLineAsync(string.Create(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"Current value: {cameraPosition[0]} {cameraPosition[1]} {cameraPosition[2]}"));
+            }
+            if (command.StartsWith(
+                    "mirv_input angles ",
+                    StringComparison.Ordinal))
+            {
+                cameraAngles = command.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Skip(2)
+                    .Select(value => double.Parse(
+                        value,
+                        System.Globalization.CultureInfo.InvariantCulture))
+                    .ToArray();
+            }
+            else if (command == "mirv_input angles")
+            {
+                await writer.WriteLineAsync(string.Create(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"Current value: {cameraAngles[0]} {cameraAngles[1]} {cameraAngles[2]}"));
+            }
+            if (command.StartsWith(
+                    "mirv_input fov ",
+                    StringComparison.Ordinal))
+            {
+                cameraFov = double.Parse(
+                    command.Split(' ', StringSplitOptions.RemoveEmptyEntries)[2],
+                    System.Globalization.CultureInfo.InvariantCulture);
+            }
+            else if (command == "mirv_input fov")
+            {
+                await writer.WriteLineAsync(string.Create(
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    $"Current value: {cameraFov}"));
+            }
+            if (command == "mirv_campath add")
+            {
+                campath.Add((
+                    currentTick,
+                    [.. cameraPosition],
+                    [.. cameraAngles],
+                    cameraFov));
+            }
+            if (command == "mirv_campath print")
+            {
+                for (int index = 0; index < campath.Count; index++)
+                {
+                    var value = campath[index];
+                    await writer.WriteLineAsync(string.Create(
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        $"Y n {index} : {value.Tick} , 00m00s , 0.0 -> " +
+                        $"( {value.Position[0]} {value.Position[1]} {value.Position[2]} ) " +
+                        $"{value.Fov} ( {value.Angles[0]} {value.Angles[1]} {value.Angles[2]} )"));
+                }
             }
             if (command == "spec_lock_to_accountid")
             {

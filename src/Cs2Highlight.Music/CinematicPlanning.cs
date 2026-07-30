@@ -224,7 +224,57 @@ public sealed class MapCameraProfileCatalog(
 
     private static IEnumerable<MapCameraProfile> UnverifiedDefaults()
     {
-        foreach (string map in new[] { "de_mirage", "de_inferno", "de_dust2" })
+        yield return new MapCameraProfile
+        {
+            MapName = "de_dust2",
+            SafeVolumes =
+            [
+                new SafeCameraVolume(
+                    new GameplayVector3(100, 2280, -80),
+                    new GameplayVector3(250, 2450, 20))
+            ],
+            EstablishingShots =
+            [
+                new EstablishingCameraPreset(
+                    "de-dust2-upper-tunnel-stage8-1",
+                    [
+                        new CameraKeyframe
+                        {
+                            TimeSeconds = 0,
+                            Position = new GameplayVector3(
+                                160.122742,
+                                2369.676270,
+                                -56.481201),
+                            Rotation = new GameplayVector3(14.5, 8, 0),
+                            Fov = 82
+                        },
+                        new CameraKeyframe
+                        {
+                            TimeSeconds = 1,
+                            Position = new GameplayVector3(180, 2345, -50),
+                            Rotation = new GameplayVector3(15, 16, 0),
+                            Fov = 80
+                        },
+                        new CameraKeyframe
+                        {
+                            TimeSeconds = 2,
+                            Position = new GameplayVector3(205, 2320, -44),
+                            Rotation = new GameplayVector3(17, 27, 0),
+                            Fov = 78
+                        },
+                        new CameraKeyframe
+                        {
+                            TimeSeconds = 3,
+                            Position = new GameplayVector3(230, 2295, -36),
+                            Rotation = new GameplayVector3(19, 33, 0),
+                            Fov = 76
+                        }
+                    ])
+            ],
+            RestrictedVolumes = [],
+            ManuallyVerified = true
+        };
+        foreach (string map in new[] { "de_mirage", "de_inferno" })
         {
             yield return new MapCameraProfile
             {
@@ -306,7 +356,7 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             if (!context.Profile.SafeVolumes.Any(value => value.Contains(camera)))
             {
                 warnings.Add("CAMERA_PATH_OUTSIDE_SAFE_VOLUME");
-                return Pov(candidate, warnings);
+                return EstablishingFallback(candidate, context.Profile, warnings);
             }
             keyframes.Add(new CameraKeyframe
             {
@@ -344,6 +394,47 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             FovStart = keyframes[0].Fov,
             FovEnd = keyframes[^1].Fov,
             RequiresHighFpsCapture = candidate.CinematicScore >= 0.8,
+            FallbackShotId = $"camera-{candidate.Id}-pov",
+            Warnings = warnings
+        };
+    }
+
+    private static CameraShotPlan EstablishingFallback(
+        BrollCandidate candidate,
+        MapCameraProfile profile,
+        IReadOnlyList<string> warnings)
+    {
+        EstablishingCameraPreset? preset =
+            profile.EstablishingShots.FirstOrDefault(value =>
+                value.Keyframes.Count >= 4);
+        if (preset is null)
+            return Pov(candidate, warnings);
+        CameraKeyframe[] source = preset.Keyframes
+            .OrderBy(value => value.TimeSeconds)
+            .ToArray();
+        double sourceDuration = Math.Max(
+            0.001,
+            source[^1].TimeSeconds - source[0].TimeSeconds);
+        CameraKeyframe[] keyframes = source
+            .Select(value => value with
+            {
+                TimeSeconds = candidate.DurationSeconds *
+                    (value.TimeSeconds - source[0].TimeSeconds) /
+                    sourceDuration
+            })
+            .ToArray();
+        return new CameraShotPlan
+        {
+            Id = $"camera-{candidate.Id}-{preset.Id}",
+            Type = CameraShotType.EnvironmentReveal,
+            DemoId = candidate.DemoId,
+            StartTick = candidate.StartTick,
+            EndTick = candidate.EndTick,
+            TargetDurationSeconds = candidate.DurationSeconds,
+            Keyframes = keyframes,
+            FovStart = keyframes[0].Fov,
+            FovEnd = keyframes[^1].Fov,
+            RequiresHighFpsCapture = false,
             FallbackShotId = $"camera-{candidate.Id}-pov",
             Warnings = warnings
         };

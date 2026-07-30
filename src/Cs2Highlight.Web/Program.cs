@@ -25,6 +25,9 @@ builder.Services.AddDbContextFactory<GenerationDbContext>(options =>
 UploadOptions uploadOptions = builder.Configuration.GetSection("Uploads").Get<UploadOptions>() ?? new();
 StorageOptions storageOptions = builder.Configuration.GetSection("Storage").Get<StorageOptions>() ?? new();
 PipelineOptions pipelineOptions = builder.Configuration.GetSection("Pipeline").Get<PipelineOptions>() ?? new();
+CinematicCameraRuntimeOptions cinematicCameraOptions =
+    builder.Configuration.GetSection("CinematicCameraRuntime")
+        .Get<CinematicCameraRuntimeOptions>() ?? new();
 RetentionOptions retentionOptions = builder.Configuration.GetSection("Retention").Get<RetentionOptions>() ?? new();
 MusicUploadOptions musicUploadOptions =
     builder.Configuration.GetSection("MusicUploads").Get<MusicUploadOptions>() ?? new();
@@ -35,6 +38,7 @@ RecommendedSelectionOptions selectionOptions =
 builder.Services.AddSingleton(uploadOptions);
 builder.Services.AddSingleton(storageOptions);
 builder.Services.AddSingleton(pipelineOptions);
+builder.Services.AddSingleton(cinematicCameraOptions);
 builder.Services.AddSingleton(retentionOptions);
 builder.Services.AddSingleton(musicUploadOptions);
 builder.Services.AddSingleton(trustedLutOptions);

@@ -36,6 +36,14 @@ public sealed class PipelineOptions
     public DemoFailurePolicy DemoFailurePolicy { get; set; } = DemoFailurePolicy.SkipInvalidDemo;
 }
 
+public sealed class CinematicCameraRuntimeOptions
+{
+    public bool Enabled { get; set; }
+    public string HlaeVersion { get; set; } = string.Empty;
+    public string VerificationId { get; set; } = string.Empty;
+    public string[] VerifiedMaps { get; set; } = [];
+}
+
 public static class PipelinePathResolver
 {
     public static string? Resolve(string configured)

@@ -82,12 +82,13 @@ adjustments follow the section narrative. B-roll and highlights from one demo
 are included in a single batch plan, so the Render Agent keeps one CS2 session
 per demo.
 
-Automatic non-POV cameras remain fail-closed. The official HLAE surface exposes
-`mirv_campath`, `mirv_camio`, `mirv_input`, `mirv_fov`, `mirv_cmd` and
-`mirv_streams`, but the included map profiles are intentionally unverified.
-Until a real manual spike, map-volume calibration and low-resolution preview
-pass succeed on the render machine, Director records POV fallback shots and
-does not claim a cinematic campath.
+Automatic non-POV cameras remain fail-closed except for the verified
+`de_dust2` upper-tunnel profile. HLAE 2.191.1 command discovery, a repeated
+static-camera seek and a four-keyframe `mirv_campath` were accepted on the
+target render machine. Render jobs carry the calibrated safe volume, exact
+HLAE version prefix and verification identity; unknown maps, versions or
+out-of-volume keyframes remain POV or fail before recording. See
+[Stage 8.1 camera acceptance](docs/STAGE8_1_ACCEPTANCE.md).
 
 Build the updated analyzers before running Web:
 
