@@ -194,7 +194,10 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         listener.Start();
         int port = ((IPEndPoint)listener.LocalEndpoint).Port;
         List<string> commands = [];
-        Task server = RunFakeNetConAsync(listener, commands);
+        Task server = RunFakeNetConAsync(
+            listener,
+            commands,
+            campathTickDrift: 2);
         RenderEnvironmentOptions options = new()
         {
             NetConPort = port,
@@ -284,7 +287,10 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             new RenderVector3(x, y, 0),
             fov);
 
-    private static async Task RunFakeNetConAsync(TcpListener listener, List<string> commands)
+    private static async Task RunFakeNetConAsync(
+        TcpListener listener,
+        List<string> commands,
+        long campathTickDrift = 0)
     {
         using TcpClient client = await listener.AcceptTcpClientAsync();
         await using NetworkStream stream = client.GetStream();
@@ -371,7 +377,8 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
                 string requestedTick = command.Split(' ', 2)[1];
                 currentTick = long.Parse(
                     requestedTick,
-                    System.Globalization.CultureInfo.InvariantCulture);
+                    System.Globalization.CultureInfo.InvariantCulture) -
+                    campathTickDrift;
                 await writer.WriteLineAsync(
                     seekAttempts == 1
                         ? "[Demo] Demo Skipping finished at tick 0"

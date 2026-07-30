@@ -236,7 +236,9 @@ public sealed class MusicModel(
             ModelState.AddModelError(string.Empty, exception.Message);
             return await LoadAsync(publicId, cancellationToken);
         }
-        return RedirectToPage("/Checkout", new { publicId });
+        return MovieStyle == MovieStyle.CinematicDirector
+            ? RedirectToPage("/Timeline", new { publicId })
+            : RedirectToPage("/Checkout", new { publicId });
     }
 
     private async Task<IActionResult> LoadAsync(

@@ -109,11 +109,6 @@ public sealed class HighlightSelectionService(
             .SingleAsync(value => value.PublicId == publicId, cancellationToken);
         if (generation.Status != GenerationStatus.AwaitingHighlightSelection)
             throw new InvalidOperationException("GENERATION_SELECTION_LOCKED");
-        int maximum = generation.MaximumHighlights > 0
-            ? Math.Min(10, generation.MaximumHighlights)
-            : 10;
-        if (ids.Length > maximum)
-            throw new InvalidOperationException("TOO_MANY_HIGHLIGHTS_SELECTED");
         GenerationHighlight[] selected = generation.Highlights
             .Where(value => ids.Contains(value.HighlightId) &&
                 value.SteamId == generation.SelectedSteamId)
@@ -129,6 +124,7 @@ public sealed class HighlightSelectionService(
                 highlight.HighlightId, out int selectionOrder);
             highlight.SelectionOrder = highlight.SelectedByUser ? selectionOrder : null;
         }
+        generation.MaximumHighlights = selected.Length;
         long transitionOverlap =
             Math.Max(0, selected.Length - 1) *
             Math.Max(0, generation.TransitionDurationMilliseconds);

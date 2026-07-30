@@ -4,7 +4,6 @@ const root = document.querySelector("[data-highlight-catalog]");
 if (root) {
   const cards = [...root.querySelectorAll(".highlight-card")];
   const boxes = cards.map(card => card.querySelector("input[type=checkbox]"));
-  const maximum = Math.min(10, Number(root.dataset.maximum) || 10);
   const grid = root.querySelector(".highlight-grid");
   const submit = root.querySelector("[data-selection-submit]");
   let category = "All";
@@ -57,13 +56,11 @@ if (root) {
       }
       if (mode === "recommended") {
         cards.filter(card => card.dataset.recommended === "true")
-          .slice(0, maximum)
           .forEach(card => { card.querySelector("input").checked = true; });
         showToast("Рекомендованные моменты выбраны", "success");
       }
       if (mode === "visible") {
         cards.filter(card => !card.hidden)
-          .slice(0, maximum)
           .forEach(card => { card.querySelector("input").checked = true; });
       }
       if (mode === "clear-visible") {
@@ -72,7 +69,7 @@ if (root) {
       }
       if (mode === "none") boxes.forEach(box => { box.checked = false; });
       if (mode?.startsWith("top")) {
-        const count = Math.min(maximum, Number(mode.slice(3)));
+        const count = Number(mode.slice(3));
         [...cards].sort((a, b) => Number(b.dataset.score) - Number(a.dataset.score))
           .slice(0, count)
           .forEach(card => { card.querySelector("input").checked = true; });
@@ -80,11 +77,7 @@ if (root) {
       update();
     }));
 
-  boxes.forEach(box => box.addEventListener("change", event => {
-    if (event.target.checked && boxes.filter(item => item.checked).length > maximum) {
-      event.target.checked = false;
-      showToast(`Можно выбрать не больше ${maximum} моментов`, "error");
-    }
+  boxes.forEach(box => box.addEventListener("change", () => {
     update();
   }));
 

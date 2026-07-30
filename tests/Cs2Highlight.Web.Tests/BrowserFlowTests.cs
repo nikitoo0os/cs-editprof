@@ -60,9 +60,9 @@ public sealed class BrowserFlowTests
 
         string? steamId = Environment.GetEnvironmentVariable("CS2_STAGE6_STEAM_ID");
         ILocator player = string.IsNullOrWhiteSpace(steamId)
-            ? page.Locator("input[type=radio][name=SteamId]").First
-            : page.Locator($"input[type=radio][name=SteamId][value='{steamId}']");
-        await player.CheckAsync();
+            ? page.Locator("[data-player-card]").First
+            : page.Locator($"[data-player-card]:has(input[name=SteamId][value='{steamId}'])");
+        await player.ClickAsync();
         await page.Locator("[data-player-submit]").ClickAsync();
         await page.GetByRole(AriaRole.Button, new() { Name = "Топ-3" }).ClickAsync();
         await page.Locator("input[name=EffectPreset][value=Dynamic]").CheckAsync();
@@ -101,6 +101,22 @@ public sealed class BrowserFlowTests
         await page.Locator("input[name=ColorGrade][value=CinematicCool]").CheckAsync();
         await page.GetByRole(AriaRole.Button, new() { Name = "Продолжить к оплате" })
             .ClickAsync();
+        if (cinematicDirector)
+        {
+            await Assertions.Expect(page.Locator("[data-timeline-director]"))
+                .ToBeVisibleAsync();
+            await page.Locator("[data-timeline-suggest]").ClickAsync();
+            ILocator markers = page.Locator("[data-anchor-id]");
+            await Assertions.Expect(markers).ToHaveCountAsync(3);
+            await markers.Nth(1).ClickAsync();
+            await page.Keyboard.PressAsync("ArrowRight");
+            await markers.Last.ClickAsync();
+            await page.Locator("[data-inspector-lock]").ClickAsync();
+            await Assertions.Expect(markers.Last)
+                .ToHaveClassAsync(
+                    new System.Text.RegularExpressions.Regex("is-locked"));
+            await page.Locator("[data-timeline-confirm]").ClickAsync();
+        }
         await Assertions.Expect(page.GetByText("$1.00")).ToHaveCountAsync(1);
         await Assertions.Expect(page.Locator("[data-effect-summary]"))
             .ToContainTextAsync("Сбалансированная");

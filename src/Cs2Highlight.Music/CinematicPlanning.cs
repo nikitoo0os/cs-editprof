@@ -211,8 +211,17 @@ public interface IMapCameraProfileCatalog
 public sealed class MapCameraProfileCatalog(
     IEnumerable<MapCameraProfile>? profiles = null) : IMapCameraProfileCatalog
 {
+    private static MapCameraProfile[] ResolveProfiles(
+        IEnumerable<MapCameraProfile>? configured)
+    {
+        MapCameraProfile[] materialized = configured?.ToArray() ?? [];
+        return materialized.Length > 0
+            ? materialized
+            : UnverifiedDefaults().ToArray();
+    }
+
     private readonly IReadOnlyDictionary<string, MapCameraProfile> profiles =
-        (profiles ?? UnverifiedDefaults())
+        ResolveProfiles(profiles)
         .ToDictionary(value => value.MapName, StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<MapCameraProfile> All => profiles.Values
@@ -302,6 +311,11 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
         CameraPlanningContext context)
     {
         List<string> warnings = [];
+        if (candidate.DurationSeconds < 0.75)
+        {
+            warnings.Add("CAMERA_SHOT_TOO_SHORT_FOR_CAMPATH");
+            return Pov(candidate, warnings);
+        }
         if (!context.Capabilities.Available ||
             !context.Capabilities.SupportsCampath ||
             !context.Capabilities.SupportsInput ||
@@ -356,13 +370,21 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             if (!context.Profile.SafeVolumes.Any(value => value.Contains(camera)))
             {
                 warnings.Add("CAMERA_PATH_OUTSIDE_SAFE_VOLUME");
-                return EstablishingFallback(candidate, context.Profile, warnings);
+                return EstablishingFallback(
+                    candidate,
+                    context.Profile,
+                    context,
+                    warnings);
             }
             keyframes.Add(new CameraKeyframe
             {
                 TimeSeconds = candidate.DurationSeconds * position,
                 Position = camera,
-                Rotation = sample.ViewAngles,
+                Rotation = LookAt(
+                    camera,
+                    Add(
+                        sample.Position,
+                        new GameplayVector3(0, 0, 54))),
                 Fov = Math.Clamp(
                     86 - 8 * position,
                     context.MinimumFov,
@@ -402,6 +424,7 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
     private static CameraShotPlan EstablishingFallback(
         BrollCandidate candidate,
         MapCameraProfile profile,
+        CameraPlanningContext context,
         IReadOnlyList<string> warnings)
     {
         EstablishingCameraPreset? preset =
@@ -412,21 +435,59 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
         CameraKeyframe[] source = preset.Keyframes
             .OrderBy(value => value.TimeSeconds)
             .ToArray();
+        PlayerTransformSample[] targetSamples = candidate.Trajectory.Samples
+            .OrderBy(value => value.Tick)
+            .ToArray();
+        if (targetSamples.Length < 2)
+            return Pov(
+                candidate,
+                [.. warnings, "CAMERA_TARGET_TRAJECTORY_INSUFFICIENT"]);
+        double nearestTargetDistance = source
+            .SelectMany(camera => targetSamples.Select(target =>
+                camera.Position.DistanceTo(target.Position)))
+            .DefaultIfEmpty(double.MaxValue)
+            .Min();
+        double maximumTrackingDistance = Math.Max(
+            640,
+            context.CameraDistance * 8);
+        if (nearestTargetDistance > maximumTrackingDistance)
+        {
+            return Pov(
+                candidate,
+                [.. warnings, "CAMERA_TARGET_OUTSIDE_VERIFIED_VOLUME"]);
+        }
         double sourceDuration = Math.Max(
             0.001,
             source[^1].TimeSeconds - source[0].TimeSeconds);
         CameraKeyframe[] keyframes = source
-            .Select(value => value with
+            .Select((value, index) =>
             {
-                TimeSeconds = candidate.DurationSeconds *
-                    (value.TimeSeconds - source[0].TimeSeconds) /
-                    sourceDuration
+                double progress = index / (double)(source.Length - 1);
+                PlayerTransformSample target = Sample(
+                    targetSamples,
+                    progress);
+                return value with
+                {
+                    TimeSeconds = candidate.DurationSeconds *
+                        (value.TimeSeconds - source[0].TimeSeconds) /
+                        sourceDuration,
+                    Rotation = LookAt(
+                        value.Position,
+                        Add(
+                            target.Position,
+                            new GameplayVector3(0, 0, 54)))
+                };
             })
             .ToArray();
         return new CameraShotPlan
         {
             Id = $"camera-{candidate.Id}-{preset.Id}",
-            Type = CameraShotType.EnvironmentReveal,
+            Type = candidate.Type is
+                    BrollCandidateType.PlayerApproach or
+                    BrollCandidateType.SideMovement or
+                    BrollCandidateType.RearMovement
+                ? CameraShotType.SideTracking
+                : CameraShotType.EnvironmentReveal,
             DemoId = candidate.DemoId,
             StartTick = candidate.StartTick,
             EndTick = candidate.EndTick,
@@ -497,6 +558,20 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
 
     private static GameplayVector3 Add(GameplayVector3 left, GameplayVector3 right) =>
         new(left.X + right.X, left.Y + right.Y, left.Z + right.Z);
+
+    private static GameplayVector3 LookAt(
+        GameplayVector3 camera,
+        GameplayVector3 target)
+    {
+        double x = target.X - camera.X;
+        double y = target.Y - camera.Y;
+        double z = target.Z - camera.Z;
+        double horizontal = Math.Sqrt(x * x + y * y);
+        return new GameplayVector3(
+            -Math.Atan2(z, Math.Max(0.000001, horizontal)) * 180 / Math.PI,
+            Math.Atan2(y, x) * 180 / Math.PI,
+            0);
+    }
 }
 
 public interface ICameraShotQualityAnalyzer
@@ -701,7 +776,164 @@ public sealed class CinematicTimeWarpPolicy(
                 }
                 : value)
             .ToArray();
-        return plan with { Segments = safeSegments };
+        TimeWarpPlan safePlan = plan with { Segments = safeSegments };
+        return TryCreateMotivatedSlowMotion(
+            highlight,
+            safePlan,
+            killOffset,
+            options) ?? safePlan;
+    }
+
+    private static TimeWarpPlan? TryCreateMotivatedSlowMotion(
+        SelectedHighlight highlight,
+        TimeWarpPlan alignmentPlan,
+        double killOffset,
+        CinematicTimeWarpOptions options)
+    {
+        bool dynamicRange = options.MinimumLocalSpeed <= 0.75 &&
+            options.MaximumLocalSpeed >= 1.20;
+        bool heroMoment = highlight.Highlight.KillCount > 1 ||
+            highlight.SelectionOrder % 2 == 0;
+        double duration = Math.Max(
+            0,
+            highlight.Bounds.SafeEndSeconds -
+            highlight.Bounds.SafeStartSeconds);
+        if (!dynamicRange ||
+            !heroMoment ||
+            duration < 1.25 ||
+            killOffset < 0.65 ||
+            duration - killOffset < 0.20 ||
+            alignmentPlan.Segments.Any(value =>
+                Math.Abs(value.Speed - 1) > 0.035))
+        {
+            return null;
+        }
+
+        double slowDuration = Math.Clamp(
+            killOffset * 0.22,
+            0.18,
+            0.34);
+        double slowSpeed = Math.Clamp(
+            options.MinimumLocalSpeed + 0.03,
+            0.60,
+            0.74);
+        double delay = slowDuration / slowSpeed - slowDuration;
+        double availableAcceleration = killOffset - slowDuration;
+        double minimumAcceleration = delay *
+            options.MaximumLocalSpeed /
+            Math.Max(0.001, options.MaximumLocalSpeed - 1);
+        double accelerationDuration = Math.Clamp(
+            Math.Max(0.48, minimumAcceleration + 0.04),
+            0.20,
+            availableAcceleration);
+        double denominator = accelerationDuration - delay;
+        if (denominator <= 0.05)
+            return null;
+        double accelerationSpeed =
+            accelerationDuration / denominator;
+        if (accelerationSpeed > options.MaximumLocalSpeed + 0.001)
+            return null;
+
+        double accelerationStart =
+            killOffset - slowDuration - accelerationDuration;
+        List<TimeWarpSegment> segments = [];
+        AddStylizedSegment(segments, 0, accelerationStart, 1);
+        AddStylizedSegment(
+            segments,
+            accelerationStart,
+            killOffset - slowDuration,
+            accelerationSpeed);
+        AddStylizedSegment(
+            segments,
+            killOffset - slowDuration,
+            killOffset,
+            slowSpeed);
+
+        double postHold = Math.Min(0.20, duration - killOffset);
+        double recoveryDuration = Math.Min(
+            0.36,
+            Math.Max(0, duration - killOffset - postHold));
+        double postSlowSpeed = Math.Min(0.82, slowSpeed + 0.12);
+        double postDelay = postHold / postSlowSpeed - postHold;
+        const int recoverySteps = 3;
+        double recoveryStep = recoveryDuration / recoverySteps;
+        for (int index = 0; index < recoverySteps; index++)
+        {
+            double progress = (index + 1d) / recoverySteps;
+            double speed = slowSpeed + (1 - slowSpeed) * progress;
+            postDelay += recoveryStep / speed - recoveryStep;
+        }
+        double recoveryEnd =
+            killOffset + postHold + recoveryDuration;
+        double maximumRecoverySpeed = Math.Max(
+            1,
+            options.MaximumPostKillAcceleration);
+        double compensationDuration = maximumRecoverySpeed > 1.0001
+            ? postDelay * maximumRecoverySpeed /
+                (maximumRecoverySpeed - 1)
+            : double.MaxValue;
+        bool canRecover = compensationDuration <=
+            duration - recoveryEnd + 0.000001;
+        if (canRecover)
+        {
+            AddStylizedSegment(
+                segments,
+                killOffset,
+                killOffset + postHold,
+                postSlowSpeed);
+            for (int index = 0; index < recoverySteps; index++)
+            {
+                double start =
+                    killOffset + postHold + recoveryStep * index;
+                double end = start + recoveryStep;
+                double progress = (index + 1d) / recoverySteps;
+                AddStylizedSegment(
+                    segments,
+                    start,
+                    end,
+                    slowSpeed + (1 - slowSpeed) * progress);
+            }
+            AddStylizedSegment(
+                segments,
+                recoveryEnd,
+                recoveryEnd + compensationDuration,
+                maximumRecoverySpeed);
+            AddStylizedSegment(
+                segments,
+                recoveryEnd + compensationDuration,
+                duration,
+                1);
+        }
+        else
+        {
+            AddStylizedSegment(
+                segments,
+                killOffset,
+                duration,
+                1);
+        }
+        return new TimeWarpPlan(
+            1,
+            segments,
+            true,
+            [
+                .. alignmentPlan.Warnings,
+                "CINEMATIC_MOTIVATED_SLOW_MOTION"
+            ]);
+    }
+
+    private static void AddStylizedSegment(
+        List<TimeWarpSegment> segments,
+        double start,
+        double end,
+        double speed)
+    {
+        if (end - start <= 0.000001)
+            return;
+        segments.Add(new TimeWarpSegment(
+            start,
+            end,
+            Math.Max(0.01, speed)));
     }
 }
 
@@ -742,24 +974,66 @@ public sealed class MotivatedEffectPlanner : IMotivatedEffectPlanner
             : match?.Peak.Type == MusicalPeakType.BassImpact
                 ? MotivatedEffectReason.BassImpact
                 : MotivatedEffectReason.MusicPeak;
-        string type = finalHighlight
-            ? "HitStop"
-            : match?.Peak.Type == MusicalPeakType.BassImpact
-                ? "SmoothZoom"
-                : "OffsetZoom";
         double center = Math.Clamp(
             match?.PlannedKillSeconds ?? segmentDuration / 2,
             0,
             segmentDuration);
-        return
+        int pattern = StablePattern(match?.HighlightId);
+        string primaryType = finalHighlight
+            ? "HitStop"
+            : (pattern % 8) switch
+            {
+                0 => "PunchZoom",
+                1 => "SmoothZoom",
+                2 => "OffsetZoom",
+                3 => "DirectionalMotionBlur",
+                4 => "RgbSplit",
+                5 => "FrameEcho",
+                6 => "MicroShake",
+                _ => "LensWarpPulse"
+            };
+        string secondaryType = primaryType switch
+        {
+            "HitStop" => "SmoothZoom",
+            "PunchZoom" or "SmoothZoom" or "OffsetZoom" => pattern % 2 == 0
+                ? "MicroShake"
+                : "RgbSplit",
+            "DirectionalMotionBlur" => "OffsetZoom",
+            "RgbSplit" => "SmoothZoom",
+            "FrameEcho" => "PunchZoom",
+            "MicroShake" => "SmoothZoom",
+            _ => "MicroShake"
+        };
+        MotivatedEffectDirective[] planned =
         [
             new MotivatedEffectDirective(
-                type,
+                primaryType,
                 reason,
                 Math.Max(0, center - 0.10),
                 Math.Min(segmentDuration, center + 0.12),
-                finalHighlight ? 0.68 : 0.42)
+                finalHighlight ? 0.68 : 0.50),
+            new MotivatedEffectDirective(
+                secondaryType,
+                MotivatedEffectReason.TimeRamp,
+                Math.Max(0, center - 0.42),
+                Math.Max(0, center - 0.16),
+                finalHighlight ? 0.38 : 0.34)
         ];
+        return planned
+            .Where(value =>
+                value.EndSeconds - value.StartSeconds >= 0.04)
+            .Take(policy.MaximumVisibleFilterEffectsPerHighlight)
+            .ToArray();
+    }
+
+    private static int StablePattern(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return 0;
+        int hash = 17;
+        foreach (char character in value)
+            hash = unchecked(hash * 31 + character);
+        return hash & int.MaxValue;
     }
 }
 

@@ -32,7 +32,16 @@ public sealed class GenerationModel(
         Generation = generation;
         DemoCount = await db.GenerationDemos.CountAsync(value => value.GenerationId == generation.Id, cancellationToken);
         PlayerCount = await db.GenerationPlayers.CountAsync(value => value.GenerationId == generation.Id, cancellationToken);
-        HighlightCount = await db.GenerationHighlights.CountAsync(value => value.GenerationId == generation.Id, cancellationToken);
+        int selectedHighlights = await db.GenerationHighlights.CountAsync(
+            value =>
+                value.GenerationId == generation.Id &&
+                (value.SelectedByUser || value.SelectedForCompilation),
+            cancellationToken);
+        HighlightCount = selectedHighlights > 0
+            ? selectedHighlights
+            : await db.GenerationHighlights.CountAsync(
+                value => value.GenerationId == generation.Id,
+                cancellationToken);
         return Page();
     }
 

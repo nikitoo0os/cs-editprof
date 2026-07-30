@@ -8,20 +8,20 @@
          data-round="@Model.RoundNumber"
          data-tick="@Model.FirstKillTick">
   <label class="highlight-card__label">
-    <span class="highlight-card__top">
-      <input class="highlight-card__checkbox"
-             type="checkbox"
-             name="HighlightIds"
-             value="@Model.Id"
-             aria-label="Выбрать: @UiText.HighlightType(Model.Type), раунд @Model.RoundNumber" />
-      @if (Model.Recommended)
-      {
+    <input class="highlight-card__checkbox"
+           type="checkbox"
+           name="HighlightIds"
+           value="@Model.Id"
+           aria-label="Выбрать: @UiText.HighlightType(Model.Type), раунд @Model.RoundNumber" />
+    @if (Model.Recommended)
+    {
+      <span class="highlight-card__top">
         <span class="badge badge-violet">
           <img class="ui-icon" src="/assets/icons/sparkles.svg" alt="" />
           рекомендуем
         </span>
-      }
-    </span>
+      </span>
+    }
     <strong class="highlight-card__title">@UiText.HighlightType(Model.Type)</strong>
     <span class="highlight-card__meta">
       Раунд @Model.RoundNumber · @Model.MapName<br />

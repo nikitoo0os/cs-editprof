@@ -77,6 +77,8 @@ builder.Services.AddSingleton<Cs2Highlight.Music.IColorNarrativePlanner, Cs2High
 builder.Services.AddSingleton<Cs2Highlight.Music.ICinematicDirector, Cs2Highlight.Music.CinematicDirector>();
 builder.Services.AddSingleton<Cs2Highlight.Music.ICinematicMusicEditPlanAdapter, Cs2Highlight.Music.CinematicMusicEditPlanAdapter>();
 builder.Services.AddSingleton<ICinematicPlanService, CinematicPlanService>();
+builder.Services.AddSingleton(new InteractiveRetimingOptions());
+builder.Services.AddSingleton<IInteractiveTimelineDirector, InteractiveTimelineDirector>();
 builder.Services.AddSingleton<GenerationWakeSignal>();
 builder.Services.AddSingleton<GenerationCancellationRegistry>();
 builder.Services.AddSingleton<GlobalHighlightSelector>();
@@ -139,6 +141,7 @@ app.UseRouting();
 app.UseRateLimiter();
 app.MapRazorPages();
 app.MapHub<GenerationHub>("/hubs/generations");
+app.MapTimelineDirectorApi();
 app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
 app.MapHealthChecks("/health/ready");
 app.MapGet("/api/generations/{publicId}", async (
@@ -299,6 +302,26 @@ app.MapGet("/generations/{publicId}/video", async (
         artifact.StoredPath,
         "video/mp4",
         fileName,
+        enableRangeProcessing: true);
+});
+app.MapGet("/generations/{publicId}/music-audio", async (
+    string publicId,
+    IDbContextFactory<GenerationDbContext> factory,
+    CancellationToken cancellationToken) =>
+{
+    await using GenerationDbContext db =
+        await factory.CreateDbContextAsync(cancellationToken);
+    GenerationMusic? music = await db.GenerationMusic.AsNoTracking()
+        .SingleOrDefaultAsync(
+            value =>
+                value.Generation.PublicId == publicId &&
+                value.RightsConfirmed,
+            cancellationToken);
+    if (music is null || !File.Exists(music.StoredPath))
+        return Results.NotFound();
+    return Results.File(
+        music.StoredPath,
+        music.ContentType,
         enableRangeProcessing: true);
 });
 app.Run();

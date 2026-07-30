@@ -224,6 +224,13 @@ public sealed partial class FfmpegHighlightCompilationService(
                     metadata.DurationSeconds);
             string videoFilters = graph.Video;
             string audioFilters = graph.Audio;
+            (string introVideoFade, string introAudioFade) =
+                FfmpegMovieFilterBuilder.CinematicIntroTransition(
+                    request.CinematicMoviePlan,
+                    index,
+                    metadata.DurationSeconds);
+            videoFilters += introVideoFade;
+            audioFilters += introAudioFade;
             string? selectedLutPath = null;
             List<string> postEffectVideoFilters = [];
             if (request.MovieSettings is not null)
@@ -1143,6 +1150,42 @@ public static class FfmpegMovieFilterBuilder
 
     private static string Db(double value) =>
         FormattableString.Invariant($"{Math.Clamp(value, -60, 12):0.###}dB");
+
+    public static (string Video, string Audio) CinematicIntroTransition(
+        CinematicMoviePlan? cinematic,
+        int clipIndex,
+        double sourceDuration)
+    {
+        if (cinematic is null || cinematic.Segments.Count < 2)
+            return (string.Empty, string.Empty);
+        int firstHighlight = cinematic.Segments
+            .Select((segment, index) => (segment, index))
+            .Where(value => value.segment.HighlightId is not null)
+            .Select(value => value.index)
+            .DefaultIfEmpty(-1)
+            .First();
+        if (firstHighlight <= 0)
+            return (string.Empty, string.Empty);
+        const double duration = 0.28;
+        if (clipIndex == firstHighlight)
+        {
+            return (
+                FormattableString.Invariant(
+                    $",fade=t=in:st=0:d={duration:0.##}:color=black"),
+                FormattableString.Invariant(
+                    $",afade=t=in:st=0:d={duration:0.##}"));
+        }
+        if (clipIndex == firstHighlight - 1)
+        {
+            double start = Math.Max(0, sourceDuration - duration);
+            return (
+                FormattableString.Invariant(
+                    $",fade=t=out:st={start:0.######}:d={duration:0.##}:color=black"),
+                FormattableString.Invariant(
+                    $",afade=t=out:st={start:0.######}:d={duration:0.##}"));
+        }
+        return (string.Empty, string.Empty);
+    }
 
     private static string Number(double value) =>
         value.ToString("0.######", CultureInfo.InvariantCulture);

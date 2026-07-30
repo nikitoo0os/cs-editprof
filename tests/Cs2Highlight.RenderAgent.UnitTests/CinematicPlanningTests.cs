@@ -379,6 +379,63 @@ public sealed class CinematicPlanningTests
     }
 
     [Fact]
+    public void EmptyConfiguredCameraCatalogStillLoadsBuiltInProfiles()
+    {
+        MapCameraProfile? profile =
+            new MapCameraProfileCatalog([]).Find("de_dust2");
+
+        Assert.NotNull(profile);
+        Assert.True(profile.ManuallyVerified);
+    }
+
+    [Fact]
+    public void VerifiedDust2FallbackCampathTracksNearbyPlayer()
+    {
+        MapCameraProfile profile =
+            Assert.IsType<MapCameraProfile>(
+                new MapCameraProfileCatalog().Find("de_dust2"));
+        BrollCandidate candidate = Broll() with
+        {
+            Trajectory = new PlayerTrajectory(
+            [
+                new PlayerTransformSample(
+                    0,
+                    new GameplayVector3(-260, 2190, -128),
+                    GameplayVector3.Zero),
+                new PlayerTransformSample(
+                    64,
+                    new GameplayVector3(-80, 2200, -128),
+                    GameplayVector3.Zero),
+                new PlayerTransformSample(
+                    128,
+                    new GameplayVector3(20, 2205, -128),
+                    GameplayVector3.Zero)
+            ])
+        };
+        CameraPlanningContext context = VerifiedCameraContext() with
+        {
+            MapName = "de_dust2",
+            Profile = profile
+        };
+
+        CameraShotPlan plan =
+            new CameraPathPlanner().Create(candidate, context);
+
+        Assert.Equal(CameraShotType.SideTracking, plan.Type);
+        Assert.Equal(4, plan.Keyframes.Count);
+        Assert.All(
+            plan.Keyframes,
+            keyframe => Assert.Contains(
+                profile.SafeVolumes,
+                volume => volume.Contains(keyframe.Position)));
+        Assert.Contains(
+            plan.Keyframes,
+            keyframe =>
+                Math.Abs(keyframe.Rotation.X) > 1 ||
+                Math.Abs(keyframe.Rotation.Y) > 1);
+    }
+
+    [Fact]
     public void UnsupportedMapOrUnverifiedHlaeFallsBackToPov()
     {
         CameraPlanningContext context = VerifiedCameraContext() with
@@ -396,6 +453,23 @@ public sealed class CinematicPlanningTests
         Assert.Contains(
             "HLAE_CAMERA_CAPABILITY_UNVERIFIED",
             plan.Warnings);
+    }
+
+    [Fact]
+    public void VeryShortBrollFallsBackToPovBeforeCampathPlanning()
+    {
+        BrollCandidate candidate = Broll() with
+        {
+            EndTick = 105,
+            DurationSeconds = 0.078
+        };
+
+        CameraShotPlan plan = new CameraPathPlanner().Create(
+            candidate,
+            VerifiedCameraContext());
+
+        Assert.Equal(CameraShotType.PlayerPov, plan.Type);
+        Assert.Contains("CAMERA_SHOT_TOO_SHORT_FOR_CAMPATH", plan.Warnings);
     }
 
     [Fact]
@@ -493,11 +567,24 @@ public sealed class CinematicPlanningTests
                 MaximumVisibleFilterEffectsPerHighlight = 0
             },
             finalHighlight: false);
+        IReadOnlyList<MotivatedEffectDirective> strong = planner.Plan(
+            CinematicSequenceRole.Highlight,
+            section,
+            match,
+            CameraPathPlanner.Pov(Broll(), []),
+            4,
+            new CinematicEffectPolicy
+            {
+                MaximumVisibleFilterEffectsPerHighlight = 2
+            },
+            finalHighlight: false);
 
         Assert.Single(pov);
         Assert.Equal(MotivatedEffectReason.FinalKill, pov[0].Reason);
         Assert.Empty(camera);
         Assert.Empty(calm);
+        Assert.Equal(2, strong.Count);
+        Assert.Equal(2, strong.Select(value => value.EffectType).Distinct().Count());
     }
 
     [Fact]
@@ -616,6 +703,259 @@ public sealed class CinematicPlanningTests
             highlights.Length,
             plan.Segments.Count(value => value.HighlightId is not null));
         Assert.Contains("HIGHLIGHT_PEAK_TIMELINE_FALLBACK", plan.Warnings);
+        Assert.DoesNotContain(
+            plan.Warnings,
+            value => value.StartsWith(
+                "CINEMATIC_TIMELINE_GAP:",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void RelaxedDirectorKeepsIntroCombatFreeAndStartsWithSoloKill()
+    {
+        MusicSection intro = DetailedSection(
+            "intro",
+            MusicSectionType.Intro,
+            0,
+            4,
+            0.2);
+        MusicSection verse = DetailedSection(
+            "verse",
+            MusicSectionType.Verse,
+            4,
+            20,
+            0.7);
+        MusicalPeak[] peaks =
+        [
+            new MusicalPeak
+            {
+                Id = "first-impact",
+                Type = MusicalPeakType.StrongBeat,
+                TimeSeconds = 5.2,
+                Strength = 0.8,
+                Confidence = 0.9,
+                SectionId = verse.Id
+            },
+            new MusicalPeak
+            {
+                Id = "middle-impact",
+                Type = MusicalPeakType.Downbeat,
+                TimeSeconds = 9,
+                Strength = 0.8,
+                Confidence = 0.9,
+                SectionId = verse.Id
+            },
+            new MusicalPeak
+            {
+                Id = "hero-impact",
+                Type = MusicalPeakType.BassImpact,
+                TimeSeconds = 14,
+                Strength = 0.9,
+                Confidence = 0.9,
+                SectionId = verse.Id
+            }
+        ];
+        MusicNarrative narrative = new()
+        {
+            DurationSeconds = 20,
+            Sections = [intro, verse],
+            Peaks = peaks,
+            Frames = [],
+            Warnings = []
+        };
+        MusicExcerptPlan excerpt = new()
+        {
+            StartSeconds = 0,
+            EndSeconds = 20,
+            SectionIds = [intro.Id, verse.Id],
+            Peaks = peaks,
+            RequiredPeakCount = 2,
+            UsablePeakCount = peaks.Length,
+            Score = 1,
+            IsValid = true,
+            ScoreBreakdown = new Dictionary<string, double>(),
+            Warnings = [MusicExcerptSelector.RelaxedEnergyFallbackWarning]
+        };
+        SelectedHighlight multi = Highlight(
+            "multi",
+            HighlightType.DoubleKill,
+            6,
+            80) with
+        {
+            Bounds = new SafeClipBounds(0, 0, 5, 5, 6, 6),
+            SelectionOrder = 1
+        };
+        SelectedHighlight solo = Highlight(
+            "solo",
+            HighlightType.SoloKill,
+            2,
+            50) with
+        {
+            SelectionOrder = 2
+        };
+
+        CinematicMoviePlan plan = Director().Create(
+            narrative,
+            excerpt,
+            [multi, solo],
+            Enumerable.Range(0, 6)
+                .Select(index => Broll() with
+                {
+                    Id = $"intro-broll-{index}"
+                })
+                .ToArray(),
+            DirectorOptions());
+
+        CinematicSequenceSegment firstHighlight = plan.Segments
+            .Where(value => value.HighlightId is not null)
+            .OrderBy(value => value.OutputStartSeconds)
+            .First();
+        Assert.Equal("solo", firstHighlight.HighlightId);
+        Assert.True(firstHighlight.OutputStartSeconds >= 4);
+        Assert.All(
+            plan.Segments.Where(value =>
+                value.OutputStartSeconds <
+                firstHighlight.OutputStartSeconds),
+            value => Assert.Null(value.HighlightId));
+        Assert.Contains(
+            plan.Segments,
+            value =>
+                value.Role == CinematicSequenceRole.Intro &&
+                value.Camera.Type != CameraShotType.PlayerPov);
+    }
+
+    [Fact]
+    public void RelaxedDirectorFitsEightSolosAndTwoLongMultikills()
+    {
+        MusicSection intro = DetailedSection(
+            "intro",
+            MusicSectionType.Intro,
+            0,
+            4.88,
+            0.1);
+        MusicSection verse = DetailedSection(
+            "verse",
+            MusicSectionType.Verse,
+            4.88,
+            39.375,
+            0.5);
+        double[] peakTimes =
+        [
+            6.04,
+            9.36,
+            11.72,
+            14.04,
+            16.84,
+            18.92,
+            21.64,
+            23.64,
+            29.68,
+            38.08
+        ];
+        MusicalPeak[] peaks = peakTimes
+            .Select((time, index) => new MusicalPeak
+            {
+                Id = $"peak-{index:D2}",
+                Type = index % 2 == 0
+                    ? MusicalPeakType.BassImpact
+                    : MusicalPeakType.Downbeat,
+                TimeSeconds = time,
+                Strength = index switch
+                {
+                    5 => 0.28,
+                    8 => 0.32,
+                    _ => 0.55
+                },
+                Confidence = 0.8,
+                SectionId = verse.Id
+            })
+            .ToArray();
+        MusicNarrative narrative = new()
+        {
+            DurationSeconds = 39.375,
+            Sections = [intro, verse],
+            Peaks = peaks,
+            Frames = [],
+            Warnings = []
+        };
+        MusicExcerptPlan excerpt = new()
+        {
+            StartSeconds = 0,
+            EndSeconds = 39.375,
+            SectionIds = [intro.Id, verse.Id],
+            Peaks = peaks,
+            RequiredPeakCount = 10,
+            UsablePeakCount = peaks.Length,
+            Score = 1,
+            IsValid = true,
+            ScoreBreakdown = new Dictionary<string, double>(),
+            Warnings = [MusicExcerptSelector.RelaxedEnergyFallbackWarning]
+        };
+        List<SelectedHighlight> highlights =
+        [
+            Highlight(
+                "long-multi",
+                HighlightType.DoubleKill,
+                7.8,
+                100) with
+            {
+                Bounds = new SafeClipBounds(
+                    0,
+                    0,
+                    6.797,
+                    6.797,
+                    7.8,
+                    7.8),
+                SelectionOrder = 1
+            },
+            Highlight(
+                "short-multi",
+                HighlightType.DoubleKill,
+                5.6,
+                90) with
+            {
+                Bounds = new SafeClipBounds(
+                    0,
+                    0,
+                    4.578,
+                    4.578,
+                    5.6,
+                    5.6),
+                SelectionOrder = 3
+            }
+        ];
+        highlights.AddRange(
+            Enumerable.Range(0, 8)
+                .Select(index => Highlight(
+                        $"solo-{index}",
+                        HighlightType.SoloKill,
+                        2,
+                        80 - index) with
+                    {
+                        SelectionOrder = index + 2
+                    }));
+
+        CinematicMoviePlan plan = Director().Create(
+            narrative,
+            excerpt,
+            highlights,
+            Enumerable.Range(0, 20)
+                .Select(index => Broll() with
+                {
+                    Id = $"broll-{index:D2}"
+                })
+                .ToArray(),
+            DirectorOptions());
+
+        Assert.Equal(10, plan.HighlightMatches.Count);
+        CinematicSequenceSegment[] combat = plan.Segments
+            .Where(value => value.HighlightId is not null)
+            .OrderBy(value => value.OutputStartSeconds)
+            .ToArray();
+        Assert.Equal(10, combat.Length);
+        Assert.True(combat[0].OutputStartSeconds >= 4.88);
+        Assert.Equal("long-multi", combat[^1].HighlightId);
+        Assert.True(combat[^1].OutputEndSeconds <= 39.375);
         Assert.DoesNotContain(
             plan.Warnings,
             value => value.StartsWith(
@@ -787,6 +1127,20 @@ public sealed class CinematicPlanningTests
             plan.Segments.Where(value =>
                 value.SourceStartSeconds >= killOffset),
             value => Assert.True(value.Speed <= 1.05));
+        Assert.Contains(plan.Segments, value => value.Speed < 0.8);
+        Assert.Contains(plan.Segments, value => value.Speed > 1.1);
+        Assert.Equal(
+            killOffset,
+            TimeWarpMath.MapSourceTime(plan, killOffset),
+            6);
+        Assert.Equal(
+            highlight.Bounds.SafeEndSeconds -
+            highlight.Bounds.SafeStartSeconds,
+            TimeWarpMath.OutputDuration(
+                plan,
+                highlight.Bounds.SafeEndSeconds -
+                highlight.Bounds.SafeStartSeconds),
+            6);
     }
 
     private static MusicSectionClassifier Classifier() =>

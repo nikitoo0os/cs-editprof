@@ -64,6 +64,67 @@ public sealed class ProcessRenderAgentClientTests : IDisposable
             "render-session-*.stdout.log"));
     }
 
+    [Fact]
+    public async Task RetryArchivesDiagnosticsAndFallsBackToPovForCinematicBroll()
+    {
+        Directory.CreateDirectory(root);
+        string jobPath = await WriteJobAsync("fake-cinematic-retry");
+        RenderJob original = JsonSerializer.Deserialize<RenderJob>(
+            await File.ReadAllTextAsync(jobPath),
+            JsonOptions)!;
+        original = original with
+        {
+            PresentationMode = CapturePresentationMode.CinematicBroll,
+            ContainsFirstPersonWeaponFire = false,
+            Camera = new RenderCameraPlan
+            {
+                Mode = RenderCameraMode.Campath,
+                MapName = "de_dust2",
+                Keyframes =
+                [
+                    new RenderCameraKeyframe(
+                        10,
+                        new RenderVector3(1, 2, 3),
+                        new RenderVector3(4, 5, 0),
+                        80)
+                ]
+            }
+        };
+        await File.WriteAllTextAsync(
+            jobPath,
+            JsonSerializer.Serialize(original, JsonOptions));
+        await File.WriteAllTextAsync(
+            Path.Combine(original.OutputDirectory, "applied-camera-report.json"),
+            "{}");
+        await File.WriteAllBytesAsync(
+            Path.Combine(original.OutputDirectory, "raw-highlight.mp4"),
+            [9, 8, 7]);
+        ProcessRenderAgentClient client = new(FakeExecutablePath());
+
+        RenderInvocationResult result =
+            await client.RenderAsync(jobPath, 2, CancellationToken.None);
+
+        Assert.Null(result.Error);
+        string logs = Path.Combine(original.OutputDirectory, "logs");
+        Assert.True(File.Exists(Path.Combine(
+            logs,
+            "applied-camera-report-attempt-01.json")));
+        Assert.False(File.Exists(Path.Combine(
+            original.OutputDirectory,
+            "applied-camera-report.json")));
+        string fallbackPath = Path.Combine(
+            logs,
+            "render-job-attempt-02-pov-fallback.json");
+        RenderJob fallback = JsonSerializer.Deserialize<RenderJob>(
+            await File.ReadAllTextAsync(fallbackPath),
+            JsonOptions)!;
+        Assert.Equal(RenderCameraMode.PlayerPov, fallback.Camera.Mode);
+        RenderJob unchanged = JsonSerializer.Deserialize<RenderJob>(
+            await File.ReadAllTextAsync(jobPath),
+            JsonOptions)!;
+        Assert.Equal(RenderCameraMode.Campath, unchanged.Camera.Mode);
+    }
+
     private async Task<string> WriteJobAsync(string jobId)
     {
         string demo = Path.Combine(root, "match.dem");

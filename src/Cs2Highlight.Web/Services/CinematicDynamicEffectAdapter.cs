@@ -15,7 +15,7 @@ public interface ICinematicDynamicEffectAdapter
 public sealed class CinematicDynamicEffectAdapter(
     IEffectSeedProvider seeds) : ICinematicDynamicEffectAdapter
 {
-    public const string PlannerVersion = "8.0";
+    public const string PlannerVersion = "8.3";
 
     public DynamicEffectPlan Create(
         string generationId,
@@ -39,11 +39,12 @@ public sealed class CinematicDynamicEffectAdapter(
             -1,
             PlannerVersion);
         EffectCue[] effects = segment.Effects
-            .Take(1)
+            .Take(intensity == EffectIntensity.Strong ? 2 : 1)
             .Select((value, index) => Cue(
                 value,
                 match,
-                seed + index))
+                seed + index,
+                index))
             .ToArray();
         return new DynamicEffectPlan
         {
@@ -67,24 +68,32 @@ public sealed class CinematicDynamicEffectAdapter(
     private static EffectCue Cue(
         MotivatedEffectDirective directive,
         HighlightPeakMatch match,
-        int seed)
+        int seed,
+        int index)
     {
         VideoEffectType type = directive.EffectType switch
         {
             "SmoothZoom" => VideoEffectType.SmoothZoom,
+            "PunchZoom" => VideoEffectType.PunchZoom,
             "OffsetZoom" => VideoEffectType.OffsetZoom,
+            "MicroShake" => VideoEffectType.MicroShake,
+            "DirectionalMotionBlur" =>
+                VideoEffectType.DirectionalMotionBlur,
+            "FrameEcho" => VideoEffectType.FrameEcho,
+            "RgbSplit" => VideoEffectType.RgbSplit,
             "HitStop" => VideoEffectType.HitStop,
+            "LensWarpPulse" => VideoEffectType.LensWarpPulse,
             _ => throw new InvalidOperationException(
                 $"CINEMATIC_EFFECT_UNSUPPORTED:{directive.EffectType}")
         };
         return new EffectCue
         {
-            Id = $"cinematic-{match.HighlightId}-{type}",
+            Id = $"cinematic-{match.HighlightId}-{index:D2}-{type}",
             Type = type,
-            Category = type == VideoEffectType.HitStop
-                ? VideoEffectCategory.Temporal
-                : VideoEffectCategory.Zoom,
-            Role = EffectRole.Primary,
+            Category = Category(type),
+            Role = index == 0
+                ? EffectRole.Primary
+                : EffectRole.Accent,
             StartSeconds = directive.StartSeconds,
             EndSeconds = directive.EndSeconds,
             Intensity = directive.Intensity,
@@ -96,4 +105,22 @@ public sealed class CinematicDynamicEffectAdapter(
             RenderCost = EffectRenderCost.Low
         };
     }
+
+    private static VideoEffectCategory Category(VideoEffectType type) =>
+        type switch
+        {
+            VideoEffectType.SmoothZoom or
+            VideoEffectType.PunchZoom or
+            VideoEffectType.OffsetZoom => VideoEffectCategory.Zoom,
+            VideoEffectType.MicroShake => VideoEffectCategory.Motion,
+            VideoEffectType.DirectionalMotionBlur =>
+                VideoEffectCategory.Blur,
+            VideoEffectType.FrameEcho => VideoEffectCategory.Temporal,
+            VideoEffectType.RgbSplit => VideoEffectCategory.Color,
+            VideoEffectType.HitStop => VideoEffectCategory.Time,
+            VideoEffectType.LensWarpPulse =>
+                VideoEffectCategory.Distortion,
+            _ => throw new InvalidOperationException(
+                $"CINEMATIC_EFFECT_CATEGORY_UNSUPPORTED:{type}")
+        };
 }

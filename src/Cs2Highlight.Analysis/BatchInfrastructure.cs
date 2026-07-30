@@ -90,9 +90,16 @@ public sealed class ProcessRenderAgentClient(string renderAgentPath) : ISessionR
 
         string logs = Path.Combine(job.OutputDirectory, "logs");
         Directory.CreateDirectory(logs);
+        string invocationJobPath = Path.GetFullPath(renderJobPath);
         if (attempt > 1)
         {
             ArchivePreviousAttempt(job.OutputDirectory, logs, attempt - 1);
+            invocationJobPath = await PrepareRetryJobAsync(
+                job,
+                invocationJobPath,
+                logs,
+                attempt,
+                cancellationToken);
         }
         string stdoutPath = Path.Combine(logs, $"render-agent-attempt-{attempt:D2}.stdout.log");
         string stderrPath = Path.Combine(logs, $"render-agent-attempt-{attempt:D2}.stderr.log");
@@ -107,7 +114,7 @@ public sealed class ProcessRenderAgentClient(string renderAgentPath) : ISessionR
         };
         startInfo.ArgumentList.Add("render");
         startInfo.ArgumentList.Add("--job");
-        startInfo.ArgumentList.Add(Path.GetFullPath(renderJobPath));
+        startInfo.ArgumentList.Add(invocationJobPath);
         if (attempt > 1)
         {
             startInfo.Environment[
@@ -187,6 +194,7 @@ public sealed class ProcessRenderAgentClient(string renderAgentPath) : ISessionR
         }
 
         List<RenderJob> jobs = new(items.Count);
+        List<string> invocationJobPaths = new(items.Count);
         try
         {
             foreach (RenderBatchItemRequest item in items)
@@ -200,8 +208,19 @@ public sealed class ProcessRenderAgentClient(string renderAgentPath) : ISessionR
                 jobs.Add(job);
                 string logs = Path.Combine(job.OutputDirectory, "logs");
                 Directory.CreateDirectory(logs);
+                string invocationJobPath =
+                    Path.GetFullPath(item.RenderJobPath);
                 if (item.Attempt > 1)
+                {
                     ArchivePreviousAttempt(job.OutputDirectory, logs, item.Attempt - 1);
+                    invocationJobPath = await PrepareRetryJobAsync(
+                        job,
+                        invocationJobPath,
+                        logs,
+                        item.Attempt,
+                        cancellationToken);
+                }
+                invocationJobPaths.Add(invocationJobPath);
             }
         }
         catch (Exception exception) when (exception is IOException or JsonException)
@@ -229,9 +248,7 @@ public sealed class ProcessRenderAgentClient(string renderAgentPath) : ISessionR
             manifestPath,
             JsonSerializer.Serialize(
                 new RenderBatchManifest(
-                    items.Select(value =>
-                            Path.GetFullPath(value.RenderJobPath))
-                        .ToArray()),
+                    invocationJobPaths),
                 JsonOptions),
             new UTF8Encoding(false),
             cancellationToken);
@@ -442,20 +459,71 @@ public sealed class ProcessRenderAgentClient(string renderAgentPath) : ISessionR
         RenderResult? result = null) =>
         new(processId, exitCode, result, renderResultPath, new BatchItemError(code, message, retryable));
 
+    private static async Task<string> PrepareRetryJobAsync(
+        RenderJob job,
+        string originalJobPath,
+        string logs,
+        int attempt,
+        CancellationToken cancellationToken)
+    {
+        if (job.EffectivePresentationMode !=
+                CapturePresentationMode.CinematicBroll ||
+            job.Camera.Mode == RenderCameraMode.PlayerPov)
+        {
+            return originalJobPath;
+        }
+
+        RenderJob fallbackJob = job with
+        {
+            Camera = RenderCameraPlan.PlayerPov,
+            ContainsFirstPersonWeaponFire = false
+        };
+        string fallbackPath = Path.Combine(
+            logs,
+            $"render-job-attempt-{attempt:D2}-pov-fallback.json");
+        await File.WriteAllTextAsync(
+            fallbackPath,
+            JsonSerializer.Serialize(fallbackJob, JsonOptions),
+            new UTF8Encoding(false),
+            cancellationToken);
+        Console.WriteLine(
+            $"[RenderAgent] Job {job.JobId}, attempt {attempt}: " +
+            "falling back from cinematic campath to stable player POV.");
+        return fallbackPath;
+    }
+
     private static void ArchivePreviousAttempt(string outputDirectory, string logs, int attempt)
     {
-        string resultPath = Path.Combine(outputDirectory, "render-result.json");
-        if (File.Exists(resultPath))
+        foreach (string path in Directory.EnumerateFiles(
+                     outputDirectory,
+                     "*",
+                     SearchOption.TopDirectoryOnly))
         {
+            string fileName = Path.GetFileName(path);
+            if (string.Equals(
+                    fileName,
+                    "render-job.json",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (string.Equals(
+                    Path.GetExtension(path),
+                    ".mp4",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                File.Delete(path);
+                continue;
+            }
+
+            string archivedName =
+                $"{Path.GetFileNameWithoutExtension(path)}" +
+                $"-attempt-{attempt:D2}{Path.GetExtension(path)}";
             File.Move(
-                resultPath,
-                Path.Combine(logs, $"render-result-attempt-{attempt:D2}.json"),
+                path,
+                Path.Combine(logs, archivedName),
                 true);
-        }
-        string outputPath = Path.Combine(outputDirectory, "raw-highlight.mp4");
-        if (File.Exists(outputPath))
-        {
-            File.Delete(outputPath);
         }
     }
 }

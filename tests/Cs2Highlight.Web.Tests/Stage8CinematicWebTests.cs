@@ -138,6 +138,81 @@ public sealed class Stage8CinematicWebTests
         Assert.Equal("peak", effect.SourceMusicalAnchorId);
     }
 
+    [Fact]
+    public void StrongCinematicAdapterKeepsTwoCompatibleAccents()
+    {
+        CinematicMoviePlan cinematic = Plan(
+            effects:
+            [
+                new MotivatedEffectDirective(
+                    "PunchZoom",
+                    MotivatedEffectReason.MusicPeak,
+                    3.8,
+                    4.15,
+                    0.5),
+                new MotivatedEffectDirective(
+                    "MicroShake",
+                    MotivatedEffectReason.TimeRamp,
+                    3.55,
+                    3.8,
+                    0.32)
+            ],
+            sound: []);
+
+        DynamicEffectPlan result = new CinematicDynamicEffectAdapter(
+            new Sha256EffectSeedProvider()).Create(
+                "generation",
+                new GenerationHighlight { HighlightId = "h1" },
+                cinematic,
+                EffectIntensity.Strong);
+
+        Assert.Equal(2, result.Effects.Count);
+        Assert.Equal(VideoEffectType.PunchZoom, result.Effects[0].Type);
+        Assert.Equal(VideoEffectType.MicroShake, result.Effects[1].Type);
+        Assert.Equal(EffectRole.Primary, result.Effects[0].Role);
+        Assert.Equal(EffectRole.Accent, result.Effects[1].Role);
+    }
+
+    [Fact]
+    public void IntroBoundaryUsesPairedAudioVideoFades()
+    {
+        CinematicMoviePlan original = Plan(effects: [], sound: []);
+        CinematicSequenceSegment highlight = original.Segments[0] with
+        {
+            OutputStartSeconds = 3,
+            OutputEndSeconds = 8
+        };
+        CinematicSequenceSegment broll = original.Segments[0] with
+        {
+            Id = "intro-broll",
+            Role = CinematicSequenceRole.Intro,
+            OutputStartSeconds = 0,
+            OutputEndSeconds = 3,
+            HighlightId = null,
+            BrollCandidateId = "broll"
+        };
+        CinematicMoviePlan cinematic = original with
+        {
+            Segments = [broll, highlight]
+        };
+
+        (string outgoingVideo, string outgoingAudio) =
+            FfmpegMovieFilterBuilder.CinematicIntroTransition(
+                cinematic,
+                0,
+                3);
+        (string incomingVideo, string incomingAudio) =
+            FfmpegMovieFilterBuilder.CinematicIntroTransition(
+                cinematic,
+                1,
+                5);
+
+        Assert.Contains("fade=t=out", outgoingVideo);
+        Assert.Contains("afade=t=out", outgoingAudio);
+        Assert.Contains("fade=t=in", incomingVideo);
+        Assert.Contains("afade=t=in", incomingAudio);
+    }
+
     [Fact(Timeout = 180_000)]
     [Trait("Category", "Stage8Ffmpeg")]
     public async Task CinematicCompositionRendersAndProbesWhenOptedIn()
@@ -161,6 +236,7 @@ public sealed class Stage8CinematicWebTests
             $"composition-{Guid.NewGuid():N}");
         Directory.CreateDirectory(output);
         string source = Path.Combine(output, "source.mp4");
+        string brollSource = Path.Combine(output, "broll.mp4");
         string music = Path.Combine(output, "music.wav");
         await RunAsync(
             ffmpeg,
@@ -179,7 +255,20 @@ public sealed class Stage8CinematicWebTests
             [
                 "-y", "-hide_banner", "-loglevel", "error",
                 "-f", "lavfi", "-i",
-                "sine=frequency=110:sample_rate=48000:duration=8",
+                "testsrc2=size=640x360:rate=30:duration=2",
+                "-f", "lavfi", "-i",
+                "sine=frequency=220:sample_rate=48000:duration=2",
+                "-vf", "hue=h=35",
+                "-c:v", "libx264", "-preset", "veryfast",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac", "-shortest", brollSource
+            ]);
+        await RunAsync(
+            ffmpeg,
+            [
+                "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i",
+                "sine=frequency=110:sample_rate=48000:duration=10",
                 "-c:a", "pcm_s16le", music
             ]);
         CinematicMoviePlan cinematic = Plan(
@@ -190,13 +279,65 @@ public sealed class Stage8CinematicWebTests
                     MotivatedEffectReason.MusicPeak,
                     3.7,
                     4.2,
-                    0.25)
+                    0.25),
+                new MotivatedEffectDirective(
+                    "MicroShake",
+                    MotivatedEffectReason.TimeRamp,
+                    3.4,
+                    3.65,
+                    0.3)
             ],
             sound:
             [
                 new SoundDesignSection(
                     "drop", -8, -4, false, true)
             ]);
+        TimeWarpPlan visibleSlowMotion = new(
+            1,
+            [
+                new TimeWarpSegment(0, 0.75, 1.25),
+                new TimeWarpSegment(0.75, 1, 0.625),
+                new TimeWarpSegment(1, 8, 1)
+            ],
+            true,
+            ["TEST_VISIBLE_SLOW_MOTION"]);
+        cinematic = cinematic with
+        {
+            MusicExcerpt = cinematic.MusicExcerpt with
+            {
+                EndSeconds = 10
+            },
+            TargetDurationSeconds = 10,
+            Segments =
+            [
+                cinematic.Segments[0] with
+                {
+                    Id = "intro-broll",
+                    Role = CinematicSequenceRole.Intro,
+                    OutputStartSeconds = 0,
+                    OutputEndSeconds = 2,
+                    HighlightId = null,
+                    BrollCandidateId = "broll",
+                    Camera = cinematic.Segments[0].Camera with
+                    {
+                        Id = "intro-camera",
+                        TargetDurationSeconds = 2,
+                        EndTick = 128
+                    },
+                    TimeWarp = new TimeWarpPlan(
+                        1,
+                        [new TimeWarpSegment(0, 2, 1)],
+                        false,
+                        [])
+                },
+                cinematic.Segments[0] with
+                {
+                    OutputStartSeconds = 2,
+                    OutputEndSeconds = 10,
+                    TimeWarp = visibleSlowMotion
+                }
+            ]
+        };
         GenerationHighlight highlight = new()
         {
             HighlightId = "h1"
@@ -206,12 +347,15 @@ public sealed class Stage8CinematicWebTests
                 "generation",
                 highlight,
                 cinematic,
-                EffectIntensity.Balanced);
-        MusicEditPlan edit = EditPlan();
+                EffectIntensity.Strong);
+        MusicEditPlan edit = EditPlan() with
+        {
+            MusicDurationSeconds = 10
+        };
         GenerationMovieSettings settings = new()
         {
             MovieStyle = MovieStyle.CinematicDirector,
-            EffectIntensity = EffectIntensity.Balanced,
+            EffectIntensity = EffectIntensity.Strong,
             SyncIntensity = MusicSyncIntensity.Expressive,
             ColorGradePreset = ColorGradePreset.Natural,
             GameplayGainDb = -16,
@@ -240,16 +384,16 @@ public sealed class Stage8CinematicWebTests
 
         CompilationResult result = await service.ComposeAsync(
             new CompilationRequest(
-                [source],
+                [brollSource, source],
                 Path.Combine(output, "result"),
                 640,
                 360,
                 30,
-                EffectPlans: [null],
+                EffectPlans: [null, null],
                 MusicEditPlan: edit,
                 MusicPath: music,
                 MovieSettings: settings,
-                DynamicEffectPlans: [dynamic],
+                DynamicEffectPlans: [null, dynamic],
                 FfmpegCapabilities: capabilities,
                 CinematicMoviePlan: cinematic),
             null,
@@ -258,7 +402,7 @@ public sealed class Stage8CinematicWebTests
         Assert.True(result.Success, result.Error);
         Assert.NotNull(result.OutputFile);
         Assert.True(File.Exists(result.OutputFile));
-        Assert.InRange(result.DurationMilliseconds, 7_800, 8_200);
+        Assert.InRange(result.DurationMilliseconds, 9_800, 10_200);
         Assert.True(result.FileSizeBytes > 10_000);
         Assert.True(File.Exists(Path.Combine(
             output,

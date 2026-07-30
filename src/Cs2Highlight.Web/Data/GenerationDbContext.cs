@@ -20,6 +20,10 @@ public sealed class GenerationDbContext(DbContextOptions<GenerationDbContext> op
     public DbSet<GenerationBrollCandidate> GenerationBrollCandidates => Set<GenerationBrollCandidate>();
     public DbSet<GenerationCameraShot> GenerationCameraShots => Set<GenerationCameraShot>();
     public DbSet<GenerationCinematicPlan> GenerationCinematicPlans => Set<GenerationCinematicPlan>();
+    public DbSet<GenerationTimelinePlan> GenerationTimelinePlans => Set<GenerationTimelinePlan>();
+    public DbSet<GenerationTimelineAnchor> GenerationTimelineAnchors => Set<GenerationTimelineAnchor>();
+    public DbSet<GenerationTimelineGap> GenerationTimelineGaps => Set<GenerationTimelineGap>();
+    public DbSet<GenerationTimelineRevision> GenerationTimelineRevisions => Set<GenerationTimelineRevision>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<GenerationEvent> GenerationEvents => Set<GenerationEvent>();
 
@@ -71,6 +75,29 @@ public sealed class GenerationDbContext(DbContextOptions<GenerationDbContext> op
             .HasIndex(value => new { value.GenerationId, value.ShotId }).IsUnique();
         modelBuilder.Entity<GenerationCinematicPlan>()
             .HasIndex(value => value.GenerationId).IsUnique();
+        modelBuilder.Entity<GenerationTimelinePlan>()
+            .HasIndex(value => value.GenerationId).IsUnique();
+        modelBuilder.Entity<GenerationTimelinePlan>()
+            .Property(value => value.Mode).HasConversion<string>();
+        modelBuilder.Entity<GenerationTimelinePlan>()
+            .Property(value => value.State).HasConversion<string>();
+        modelBuilder.Entity<GenerationTimelineAnchor>()
+            .HasIndex(value => new { value.TimelinePlanId, value.AnchorId })
+            .IsUnique();
+        modelBuilder.Entity<GenerationTimelineAnchor>()
+            .Property(value => value.MarkerType).HasConversion<string>();
+        modelBuilder.Entity<GenerationTimelineAnchor>()
+            .Property(value => value.FeasibilityStatus).HasConversion<string>();
+        modelBuilder.Entity<GenerationTimelineGap>()
+            .HasIndex(value => new { value.TimelinePlanId, value.GapId })
+            .IsUnique();
+        modelBuilder.Entity<GenerationTimelineGap>()
+            .Property(value => value.Role).HasConversion<string>();
+        modelBuilder.Entity<GenerationTimelineGap>()
+            .Property(value => value.State).HasConversion<string>();
+        modelBuilder.Entity<GenerationTimelineRevision>()
+            .HasIndex(value => new { value.TimelinePlanId, value.Number })
+            .IsUnique();
         modelBuilder.Entity<GenerationArtifact>().Property(value => value.Type).HasConversion<string>();
         modelBuilder.Entity<Payment>().Property(value => value.Status).HasConversion<string>();
         modelBuilder.Entity<Payment>().HasIndex(value => value.IdempotencyKey).IsUnique();
