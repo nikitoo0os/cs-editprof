@@ -124,9 +124,12 @@ public sealed class FfprobeMusicMediaValidator(
         IReadOnlyList<string> arguments,
         CancellationToken cancellationToken)
     {
+        string? resolvedExecutable = PipelinePathResolver.Resolve(executable);
+        if (resolvedExecutable is null)
+            throw new InvalidOperationException("MEDIA_PROCESS_START_FAILED");
         ProcessStartInfo start = new()
         {
-            FileName = executable,
+            FileName = resolvedExecutable,
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,

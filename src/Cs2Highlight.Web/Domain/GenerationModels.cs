@@ -45,7 +45,8 @@ public enum ArtifactType
     MusicUpload, MusicAnalysis, MusicEditPlan, ProcessedClip, AudioMixResult,
     MusicAlignmentResult, ColorGradeResult, DynamicEffectPlan, DynamicEffectResult,
     FfmpegCapabilities, CinematicMusicNarrative, CinematicMoviePlan,
-    CinematicAlignmentReport, CameraCapabilities, CameraPreview
+    CinematicAlignmentReport, CameraCapabilities, CameraPreview,
+    InteractiveTimelinePlan, TimelineDiagnostics
 }
 
 public sealed class Generation
@@ -95,6 +96,7 @@ public sealed class Generation
     public List<GenerationBrollCandidate> BrollCandidates { get; set; } = [];
     public List<GenerationCameraShot> CameraShots { get; set; } = [];
     public GenerationCinematicPlan? CinematicPlan { get; set; }
+    public GenerationTimelinePlan? TimelinePlan { get; set; }
     public List<Payment> Payments { get; set; } = [];
     public List<GenerationEvent> Events { get; set; } = [];
 }

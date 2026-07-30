@@ -22,7 +22,7 @@ public sealed class CinematicDirector(
     ICinematicDurationPolicy durationPolicy) : ICinematicDirector
 {
     public const string SchemaVersion = "1.0";
-    public const string PlannerVersion = "8.0";
+    public const string PlannerVersion = "8.3";
 
     public CinematicMoviePlan Create(
         MusicNarrative music,
@@ -299,9 +299,14 @@ public sealed class CinematicDirector(
         HighlightPeakMatchPlan original,
         CinematicDirectorOptions options)
     {
+        double minimumPeakStrength = excerpt.Warnings.Contains(
+            MusicExcerptSelector.RelaxedEnergyFallbackWarning,
+            StringComparer.Ordinal)
+                ? 0.25
+                : 0.45;
         MusicalPeak[] available = excerpt.Peaks
             .Where(value =>
-                value.Strength >= 0.45 &&
+                value.Strength >= minimumPeakStrength &&
                 value.Confidence >= 0.40 &&
                 sections.TryGetValue(
                     value.SectionId,
@@ -319,10 +324,11 @@ public sealed class CinematicDirector(
                 StringComparer.Ordinal);
         List<HighlightPeakMatch> result = [];
         int peakIndex = 0;
-        double cursor = 0;
-        foreach (SelectedHighlight highlight in highlights
-                     .OrderBy(value => value.SelectionOrder)
-                     .ThenBy(value => value.Id, StringComparer.Ordinal))
+        double cursor = IntroReservationSeconds(
+            sections.Values,
+            excerpt,
+            options.Duration.MaximumIntroSeconds);
+        foreach (SelectedHighlight highlight in StoryOrder(highlights))
         {
             double sourceDuration = Math.Max(
                 0.001,
@@ -381,6 +387,36 @@ public sealed class CinematicDirector(
             .ToArray();
     }
 
+    private static IEnumerable<SelectedHighlight> StoryOrder(
+        IReadOnlyList<SelectedHighlight> highlights) =>
+        highlights
+            .OrderBy(value => value.Highlight.KillCount > 1 ? 1 : 0)
+            .ThenBy(value => value.Highlight.KillCount)
+            .ThenBy(value =>
+                value.Highlight.KillCount > 1
+                    ? value.Bounds.PrimaryKillSeconds -
+                        value.Bounds.SafeStartSeconds
+                    : 0)
+            .ThenBy(value => value.SelectionOrder)
+            .ThenBy(value => value.Id, StringComparer.Ordinal);
+
+    private static double IntroReservationSeconds(
+        IEnumerable<MusicSection> sections,
+        MusicExcerptPlan excerpt,
+        double maximumIntroSeconds)
+    {
+        double end = sections
+            .Where(value => value.Type == MusicSectionType.Intro)
+            .Select(value => value.EndSeconds - excerpt.StartSeconds)
+            .Where(value => value > 0)
+            .DefaultIfEmpty(0)
+            .Max();
+        return Math.Clamp(
+            end,
+            0,
+            Math.Min(maximumIntroSeconds, excerpt.DurationSeconds));
+    }
+
     private void AddBrollSegments(
         List<CinematicSequenceSegment> segments,
         IReadOnlyList<MusicSection> sections,
@@ -421,37 +457,68 @@ public sealed class CinematicDirector(
                     sections.OrderBy(value =>
                             Math.Abs(value.StartSeconds - absoluteMusicTime))
                         .First();
-                BrollCandidate? candidate = broll
+                double availableDuration = Math.Min(
+                    gapEnd - cursor,
+                    brollLimit - used);
+                bool preferCinematicCamera = section.Type is
+                    MusicSectionType.Intro or
+                    MusicSectionType.BuildUp or
+                    MusicSectionType.PreDrop;
+                var choice = broll
                     .Where(value => !selected.Contains(value.Id))
+                    .Select(candidate =>
+                    {
+                        double durationForCandidate = Math.Min(
+                            candidate.DurationSeconds,
+                            availableDuration);
+                        if (section.Type == MusicSectionType.Intro)
+                        {
+                            durationForCandidate = Math.Min(
+                                durationForCandidate,
+                                options.Duration.MaximumIntroSeconds);
+                        }
+                        if (section.Type == MusicSectionType.Outro)
+                        {
+                            durationForCandidate = Math.Min(
+                                durationForCandidate,
+                                options.Duration.MaximumOutroSeconds);
+                        }
+                        BrollCandidate plannedCandidate = TrimCandidate(
+                            candidate,
+                            durationForCandidate);
+                        return new
+                        {
+                            Candidate = candidate,
+                            Planned = plannedCandidate,
+                            Duration = durationForCandidate,
+                            Camera = cameraPlanner.Create(
+                                plannedCandidate,
+                                options.Camera)
+                        };
+                    })
+                    .Where(value => value.Duration >= 0.05)
                     .OrderByDescending(value =>
-                        BrollCompatibility(value, section.Type))
-                    .ThenByDescending(value => value.CinematicScore)
-                    .ThenBy(value => value.StartTick)
-                    .ThenBy(value => value.Id, StringComparer.Ordinal)
+                        preferCinematicCamera &&
+                        value.Camera.Type != CameraShotType.PlayerPov)
+                    .ThenByDescending(value =>
+                        BrollCompatibility(
+                            value.Candidate,
+                            section.Type))
+                    .ThenBy(value => value.Candidate.ActionDensity)
+                    .ThenByDescending(value =>
+                        value.Candidate.CinematicScore)
+                    .ThenBy(value => value.Candidate.StartTick)
+                    .ThenBy(value =>
+                        value.Candidate.Id,
+                        StringComparer.Ordinal)
                     .FirstOrDefault();
-                if (candidate is null)
+                if (choice is null)
                     break;
-                double clipDuration = Math.Min(
-                    candidate.DurationSeconds,
-                    Math.Min(
-                        gapEnd - cursor,
-                        brollLimit - used));
-                if (section.Type == MusicSectionType.Intro)
-                    clipDuration = Math.Min(
-                        clipDuration,
-                        options.Duration.MaximumIntroSeconds);
-                if (section.Type == MusicSectionType.Outro)
-                    clipDuration = Math.Min(
-                        clipDuration,
-                        options.Duration.MaximumOutroSeconds);
+                BrollCandidate candidate = choice.Candidate;
+                double clipDuration = choice.Duration;
                 if (clipDuration < 0.05)
                     break;
-                BrollCandidate planned = TrimCandidate(
-                    candidate,
-                    clipDuration);
-                CameraShotPlan camera = cameraPlanner.Create(
-                    planned,
-                    options.Camera);
+                CameraShotPlan camera = choice.Camera;
                 if (camera.Type == CameraShotType.PlayerPov)
                 {
                     warnings.AddRange(camera.Warnings.Select(value =>
@@ -532,6 +599,18 @@ public sealed class CinematicDirector(
             MusicSectionType.Intro when candidate.Type is
                 BrollCandidateType.EstablishingShot or
                 BrollCandidateType.PlayerApproach => 1,
+            MusicSectionType.Calm or MusicSectionType.Verse
+                when candidate.Type is
+                    BrollCandidateType.EstablishingShot or
+                    BrollCandidateType.PlayerApproach or
+                    BrollCandidateType.SideMovement or
+                    BrollCandidateType.RearMovement or
+                    BrollCandidateType.EnvironmentShot => 1,
+            MusicSectionType.Calm or MusicSectionType.Verse
+                when candidate.Type is
+                    BrollCandidateType.UtilityThrow or
+                    BrollCandidateType.BombPlant or
+                    BrollCandidateType.BombDefuse => 0.2,
             MusicSectionType.BuildUp or MusicSectionType.PreDrop
                 when candidate.Type is
                     BrollCandidateType.UtilityPreparation or

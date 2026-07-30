@@ -3,6 +3,7 @@ using System;
 using Cs2Highlight.Web.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Cs2Highlight.Web.Data.Migrations
 {
     [DbContext(typeof(GenerationDbContext))]
-    partial class GenerationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260730113422_Stage8_2InteractiveTimelineDirector")]
+    partial class Stage8_2InteractiveTimelineDirector
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "8.0.13");

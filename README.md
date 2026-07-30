@@ -59,6 +59,43 @@ dotnet build -c Release
 dotnet test -c Release --no-build
 ```
 
+## Stage 8.2: Interactive Music Timeline Director
+
+The Cinematic Director configuration now opens an editable music timeline
+before checkout. Assisted mode seeds kill anchors from the automatic Stage 8
+plan; Auto and Manual Anchors modes use the same persisted plan and validation
+surface. A marker represents the exact output time of the primary kill, not the
+start of its source clip.
+
+The timeline provides:
+
+- a waveform, music sections, peaks, kill anchors and generated movie lanes;
+- exact and category markers with deterministic highlight assignment;
+- pointer, touch and keyboard movement with musical snapping;
+- Natural, Retiming, Risky and Invalid statuses with text explanations;
+- locked markers, optimistic concurrency and persisted undo/redo revisions;
+- partial gap regeneration with deterministic Tripod, Tracking and POV plans;
+- a compact inspector and desktop, tablet and mobile layouts;
+- plan locking after payment and recovery from the locked revision.
+
+The timeline API is rooted at
+`/api/generations/{publicId}/timeline`. Confirming a valid layout updates the
+persisted Cinematic Director kill positions and writes the Stage 8.2 JSON
+artifacts under `plan/timeline`. Checkout redirects back to the timeline while
+its plan is still invalid or unconfirmed.
+
+Run the Stage 8.2 service and route tests with:
+
+```powershell
+dotnet test .\tests\Cs2Highlight.Web.Tests `
+  --filter "FullyQualifiedName~InteractiveTimelineDirector|FullyQualifiedName~TimelineRoute"
+```
+
+The opt-in Stage 8 browser flow now exercises the suggested layout, keyboard
+movement, marker lock and confirmation before payment. Real CS2/HLAE acceptance
+still requires the production demos, music and render-machine environment
+documented below.
+
 ## Stage 8: Cinematic Director
 
 Stage 8 adds an opt-in `Cinematic Director` movie style above the Stage 6–7
@@ -76,8 +113,11 @@ movies to 30 seconds, prevents B-roll from exceeding highlight duration, maps
 important highlights to strong peaks and preserves post-kill tails during
 bounded time warp.
 
-Director mode uses only effects motivated by the locked plan and applies at
-most one visible filter effect per highlight. Audio gain and restrained color
+Director mode uses only effects motivated by the locked plan. Strong effect
+intensity can combine two compatible accents per highlight, while a
+deterministic variety pass alternates zoom, motion, temporal, RGB and lens
+accents. Dynamic edits use a compensated local slow-motion ramp without moving
+the primary kill away from its musical peak. Audio gain and restrained color
 adjustments follow the section narrative. B-roll and highlights from one demo
 are included in a single batch plan, so the Render Agent keeps one CS2 session
 per demo.

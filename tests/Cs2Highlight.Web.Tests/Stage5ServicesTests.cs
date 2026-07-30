@@ -242,7 +242,7 @@ public sealed class Stage5ServicesTests
                 .SingleAsync();
             Assert.Equal(GenerationStatus.AwaitingMusicUpload, saved.Status);
             Assert.Equal(EffectPreset.Dynamic, saved.EffectPreset);
-            Assert.Equal(5, saved.MaximumHighlights);
+            Assert.Equal(2, saved.MaximumHighlights);
             Assert.Equal(11700, saved.EstimatedDurationMilliseconds);
             Assert.Equal(
                 ["h1", "h2"],
@@ -259,6 +259,60 @@ public sealed class Stage5ServicesTests
                 EffectPreset.None,
                 CancellationToken.None));
         Assert.Equal("GENERATION_SELECTION_LOCKED", locked.Message);
+    }
+
+    [Fact]
+    public async Task EveryExplicitlySelectedHighlightIsPersistedWithoutAnArbitraryCap()
+    {
+        await using SqliteConnection connection = new("Data Source=:memory:");
+        await connection.OpenAsync();
+        DbContextOptions<GenerationDbContext> dbOptions =
+            new DbContextOptionsBuilder<GenerationDbContext>()
+                .UseSqlite(connection)
+                .Options;
+        TestFactory factory = new(dbOptions);
+        string[] ids = Enumerable.Range(1, 12)
+            .Select(index => $"h{index:D2}")
+            .ToArray();
+        await using (GenerationDbContext db = await factory.CreateDbContextAsync())
+        {
+            await db.Database.EnsureCreatedAsync();
+            Generation generation = new()
+            {
+                PublicId = "uncapped-selection",
+                Status = GenerationStatus.AwaitingHighlightSelection,
+                SelectedSteamId = "76561198000000001"
+            };
+            foreach ((string id, int index) in ids.Select((id, index) => (id, index)))
+                generation.Highlights.Add(Highlight(id, index * 1_000, index * 1_000 + 500));
+            db.Generations.Add(generation);
+            await db.SaveChangesAsync();
+        }
+        HighlightSelectionService service = new(
+            factory,
+            new RecommendedSelectionOptions(),
+            new EffectPlanner(),
+            TimeProvider.System);
+
+        await service.SaveSelectionAsync(
+            "uncapped-selection",
+            ids,
+            EffectPreset.Clean,
+            CancellationToken.None);
+
+        await using GenerationDbContext verification =
+            await factory.CreateDbContextAsync();
+        Generation saved = await verification.Generations
+            .Include(value => value.Highlights)
+            .SingleAsync();
+        Assert.Equal(12, saved.MaximumHighlights);
+        Assert.Equal(12, saved.Highlights.Count(value => value.SelectedByUser));
+        Assert.Equal(
+            ids,
+            saved.Highlights
+                .Where(value => value.SelectedByUser)
+                .OrderBy(value => value.SelectionOrder)
+                .Select(value => value.HighlightId));
     }
 
     private static GenerationHighlight Highlight(

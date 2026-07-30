@@ -1,0 +1,168 @@
+@page "/generations/{publicId}/timeline"
+@model Cs2Highlight.Web.Pages.TimelineModel
+@using Cs2Highlight.Web.Domain
+@{
+  ViewData["Title"] = "Музыкальный таймлайн";
+  ViewData["CurrentStep"] = 4;
+}
+
+<section class="timeline-page"
+         data-timeline-director
+         data-generation-id="@Model.Timeline.GenerationId"
+         data-duration="@Model.Timeline.DurationSeconds.ToString(System.Globalization.CultureInfo.InvariantCulture)">
+  <header class="timeline-commandbar">
+    <div>
+      <span class="eyebrow">Interactive Timeline Director</span>
+      <h1 class="timeline-title">Расставьте ключевые убийства</h1>
+      <p class="timeline-subtitle">Маркер задаёт точный кадр убийства. Камеру, pre-roll, SafeEnd и переходы построит система.</p>
+    </div>
+    <div class="timeline-commandbar__actions">
+      <div class="timeline-mode" role="radiogroup" aria-label="Режим режиссуры">
+        @foreach (TimelineDirectorMode mode in Enum.GetValues<TimelineDirectorMode>())
+        {
+          <button type="button"
+                  class="timeline-mode__button @(Model.Timeline.Mode == mode ? "is-active" : null)"
+                  role="radio"
+                  aria-checked="@(Model.Timeline.Mode == mode ? "true" : "false")"
+                  data-timeline-mode="@mode">
+            @(mode switch
+            {
+              TimelineDirectorMode.Auto => "Авто",
+              TimelineDirectorMode.Assisted => "С подсказками",
+              _ => "Ручной"
+            })
+          </button>
+        }
+      </div>
+      <button type="button" class="btn btn-secondary" data-timeline-suggest>Предложить расстановку</button>
+      <button type="button" class="icon-button" data-timeline-help aria-label="Показать горячие клавиши">?</button>
+    </div>
+  </header>
+
+  <div class="timeline-help" data-timeline-help-panel hidden>
+    <strong>Горячие клавиши</strong>
+    <span><kbd>←</kbd><kbd>→</kbd> перемещение · <kbd>Shift</kbd> точно · <kbd>Alt</kbd> без привязки</span>
+    <span><kbd>Delete</kbd> удалить · <kbd>Space</kbd> воспроизведение · <kbd>L</kbd> lock</span>
+  </div>
+
+  <div class="timeline-workspace">
+    <aside class="timeline-library" aria-label="Библиотека моментов">
+      <div class="timeline-panel-heading">
+        <div>
+          <span class="eyebrow">Найденные моменты</span>
+          <h2>Highlights</h2>
+        </div>
+        <span class="badge">@Model.Timeline.Highlights.Count</span>
+      </div>
+      <div class="timeline-category-row" aria-label="Категории">
+        @foreach (KeyValuePair<string, int> category in Model.Timeline.CategoryCounts)
+        {
+          <button type="button" class="timeline-category" data-highlight-filter="@category.Key">
+            <span>@category.Key</span><strong>@category.Value</strong>
+          </button>
+        }
+      </div>
+      <div class="timeline-highlight-list" data-timeline-highlight-list>
+        @foreach (TimelineHighlightView highlight in Model.Timeline.Highlights)
+        {
+          <article class="timeline-highlight-card"
+                   draggable="true"
+                   tabindex="0"
+                   data-highlight-id="@highlight.Id"
+                   data-highlight-type="@highlight.Type">
+            <div class="timeline-highlight-card__top">
+              <strong>@highlight.Type.Replace("Kill", " Kill")</strong>
+              <span class="beauty-score">Beauty @Math.Round(highlight.BeautyScore)</span>
+            </div>
+            <p>@highlight.Weapon · @highlight.HeadshotCount headshots</p>
+            <div class="timeline-highlight-card__meta">
+              <span>@highlight.DurationSeconds.ToString("0.0") sec</span>
+              <span>@highlight.MapName · R@(highlight.RoundNumber)</span>
+            </div>
+            <button type="button" class="btn btn-ghost btn-block" data-add-highlight="@highlight.Id">Добавить маркер</button>
+          </article>
+        }
+      </div>
+      <button type="button" class="btn btn-secondary btn-block" data-add-category="BestAvailableHighlight">+ Лучший доступный</button>
+    </aside>
+
+    <main class="timeline-stage">
+      <div class="timeline-transport" aria-label="Управление воспроизведением">
+        <button type="button" class="timeline-play" data-timeline-play aria-label="Воспроизвести или поставить на паузу">▶</button>
+        <output data-timeline-time>00:00.000</output>
+        <div class="timeline-transport__spacer"></div>
+        <button type="button" class="btn btn-ghost" data-timeline-undo aria-label="Отменить изменение">↶ Undo</button>
+        <button type="button" class="btn btn-ghost" data-timeline-redo aria-label="Повторить изменение">↷ Redo</button>
+        <label class="timeline-zoom">
+          <span>Zoom</span>
+          <input type="range" min="1" max="4" value="1" step="0.25" data-timeline-zoom />
+        </label>
+      </div>
+
+      <div class="timeline-scroll" data-timeline-scroll>
+        <div class="timeline-canvas" data-timeline-canvas tabindex="0" aria-label="Музыкальный таймлайн">
+          <div class="timeline-ruler" data-timeline-ruler></div>
+          <div class="timeline-lane timeline-lane--waveform" data-timeline-dropzone>
+            <span class="timeline-lane__label">Music</span>
+            <div class="timeline-waveform" data-timeline-waveform aria-label="Waveform"></div>
+            <div class="timeline-playhead" data-timeline-playhead aria-hidden="true"></div>
+          </div>
+          <div class="timeline-lane timeline-lane--sections">
+            <span class="timeline-lane__label">Sections</span>
+            <div class="timeline-section-track" data-timeline-sections></div>
+          </div>
+          <div class="timeline-lane timeline-lane--peaks">
+            <span class="timeline-lane__label">Peaks</span>
+            <div class="timeline-peak-track" data-timeline-peaks></div>
+          </div>
+          <div class="timeline-lane timeline-lane--anchors">
+            <span class="timeline-lane__label">Kills</span>
+            <div class="timeline-anchor-track" data-timeline-anchors aria-label="Маркеры убийств"></div>
+            <div class="timeline-snap-guide" data-timeline-snap-guide hidden></div>
+          </div>
+          <div class="timeline-lane timeline-lane--generated">
+            <span class="timeline-lane__label">Movie</span>
+            <div class="timeline-generated-track" data-timeline-gaps></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="timeline-validation" role="status" aria-live="polite" data-timeline-validation>
+        Проверяем расстановку…
+      </div>
+    </main>
+
+    <aside class="timeline-inspector" aria-label="Инспектор маркера">
+      <div class="timeline-panel-heading">
+        <div>
+          <span class="eyebrow">Inspector</span>
+          <h2>Маркер</h2>
+        </div>
+        <span class="timeline-status-dot" data-inspector-dot></span>
+      </div>
+      <div data-timeline-inspector>
+        <div class="timeline-inspector-empty">
+          <strong>Выберите маркер</strong>
+          <p>Здесь появятся retiming, pre-roll, SafeEnd и доступные действия.</p>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <footer class="timeline-footer">
+    <div>
+      <strong data-timeline-summary>@Model.Timeline.Anchors.Count маркеров</strong>
+      <span class="muted">Ревизия <span data-timeline-revision>@Model.Timeline.Revision</span></span>
+    </div>
+    <div class="timeline-footer__actions">
+      <a class="btn btn-secondary" asp-page="/Music" asp-route-publicId="@Model.Timeline.GenerationId">Назад</a>
+      <button type="button" class="btn btn-primary btn-lg" data-timeline-confirm>
+        Подтвердить расстановку
+      </button>
+    </div>
+  </footer>
+</section>
+
+@section Scripts {
+  <script type="module" src="/js/timeline-director.js" asp-append-version="true"></script>
+}

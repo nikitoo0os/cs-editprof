@@ -46,11 +46,12 @@ public sealed class VisualRegressionTests
             await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["analysis"]}", output, "analysis-running");
             await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["player"]}/player", output, "player-selection");
             await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["highlights"]}/highlights", output, "highlight-catalog");
-            await page.Locator(".highlight-card input[type=checkbox]").First.CheckAsync();
+            await page.Locator(".highlight-card__label").First.ClickAsync();
             await ScreenshotAsync(page, output, "highlight-selected");
             await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["music-upload"]}/music", output, "music-upload");
             await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["movie-settings"]}/music", output, "music-analyzed");
             await ScreenshotAsync(page, output, "movie-settings");
+            await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["timeline"]}/timeline", output, "interactive-timeline");
             await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["checkout"]}/checkout", output, "checkout");
             await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["running"]}", output, "generation-running");
             await page.GetByRole(AriaRole.Button, new() { Name = "Отменить генерацию" }).ClickAsync();
@@ -64,6 +65,8 @@ public sealed class VisualRegressionTests
             await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["failed"]}", output, "error-state");
 
             await page.SetViewportSizeAsync(390, 844);
+            await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["timeline"]}/timeline", output, "mobile-interactive-timeline");
+            await AssertNoHorizontalOverflowAsync(page, 390);
             await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["highlights"]}/highlights", output, "mobile-highlight-catalog");
             await AssertNoHorizontalOverflowAsync(page, 390);
             await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["completed"]}", output, "mobile-result");
@@ -154,6 +157,14 @@ public sealed class VisualRegressionTests
         AddHighlights(checkout, selected: true);
         AddMusic(checkout);
 
+        Generation timeline = Create("timeline", GenerationStatus.AwaitingPayment, 50);
+        AddDemo(timeline);
+        timeline.SelectedSteamId = "76561198000000001";
+        timeline.SelectedPlayerName = "NightShift";
+        timeline.EstimatedDurationMilliseconds = 30_000;
+        AddHighlights(timeline, selected: true);
+        AddMusic(timeline);
+
         // This non-worker status keeps the progress dashboard stable while the
         // external test server's real background worker remains enabled.
         Generation running = Create("running", GenerationStatus.ValidatingMoviePlan, 64);
@@ -187,7 +198,7 @@ public sealed class VisualRegressionTests
         Generation[] fixtures =
         [
             analysis, player, highlights, musicUpload, movieSettings,
-            checkout, running, completed, failed
+            timeline, checkout, running, completed, failed
         ];
         db.Generations.AddRange(fixtures);
         await db.SaveChangesAsync();

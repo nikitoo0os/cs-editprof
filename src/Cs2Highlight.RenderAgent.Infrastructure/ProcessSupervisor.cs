@@ -158,9 +158,13 @@ public sealed class ProcessSupervisor : IProcessSupervisor
             if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
+                process.WaitForExit(5000);
             }
         }
-        catch (InvalidOperationException)
+        catch (Exception exception) when (
+            exception is InvalidOperationException or
+            System.ComponentModel.Win32Exception or
+            NotSupportedException)
         {
         }
     }

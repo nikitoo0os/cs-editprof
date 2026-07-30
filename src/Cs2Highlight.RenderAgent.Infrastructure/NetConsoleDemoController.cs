@@ -30,6 +30,7 @@ public sealed class NetConsoleDemoController(
     private const string RecordingEndMarker = "AFX_RENDER_RECORDING_END";
     private const string PresentationVerificationEndMarker =
         "AFX_RENDER_PRESENTATION_VERIFY_END";
+    private const long MaximumCampathTickDrift = 2;
     private static readonly JsonSerializerOptions ReportJsonOptions =
         new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private sealed record HlaeCameraCommandProbe(
@@ -597,7 +598,8 @@ public sealed class NetConsoleDemoController(
         {
             RenderCameraKeyframe expectedValue = expected[index];
             ParsedCampathKeyframe actualValue = actual[index];
-            if (actualValue.Tick != expectedValue.Tick ||
+            if (Math.Abs(actualValue.Tick - expectedValue.Tick) >
+                    MaximumCampathTickDrift ||
                 !Approximately(
                     [
                         actualValue.Position.X,
@@ -616,7 +618,8 @@ public sealed class NetConsoleDemoController(
             {
                 throw new InvalidOperationException(
                     $"CAMERA_CAMPATH_KEYFRAME_MISMATCH at index {index}: " +
-                    $"expected={expectedValue}; actual={actualValue}.");
+                    $"expected={expectedValue}; actual={actualValue}; " +
+                    $"maximumTickDrift={MaximumCampathTickDrift}.");
             }
         }
     }

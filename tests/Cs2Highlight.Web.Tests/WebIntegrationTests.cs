@@ -146,6 +146,87 @@ public sealed class WebIntegrationTests : IDisposable
         Assert.Contains("video.hidden = false", script);
     }
 
+    [Fact]
+    public async Task TimelineRouteBindsGenerationIdAndReturnsEditablePlan()
+    {
+        WebApplicationFactory<Program> app = CreateFactory();
+        string publicId = Guid.NewGuid().ToString("N");
+        using (IServiceScope scope = app.Services.CreateScope())
+        {
+            IDbContextFactory<GenerationDbContext> dbFactory =
+                scope.ServiceProvider
+                    .GetRequiredService<
+                        IDbContextFactory<GenerationDbContext>>();
+            await using GenerationDbContext db =
+                await dbFactory.CreateDbContextAsync();
+            Generation generation = new()
+            {
+                PublicId = publicId,
+                Status = GenerationStatus.AwaitingPayment,
+                CurrentStage = "AwaitingPayment",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+                Music = new GenerationMusic
+                {
+                    OriginalFileName = "fixture.mp3",
+                    StoredPath = "fixture.mp3",
+                    FileSizeBytes = 1,
+                    Sha256 = new string('a', 64),
+                    ContentType = "audio/mpeg",
+                    DurationMilliseconds = 30_000,
+                    SampleRate = 48_000,
+                    Channels = 2,
+                    RightsConfirmed = true,
+                    CreatedAt = DateTimeOffset.UtcNow
+                }
+            };
+            generation.Highlights.Add(new GenerationHighlight
+            {
+                HighlightId = "timeline-highlight",
+                SteamId = "76561198000000001",
+                Type = "TripleKill",
+                MapName = "de_mirage",
+                RoundNumber = 18,
+                StartTick = 1_000,
+                FirstKillTick = 1_050,
+                LastKillTick = 1_180,
+                PrimaryKillTick = 1_160,
+                SafeEndTick = 1_260,
+                EndTick = 1_300,
+                TickRate = 64,
+                KillCount = 3,
+                HeadshotCount = 2,
+                BeautyScore = 91,
+                TotalScore = 96,
+                SelectedByUser = true,
+                EstimatedDurationMilliseconds = 4_100,
+                WeaponSequenceJson = "[]",
+                TagsJson = "[]",
+                KillsJson = "[]",
+                ScoreBreakdownJson = "{}",
+                CreatedAt = DateTimeOffset.UtcNow
+            });
+            db.Generations.Add(generation);
+            await db.SaveChangesAsync();
+        }
+        using HttpClient client = app.CreateClient(
+            new WebApplicationFactoryClientOptions
+            {
+                AllowAutoRedirect = false
+            });
+
+        HttpResponseMessage response = await client.GetAsync(
+            $"/api/generations/{publicId}/timeline/");
+        string json = await response.Content.ReadAsStringAsync();
+        string page = await client.GetStringAsync(
+            $"/generations/{publicId}/timeline");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains($"\"generationId\":\"{publicId}\"", json);
+        Assert.Contains("data-timeline-director", page);
+        Assert.Contains("timeline-director.js", page);
+    }
+
     private WebApplicationFactory<Program> CreateFactory()
     {
         if (factory is not null) return factory;

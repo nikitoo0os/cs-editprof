@@ -32,6 +32,16 @@ public sealed class CheckoutModel(
         if (generation is null) return NotFound();
         if (generation.Status != GenerationStatus.AwaitingPayment)
             return RedirectToPage("/Generation", new { publicId });
+        GenerationTimelinePlan? timeline =
+            await db.GenerationTimelinePlans.AsNoTracking()
+                .SingleOrDefaultAsync(
+                    value => value.GenerationId == generation.Id,
+                    cancellationToken);
+        if (timeline is not null &&
+            timeline.State == TimelinePlanState.Draft)
+        {
+            return RedirectToPage("/Timeline", new { publicId });
+        }
         Generation = generation;
         MovieSettings = await db.GenerationMovieSettings.AsNoTracking()
             .SingleOrDefaultAsync(

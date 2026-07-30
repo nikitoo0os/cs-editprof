@@ -57,7 +57,8 @@ public sealed class PaymentService(
     IDbContextFactory<GenerationDbContext> dbFactory,
     IPaymentProvider provider,
     TimeProvider timeProvider,
-    GenerationWakeSignal queue)
+    GenerationWakeSignal queue,
+    IInteractiveTimelineDirector? timelineDirector = null)
 {
     public async Task<Payment> CreateAsync(string publicId, CancellationToken cancellationToken)
     {
@@ -134,6 +135,14 @@ public sealed class PaymentService(
                     value => value.GenerationId == generation.Id,
                     cancellationToken);
             settings.LockedAt ??= now;
+            if (timelineDirector is not null)
+            {
+                await timelineDirector.LockAfterPaymentAsync(
+                    generation.Id,
+                    now,
+                    db,
+                    cancellationToken);
+            }
             GenerationStateMachine.Transition(generation, GenerationStatus.Paid, now);
             GenerationStateMachine.Transition(generation, GenerationStatus.QueuedForGeneration, now);
         }

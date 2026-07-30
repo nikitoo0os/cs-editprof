@@ -330,7 +330,8 @@ public sealed partial class CinematicPlanService(
                 TimeWarp = TimeWarpFor(
                     settings.CinematicEditIntensity),
                 Effects = EffectsFor(
-                    settings.CinematicEditIntensity),
+                    settings.CinematicEditIntensity,
+                    settings.EffectIntensity),
                 ColorGrade = settings.ColorGradePreset
             });
         if (plan.HighlightMatches.Count != highlights.Count)
@@ -595,11 +596,16 @@ public sealed partial class CinematicPlanService(
         };
 
     private static CinematicEffectPolicy EffectsFor(
-        CinematicEditIntensity intensity) =>
+        CinematicEditIntensity intensity,
+        EffectIntensity effectIntensity) =>
         new()
         {
             MaximumVisibleFilterEffectsPerHighlight =
-                intensity == CinematicEditIntensity.Calm ? 0 : 1,
+                intensity == CinematicEditIntensity.Calm
+                    ? 0
+                    : effectIntensity == EffectIntensity.Strong
+                        ? 2
+                        : 1,
             PreferCameraMotionOverFilterEffects = true
         };
 

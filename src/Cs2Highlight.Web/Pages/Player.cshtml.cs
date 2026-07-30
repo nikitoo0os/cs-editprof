@@ -14,7 +14,6 @@ public sealed class PlayerModel(
 {
     public IReadOnlyList<GenerationPlayer> Players { get; private set; } = [];
     [BindProperty] public string SteamId { get; set; } = string.Empty;
-    [BindProperty] public int MaximumHighlights { get; set; } = 5;
     [BindProperty] public string AspectRatio { get; set; } = "16:9";
     [BindProperty] public OutputOrder OutputOrder { get; set; }
     [BindProperty] public double MinimumScore { get; set; }
@@ -38,7 +37,6 @@ public sealed class PlayerModel(
     public async Task<IActionResult> OnPostAsync(string publicId, CancellationToken cancellationToken)
     {
         if (SteamId.Length != 17 || !SteamId.All(char.IsAsciiDigit) ||
-            MaximumHighlights is not (3 or 5 or 10) ||
             AspectRatio is not ("16:9" or "9:16") ||
             MinimumScore is < 0 or > 1000)
             return BadRequest();
@@ -53,7 +51,6 @@ public sealed class PlayerModel(
         foreach (GenerationPlayer player in generation.Players) player.IsSelected = player == selected;
         generation.SelectedSteamId = SteamId;
         generation.SelectedPlayerName = selected.DisplayName;
-        generation.MaximumHighlights = MaximumHighlights;
         generation.MinimumScore = MinimumScore;
         generation.OutputOrder = OutputOrder;
         generation.AspectRatio = AspectRatio;
