@@ -35,6 +35,10 @@ public sealed class MusicModel(
     public int DropCount { get; private set; }
     public string EstimatedDurationText { get; private set; } = "—";
     public bool ShowHighlightSelectionReturn { get; private set; }
+    public string HighlightSelectionReturnTitle { get; private set; } =
+        "Измените набор моментов";
+    public string HighlightSelectionReturnDescription { get; private set; } =
+        "Вернитесь к каталогу и измените выбранные хайлайты. Загруженная музыка и её анализ сохранятся.";
     public IReadOnlyList<string> AvailableLuts => trustedLuts.Keys;
 
     [BindProperty] public IFormFile? MusicFile { get; set; }
@@ -153,7 +157,7 @@ public sealed class MusicModel(
             .SumAsync(value => value.EstimatedDurationMilliseconds, cancellationToken);
         if (safeDuration / 1.3 > music.DurationMilliseconds)
         {
-            ShowHighlightSelectionReturn = true;
+            EnableHighlightSelectionReturn("MUSIC_TOO_SHORT_FOR_SELECTION");
             ModelState.AddModelError(
                 string.Empty,
                 UiText.Error("MUSIC_TOO_SHORT_FOR_SELECTION"));
@@ -244,8 +248,7 @@ public sealed class MusicModel(
                 GenerationStatus.AwaitingMovieConfiguration.ToString();
             resetGeneration.UpdatedAt = now;
             await db.SaveChangesAsync(cancellationToken);
-            ShowHighlightSelectionReturn = exception.Message ==
-                "MUSIC_TOO_SHORT_FOR_SELECTION";
+            EnableHighlightSelectionReturn(exception.Message);
             ModelState.AddModelError(
                 string.Empty,
                 UiText.Error(exception.Message));
@@ -312,6 +315,37 @@ public sealed class MusicModel(
 
     private static double PercentToDb(int percent) =>
         percent <= 0 ? -60 : 20 * Math.Log10(percent / 100d);
+
+    private void EnableHighlightSelectionReturn(string errorCode)
+    {
+        switch (errorCode)
+        {
+            case "MUSIC_TOO_SHORT_FOR_SELECTION":
+                ShowHighlightSelectionReturn = true;
+                HighlightSelectionReturnTitle =
+                    "Выбранные моменты длиннее трека";
+                HighlightSelectionReturnDescription =
+                    "Вернитесь к каталогу и уберите часть моментов. Загруженная музыка и её анализ сохранятся.";
+                break;
+            case "CINEMATIC_BROLL_INSUFFICIENT":
+            case "CINEMATIC_BROLL_INSUFFICIENT_FOR_CONTIGUOUS_TIMELINE":
+                ShowHighlightSelectionReturn = true;
+                HighlightSelectionReturnTitle =
+                    "Не хватает материала для пауз";
+                HighlightSelectionReturnDescription =
+                    "Вернитесь к каталогу и добавьте другие хайлайты, чтобы сократить паузы. Музыка и её анализ сохранятся.";
+                break;
+            case "CINEMATIC_INSUFFICIENT_HIGH_ENERGY_PEAKS":
+            case "PRIMARY_KILL_OUTSIDE_HIGH_ENERGY_SECTION":
+            case "CINEMATIC_DURATION_LIMIT_EXCEEDED":
+                ShowHighlightSelectionReturn = true;
+                HighlightSelectionReturnTitle =
+                    "Измените набор моментов";
+                HighlightSelectionReturnDescription =
+                    "Вернитесь к каталогу и выберите меньше ключевых моментов. Музыка и её анализ сохранятся.";
+                break;
+        }
+    }
 
     private async Task CreateLockedPlanAsync(
         GenerationDbContext db,

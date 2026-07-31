@@ -24,9 +24,9 @@
     <section class="surface surface-pad"
              data-highlight-duration-error
              style="margin-bottom:20px;border-color:var(--color-app-danger)">
-      <h2 class="section-title">Выбранные моменты длиннее трека</h2>
+      <h2 class="section-title">@Model.HighlightSelectionReturnTitle</h2>
       <p class="page-lead" style="margin-top:8px">
-        Вернитесь к каталогу и уберите часть моментов — загруженная музыка и её анализ сохранятся.
+        @Model.HighlightSelectionReturnDescription
       </p>
       <form method="post" asp-page-handler="ReturnToHighlights">
         <button type="submit" class="btn btn-secondary">
