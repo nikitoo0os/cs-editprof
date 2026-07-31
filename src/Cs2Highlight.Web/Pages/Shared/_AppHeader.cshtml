@@ -5,6 +5,24 @@
       <span class="brand__wordmark">cs<span>highlighter</span></span>
     </a>
     <nav class="app-nav" aria-label="Основная навигация">
+      <div class="theme-switcher" role="group" aria-label="Тема оформления">
+        <button class="theme-switcher__button"
+                type="button"
+                data-theme-choice="redline"
+                aria-pressed="false"
+                title="Тёмная тема «Красная линия»">
+          <span class="theme-switcher__swatch theme-switcher__swatch--redline" aria-hidden="true"></span>
+          <span class="theme-switcher__label">Redline</span>
+        </button>
+        <button class="theme-switcher__button"
+                type="button"
+                data-theme-choice="printstream"
+                aria-pressed="false"
+                title="Светлая тема «Поток информации»">
+          <span class="theme-switcher__swatch theme-switcher__swatch--printstream" aria-hidden="true"></span>
+          <span class="theme-switcher__label">Printstream</span>
+        </button>
+      </div>
       <a class="app-nav__link app-nav__home" asp-page="/Index">
         <img class="ui-icon" src="/assets/icons/gamepad-2.svg" alt="" />
         Главная

@@ -13,15 +13,16 @@
            name="HighlightIds"
            value="@Model.Id"
            aria-label="Выбрать: @UiText.HighlightType(Model.Type), раунд @Model.RoundNumber" />
-    @if (Model.Recommended)
-    {
-      <span class="highlight-card__top">
+    <span class="highlight-card__check" aria-hidden="true"></span>
+    <span class="highlight-card__top">
+      @if (Model.Recommended)
+      {
         <span class="badge badge-violet">
           <img class="ui-icon" src="/assets/icons/sparkles.svg" alt="" />
           рекомендуем
         </span>
-      </span>
-    }
+      }
+    </span>
     <strong class="highlight-card__title">@UiText.HighlightType(Model.Type)</strong>
     <span class="highlight-card__meta">
       Раунд @Model.RoundNumber · @Model.MapName<br />

@@ -43,12 +43,11 @@
             <span class="muted" style="display:block;margin-top:12px;font-size:12px">До 200 МБ</span>
           </span>
         </label>
-        <label style="display:flex;align-items:flex-start;gap:11px;margin-top:18px">
+        <label class="confirmation-row">
           <input asp-for="RightsConfirmed"
                  type="checkbox"
-                 required
-                 style="width:20px;height:20px;accent-color:#22d3ee" />
-          <span class="subtle" style="font-size:13px;line-height:1.55">
+                 required />
+          <span class="confirmation-row__text">
             Я подтверждаю, что имею право использовать этот трек в создаваемом видео.
           </span>
         </label>
