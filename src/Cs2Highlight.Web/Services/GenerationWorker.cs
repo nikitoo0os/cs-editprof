@@ -779,14 +779,23 @@ public sealed partial class GenerationWorker(
                     metrics);
                 if (warnings.Count == 0)
                 {
-                    effectiveCameras[source.Id] = source.Camera;
+                    CameraShotPlan accepted = source.Camera with
+                    {
+                        FramingIntent =
+                            "preview-verified persisted camera composition",
+                        Warnings = source.Camera.Warnings
+                            .Where(value => value !=
+                                "CAMERA_PREVIEW_PENDING")
+                            .ToArray()
+                    };
+                    effectiveCameras[source.Id] = accepted;
                     previews.Add(new CameraPreviewResult
                     {
                         CameraShotId = source.Camera.Id,
                         Status = CameraPreviewStatus.Passed,
                         PreviewPath = previewPath,
                         Metrics = metrics,
-                        EffectiveShot = source.Camera,
+                        EffectiveShot = accepted,
                         Attempt = 1,
                         Warnings = []
                     });
@@ -844,8 +853,14 @@ public sealed partial class GenerationWorker(
                         $"CAMERA_POV_FALLBACK_FAILED:{sourceId}:" +
                         fallback.Error?.Message);
                 }
+                CameraShotPlan previewedSource = source.Camera with
+                {
+                    Warnings = source.Camera.Warnings
+                        .Where(value => value != "CAMERA_PREVIEW_PENDING")
+                        .ToArray()
+                };
                 CameraShotPlan effective = PovFallback(
-                    source.Camera,
+                    previewedSource,
                     warnings.Concat(
                     [
                         "ALTERNATIVE_TRAJECTORY_UNAVAILABLE",
@@ -2289,23 +2304,39 @@ public sealed partial class GenerationWorker(
             .ToDictionary(value => value.ShotId, StringComparer.Ordinal);
         if (byShotId.Count == 0)
             return new PersistedCameraFallbackReuse(source, []);
+        const string PovFallbackSuffix = "-pov-fallback";
         List<CameraPreviewResult> reused = [];
         CinematicSequenceSegment[] segments = source.Segments
             .Select(segment =>
             {
+                string persistedShotId = segment.Camera.Id.EndsWith(
+                        PovFallbackSuffix,
+                        StringComparison.Ordinal)
+                    ? segment.Camera.Id[..^PovFallbackSuffix.Length]
+                    : segment.Camera.Id;
                 if (!byShotId.TryGetValue(
-                        segment.Camera.Id,
+                        persistedShotId,
                         out GenerationCameraShot? row))
                     return segment;
                 string sourceId = segment.HighlightId ??
                     segment.BrollCandidateId ?? segment.Id;
                 rendered[sourceId] = row.PreviewPath!;
-                CameraShotPlan effective = PovFallback(
-                    segment.Camera,
-                    [
-                        "PERSISTED_POV_FALLBACK_REUSED",
-                        "LOCKED_CAMERA_CANDIDATE_REJECTED_BY_PREVIEW"
-                    ]);
+                CameraShotPlan effective = segment.Camera.Family ==
+                        CameraShotFamily.PlayerPov
+                    ? segment.Camera with
+                    {
+                        Warnings = segment.Camera.Warnings.Concat(
+                        [
+                            "PERSISTED_POV_FALLBACK_REUSED",
+                            "LOCKED_CAMERA_CANDIDATE_REJECTED_BY_PREVIEW"
+                        ]).Distinct(StringComparer.Ordinal).ToArray()
+                    }
+                    : PovFallback(
+                        segment.Camera,
+                        [
+                            "PERSISTED_POV_FALLBACK_REUSED",
+                            "LOCKED_CAMERA_CANDIDATE_REJECTED_BY_PREVIEW"
+                        ]);
                 reused.Add(new CameraPreviewResult
                 {
                     CameraShotId = segment.Camera.Id,
@@ -2353,6 +2384,31 @@ public sealed partial class GenerationWorker(
             row.PreviewPath = preview.PreviewPath;
         }
         string directory = storage.EnsureDirectory(publicId, "plan");
+        GenerationCinematicPlan? storedPlan =
+            await db.GenerationCinematicPlans.SingleOrDefaultAsync(
+                value => value.GenerationId == generationId,
+                cancellationToken);
+        if (storedPlan is not null)
+        {
+            storedPlan.PlanJson = JsonSerializer.Serialize(
+                effectivePlan,
+                JsonOptions);
+            string planPath = Path.Combine(
+                directory,
+                "cinematic-movie-plan.json");
+            string temporaryPlanPath = planPath + ".tmp";
+            await File.WriteAllTextAsync(
+                temporaryPlanPath,
+                storedPlan.PlanJson,
+                cancellationToken);
+            File.Move(temporaryPlanPath, planPath, true);
+            await AddArtifactAsync(
+                db,
+                generationId,
+                ArtifactType.CinematicMoviePlan,
+                planPath,
+                cancellationToken);
+        }
         Dictionary<string, (ArtifactType Type, object Content)> artifacts =
             new(StringComparer.Ordinal)
             {
@@ -2475,19 +2531,30 @@ public sealed partial class GenerationWorker(
     {
         string full = Path.GetFullPath(path);
         storage.EnsureWithinRoot(full);
-        if (db.GenerationArtifacts.Local.Any(value => value.StoredPath == full) ||
-            await db.GenerationArtifacts.AnyAsync(
-                value => value.StoredPath == full, cancellationToken)) return;
-        db.GenerationArtifacts.Add(new GenerationArtifact
+        GenerationArtifact? artifact =
+            db.GenerationArtifacts.Local.FirstOrDefault(value =>
+                value.GenerationId == generationId &&
+                value.StoredPath == full) ??
+            await db.GenerationArtifacts.FirstOrDefaultAsync(
+                value => value.GenerationId == generationId &&
+                    value.StoredPath == full,
+                cancellationToken);
+        if (artifact is null)
         {
-            GenerationId = generationId,
-            Type = type,
-            FileName = Path.GetFileName(full),
-            StoredPath = full,
-            FileSizeBytes = new FileInfo(full).Length,
-            ContentType = type == ArtifactType.FinalVideo ? "video/mp4" : "application/json",
-            CreatedAt = timeProvider.GetUtcNow()
-        });
+            artifact = new GenerationArtifact
+            {
+                GenerationId = generationId,
+                StoredPath = full,
+                CreatedAt = timeProvider.GetUtcNow()
+            };
+            db.GenerationArtifacts.Add(artifact);
+        }
+        artifact.Type = type;
+        artifact.FileName = Path.GetFileName(full);
+        artifact.FileSizeBytes = new FileInfo(full).Length;
+        artifact.ContentType = type == ArtifactType.FinalVideo
+            ? "video/mp4"
+            : "application/json";
     }
 
     private sealed class PlayerAggregate(string initialName)

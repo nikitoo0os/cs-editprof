@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Security.Cryptography;
 using System.Text;
+using Cs2Highlight.Analysis;
 using Cs2Highlight.Music;
 using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
@@ -1333,6 +1334,32 @@ public sealed class InteractiveTimelineDirector(
                         shot.PreviewStatus == CameraPreviewStatus.Passed)
                     .ThenBy(shot => shot.ShotId, StringComparer.Ordinal)
                     .First());
+        GenerationCinematicPlan? cinematicPlanRow =
+            await db.GenerationCinematicPlans.AsNoTracking()
+                .SingleOrDefaultAsync(
+                    value => value.GenerationId == plan.GenerationId,
+                    cancellationToken);
+        CinematicMoviePlan? cinematicPlan = cinematicPlanRow is null
+            ? null
+            : Deserialize<CinematicMoviePlan>(cinematicPlanRow.PlanJson);
+        Dictionary<string, CameraShotPlan> cameraPrototypes =
+            cinematicPlan?.Segments
+                .Where(value => value.BrollCandidateId is not null)
+                .GroupBy(
+                    value => value.BrollCandidateId!,
+                    StringComparer.Ordinal)
+                .ToDictionary(
+                    value => value.Key,
+                    value => value
+                        .OrderByDescending(segment =>
+                            segment.Camera.Family !=
+                            CameraShotFamily.PlayerPov)
+                        .ThenBy(segment => segment.Camera.Id,
+                            StringComparer.Ordinal)
+                        .First()
+                        .Camera,
+                    StringComparer.Ordinal) ??
+            new Dictionary<string, CameraShotPlan>(StringComparer.Ordinal);
         GenerationMovieSettings? settings =
             await db.GenerationMovieSettings.AsNoTracking()
                 .SingleOrDefaultAsync(
@@ -1391,6 +1418,7 @@ public sealed class InteractiveTimelineDirector(
                 highlightsById,
                 candidateRowIds,
                 shotsByCandidate,
+                cameraPrototypes,
                 demosById,
                 generation,
                 settings,
@@ -1467,6 +1495,7 @@ public sealed class InteractiveTimelineDirector(
         IReadOnlyDictionary<string, GenerationHighlight> highlights,
         Dictionary<string, long> candidateRowIds,
         Dictionary<long, GenerationCameraShot> shotsByCandidate,
+        IReadOnlyDictionary<string, CameraShotPlan> cameraPrototypes,
         Dictionary<long, GenerationDemo> demos,
         Generation generation,
         GenerationMovieSettings? settings,
@@ -1506,18 +1535,21 @@ public sealed class InteractiveTimelineDirector(
                 if (duration < 400)
                     break;
                 GenerationCameraShot? storedShot = null;
-                bool previewPassed = candidateRowIds.TryGetValue(
+                CameraPreviewStatus? previewStatus = null;
+                if (candidateRowIds.TryGetValue(
                         candidate.Id,
                         out long rowId) &&
                     shotsByCandidate.TryGetValue(
                         rowId,
-                        out storedShot) &&
-                    storedShot.PreviewStatus == CameraPreviewStatus.Passed &&
-                    duration >= 750;
+                        out storedShot))
+                {
+                    previewStatus = storedShot.PreviewStatus;
+                }
                 CameraShotPlan camera = CreateCameraDecision(
                     candidate,
                     storedShot,
-                    previewPassed,
+                    cameraPrototypes.GetValueOrDefault(candidate.Id),
+                    previewStatus,
                     generation.SelectedSteamId,
                     demos.TryGetValue(
                         candidate.DemoId,
@@ -1764,7 +1796,8 @@ public sealed class InteractiveTimelineDirector(
     private static CameraShotPlan CreateCameraDecision(
         GapMaterialCandidate candidate,
         GenerationCameraShot? stored,
-        bool previewPassed,
+        CameraShotPlan? prototype,
+        CameraPreviewStatus? previewStatus,
         string? selectedPlayerId,
         string mapName,
         double durationSeconds)
@@ -1775,8 +1808,12 @@ public sealed class InteractiveTimelineDirector(
         CameraShotFamily family = stored is null
             ? CameraShotFamily.PlayerPov
             : CameraFamily(stored.Type);
-        bool validFreeCamera = previewPassed &&
+        bool previewEligible = previewStatus is
+            CameraPreviewStatus.NotAttempted or
+            CameraPreviewStatus.Passed;
+        bool validFreeCamera = previewEligible &&
             family != CameraShotFamily.PlayerPov &&
+            durationSeconds >= MeaningfulGapPolicy.MinimumFreeCameraShotSeconds &&
             keyframes.Length > 0 &&
             keyframes.All(value =>
                 double.IsFinite(value.TimeSeconds) &&
@@ -1802,16 +1839,21 @@ public sealed class InteractiveTimelineDirector(
             EndTick = candidate.EndTick,
             TargetDurationSeconds = durationSeconds,
             Keyframes = keyframes,
-            TargetPoints = [],
+            TargetPoints = validFreeCamera
+                ? prototype?.TargetPoints ?? []
+                : [],
             FovCurve = keyframes.Select(value =>
                 new CameraFovPoint(value.TimeSeconds, value.Fov)).ToArray(),
             FovStart = validFreeCamera ? stored!.FovStart : 90,
             FovEnd = validFreeCamera ? stored!.FovEnd : 90,
             FramingIntent = validFreeCamera
-                ? "preview-verified persisted camera composition"
+                ? previewStatus == CameraPreviewStatus.Passed
+                    ? "preview-verified persisted camera composition"
+                    : "persisted camera composition awaiting preview"
                 : "selected player POV continuity",
             PreviewRequired = validFreeCamera,
-            RequiresHighFpsCapture = false,
+            RequiresHighFpsCapture = validFreeCamera &&
+                prototype?.RequiresHighFpsCapture == true,
             FallbackShotId = validFreeCamera
                 ? $"camera-{candidate.Id}-pov-fallback"
                 : string.Empty,
@@ -1820,10 +1862,21 @@ public sealed class InteractiveTimelineDirector(
                     CameraShotFamily.PlayerPov]
                 : [],
             SubjectIds = string.IsNullOrWhiteSpace(selectedPlayerId)
-                ? []
+                ? prototype?.SubjectIds ?? []
                 : [selectedPlayerId],
+            MovementDirection = validFreeCamera
+                ? prototype?.MovementDirection ?? GameplayVector3.Zero
+                : GameplayVector3.Zero,
+            SafetyVolume = validFreeCamera
+                ? prototype?.SafetyVolume
+                : null,
+            VerifiedPresetId = validFreeCamera
+                ? prototype?.VerifiedPresetId
+                : null,
             Warnings = validFreeCamera
-                ? []
+                ? previewStatus == CameraPreviewStatus.Passed
+                    ? []
+                    : ["CAMERA_PREVIEW_PENDING"]
                 : ["CAMERA_PREVIEW_REQUIRED_POV_FALLBACK"]
         };
         return CameraShotSignatureBuilder.Attach(plan, mapName);
@@ -2315,6 +2368,20 @@ public sealed class InteractiveTimelineDirector(
                 .Where(value => value.TimelinePlanId == plan.Id)
                 .OrderBy(value => value.StartMilliseconds)
                 .ToArrayAsync(cancellationToken);
+        GenerationCameraShot[] cameraRows =
+            await db.GenerationCameraShots.AsNoTracking()
+                .Where(value => value.GenerationId == generation.Id)
+                .ToArrayAsync(cancellationToken);
+        Dictionary<string, CameraPreviewStatus> cameraPreviewStatuses =
+            cameraRows
+                .GroupBy(value => value.ShotId, StringComparer.Ordinal)
+                .ToDictionary(
+                    value => value.Key,
+                    value => value
+                        .OrderByDescending(shot => shot.Id)
+                        .First()
+                        .PreviewStatus,
+                    StringComparer.Ordinal);
         GenerationArtifact? waveformArtifact =
             await db.GenerationArtifacts.AsNoTracking()
                 .Where(value =>
@@ -2417,6 +2484,19 @@ public sealed class InteractiveTimelineDirector(
                 cameraPlan?.Warnings.Any(warning => warning.Contains(
                     "FALLBACK",
                     StringComparison.Ordinal)) == true;
+            string cameraVerification = cameraPlan switch
+            {
+                null => "Not required",
+                { Family: CameraShotFamily.PlayerPov } => "POV fallback",
+                _ => cameraPreviewStatuses.GetValueOrDefault(cameraPlan.Id) switch
+                {
+                    CameraPreviewStatus.Passed => "Preview passed",
+                    CameraPreviewStatus.Rendering => "Preview rendering",
+                    CameraPreviewStatus.Failed => "Preview failed",
+                    CameraPreviewStatus.PovFallback => "POV fallback",
+                    _ => "Preview pending"
+                }
+            };
             return new TimelineGapView(
                 value.GapId,
                 value.PreviousAnchorId,
@@ -2430,11 +2510,7 @@ public sealed class InteractiveTimelineDirector(
                 parsed?.Validation.Outcome.ToString() ?? "Invalid",
                 parsed?.ReusedSuccessfulPlan ?? false,
                 fallback,
-                cameraPlan is null
-                    ? "Not required"
-                    : cameraPlan.Family == CameraShotFamily.PlayerPov
-                        ? "POV fallback"
-                        : "Preview passed");
+                cameraVerification);
         }).ToArray();
         Dictionary<string, int> counts = new(StringComparer.Ordinal)
         {

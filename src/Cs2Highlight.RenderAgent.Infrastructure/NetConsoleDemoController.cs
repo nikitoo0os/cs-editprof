@@ -394,6 +394,14 @@ public sealed class NetConsoleDemoController(
                 $"{installedHlaeVersion}.");
         }
         await connection.SendAsync("mirv_fov default", cancellationToken);
+        // The HLAE free-camera consumes live mouse and keyboard input. A user
+        // moving the mouse while an automated campath is being assembled can
+        // therefore change the just-applied angles before they are verified
+        // and persisted as a keyframe. Rendering runs in a disposable HLAE
+        // process, so disabling both sensitivities keeps the camera transform
+        // deterministic without affecting the normal CS2 client.
+        await connection.SendAsync("mirv_input cfg msens 0", cancellationToken);
+        await connection.SendAsync("mirv_input cfg ksens 0", cancellationToken);
         await connection.SendAsync("mirv_input camera", cancellationToken);
         List<AppliedCameraKeyframe> applied = [];
         List<string> campathOutput = [];

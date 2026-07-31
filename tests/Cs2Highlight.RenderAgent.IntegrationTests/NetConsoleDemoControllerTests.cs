@@ -277,6 +277,8 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
 
         Assert.Equal(4, commands.Count(value => value == "mirv_campath add"));
         Assert.Contains("mirv_campath enabled 1", commands);
+        Assert.Contains("mirv_input cfg msens 0", commands);
+        Assert.Contains("mirv_input cfg ksens 0", commands);
         Assert.Contains("mirv_input end", commands);
         Assert.Contains("mirv_input fov 77", commands);
         Assert.True(File.Exists(

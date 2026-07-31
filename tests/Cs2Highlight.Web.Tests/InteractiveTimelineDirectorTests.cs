@@ -1,6 +1,7 @@
 using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
 using Cs2Highlight.Web.Services;
+using Cs2Highlight.Analysis;
 using Cs2Highlight.Music;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -404,6 +405,171 @@ public sealed class InteractiveTimelineDirectorTests :
         Assert.Equal(160, view.Waveform.SamplesPerSecond);
         Assert.Equal(artifact.Peaks, view.Waveform.Peaks);
         Assert.Equal(4, view.Waveform.ExcerptStartSeconds);
+    }
+
+    [Fact]
+    public async Task UnverifiedFreeCameraRemainsScheduledForRenderPreview()
+    {
+        await using (GenerationDbContext db =
+                     await factory.CreateDbContextAsync())
+        {
+            GenerationBrollCandidate[] candidates = await db
+                .GenerationBrollCandidates
+                .OrderBy(value => value.CandidateId)
+                .ToArrayAsync();
+            List<CinematicSequenceSegment> cameraPrototypes = [];
+            foreach (GenerationBrollCandidate candidate in candidates)
+            {
+                CameraKeyframe[] keyframes =
+                [
+                    new CameraKeyframe
+                    {
+                        TimeSeconds = 0,
+                        Position = new GameplayVector3(0, 0, 64),
+                        Rotation = new GameplayVector3(0, 0, 0),
+                        Fov = 82
+                    },
+                    new CameraKeyframe
+                    {
+                        TimeSeconds = 5,
+                        Position = new GameplayVector3(128, 0, 64),
+                        Rotation = new GameplayVector3(0, 15, 0),
+                        Fov = 76
+                    }
+                ];
+                db.GenerationCameraShots.Add(new GenerationCameraShot
+                {
+                    GenerationId = candidate.GenerationId,
+                    GenerationBrollCandidateId = candidate.Id,
+                    ShotId = $"camera-{candidate.CandidateId}-tracking",
+                    Type = CameraShotType.SideTracking,
+                    StartTick = candidate.StartTick,
+                    EndTick = candidate.EndTick,
+                    KeyframesJson = JsonSerializer.Serialize<CameraKeyframe[]>(
+                        keyframes,
+                        WebJson),
+                    FovStart = 82,
+                    FovEnd = 76,
+                    PreviewStatus = CameraPreviewStatus.NotAttempted,
+                    FallbackType = CameraShotType.PlayerPov
+                });
+                cameraPrototypes.Add(new CinematicSequenceSegment
+                {
+                    Id = $"segment-{candidate.CandidateId}",
+                    Role = CinematicSequenceRole.Intro,
+                    OutputStartSeconds = 0,
+                    OutputEndSeconds = 5,
+                    MusicSectionId = "section",
+                    BrollCandidateId = candidate.CandidateId,
+                    Camera = new CameraShotPlan
+                    {
+                        Id = $"camera-{candidate.CandidateId}-tracking",
+                        Type = CameraShotType.SideTracking,
+                        Family = CameraShotFamily.SideTracking,
+                        DemoId = candidate.GenerationDemoId.ToString(
+                            System.Globalization.CultureInfo.InvariantCulture),
+                        StartTick = candidate.StartTick,
+                        EndTick = candidate.EndTick,
+                        TargetDurationSeconds = 5,
+                        Keyframes = keyframes,
+                        TargetPoints =
+                        [
+                            new CameraTargetPoint(
+                                0,
+                                new GameplayVector3(96, 0, 64),
+                                ["76561198000000001"]),
+                            new CameraTargetPoint(
+                                5,
+                                new GameplayVector3(224, 0, 64),
+                                ["76561198000000001"])
+                        ],
+                        FovCurve = keyframes.Select(value =>
+                            new CameraFovPoint(
+                                value.TimeSeconds,
+                                value.Fov)).ToArray(),
+                        FovStart = 82,
+                        FovEnd = 76,
+                        RequiresHighFpsCapture = false,
+                        FallbackShotId =
+                            $"camera-{candidate.CandidateId}-pov",
+                        Warnings = ["CAMERA_PREVIEW_PENDING"],
+                        SafetyVolume = new SafeCameraVolume(
+                            new GameplayVector3(-1, -1, 0),
+                            new GameplayVector3(256, 1, 128)),
+                        PreviewRequired = true
+                    },
+                    TimeWarp = new TimeWarpPlan(1, [], false, []),
+                    Effects = []
+                });
+            }
+            db.GenerationCinematicPlans.Add(new GenerationCinematicPlan
+            {
+                GenerationId = candidates[0].GenerationId,
+                PlannerVersion = "test",
+                MusicExcerptJson = "{}",
+                PlanJson = JsonSerializer.Serialize(
+                    new CinematicMoviePlan
+                    {
+                        SchemaVersion = "1.0",
+                        PlannerVersion = "test",
+                        GenerationId = publicId,
+                        MusicExcerpt = new MusicExcerptPlan
+                        {
+                            StartSeconds = 0,
+                            EndSeconds = 30,
+                            SectionIds = [],
+                            Peaks = [],
+                            RequiredPeakCount = 0,
+                            UsablePeakCount = 0,
+                            Score = 1,
+                            IsValid = true,
+                            ScoreBreakdown =
+                                new Dictionary<string, double>(),
+                            Warnings = []
+                        },
+                        TargetDurationSeconds = 30,
+                        Segments = cameraPrototypes,
+                        HighlightMatches = [],
+                        SoundDesign = new SoundDesignPlan([], true, []),
+                        Color = new ColorNarrativePlan(
+                            ColorGradePreset.Natural,
+                            [],
+                            []),
+                        Warnings = []
+                    },
+                    WebJson),
+                LockedAt = DateTimeOffset.UtcNow,
+                CreatedAt = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync();
+        }
+
+        InteractiveTimelineView view = await director.GetOrCreateAsync(
+            publicId,
+            CancellationToken.None);
+
+        TimelineGapView freeCamera = Assert.Single(
+            view.Gaps.Where(value =>
+                value.Camera == nameof(CameraShotFamily.SideTracking)));
+        Assert.Equal("Preview pending", freeCamera.CameraVerification);
+        Assert.False(freeCamera.CameraFallback);
+        await using GenerationDbContext verification =
+            await factory.CreateDbContextAsync();
+        LocalTimelineRegionPlan[] regions = (await verification
+                .GenerationTimelineGaps
+                .AsNoTracking()
+                .ToArrayAsync())
+            .Select(value => JsonSerializer.Deserialize<
+                LocalTimelineRegionPlan>(value.PlanJson, WebJson)!)
+            .ToArray();
+        CameraShotPlan scheduled = regions
+            .SelectMany(value => value.CameraShots)
+            .First(value =>
+                value.Family == CameraShotFamily.SideTracking);
+        Assert.True(scheduled.PreviewRequired);
+        Assert.Contains("CAMERA_PREVIEW_PENDING", scheduled.Warnings);
+        Assert.Equal(2, scheduled.TargetPoints.Count);
+        Assert.NotNull(scheduled.SafetyVolume);
     }
 
     [Fact]
