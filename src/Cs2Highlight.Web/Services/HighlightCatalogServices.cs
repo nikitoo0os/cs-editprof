@@ -133,6 +133,9 @@ public sealed class HighlightSelectionService(
             selected.Sum(value => value.EstimatedDurationMilliseconds) -
             transitionOverlap);
         generation.EffectPreset = preset;
+        await db.GenerationEffectPlans
+            .Where(value => value.GenerationId == generation.Id)
+            .ExecuteDeleteAsync(cancellationToken);
         Dictionary<long, int> tickRates = await db.GenerationDemos
             .Where(value => value.GenerationId == generation.Id)
             .ToDictionaryAsync(
@@ -155,8 +158,17 @@ public sealed class HighlightSelectionService(
                 CreatedAt = timeProvider.GetUtcNow()
             });
         }
+        bool reusableMusic = await db.GenerationMusic.AnyAsync(
+            value => value.GenerationId == generation.Id &&
+                value.RightsConfirmed &&
+                value.AnalysisArtifactId != null,
+            cancellationToken);
         GenerationStateMachine.Transition(
-            generation, GenerationStatus.AwaitingMusicUpload, timeProvider.GetUtcNow());
+            generation,
+            reusableMusic
+                ? GenerationStatus.AwaitingMovieConfiguration
+                : GenerationStatus.AwaitingMusicUpload,
+            timeProvider.GetUtcNow());
         generation.ProgressPercent = Math.Max(generation.ProgressPercent, 30);
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);

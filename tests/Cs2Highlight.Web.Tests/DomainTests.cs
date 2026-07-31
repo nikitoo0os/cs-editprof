@@ -87,6 +87,29 @@ public sealed class DomainTests
     }
 
     [Fact]
+    public void MovieConfigurationCanReturnToHighlightsAndReuseMusic()
+    {
+        Generation generation = new()
+        {
+            Status = GenerationStatus.AwaitingMovieConfiguration
+        };
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        GenerationStateMachine.Transition(
+            generation,
+            GenerationStatus.AwaitingHighlightSelection,
+            now);
+        GenerationStateMachine.Transition(
+            generation,
+            GenerationStatus.AwaitingMovieConfiguration,
+            now);
+
+        Assert.Equal(
+            GenerationStatus.AwaitingMovieConfiguration,
+            generation.Status);
+    }
+
+    [Fact]
     public void PipelinePathResolverFindsExecutableBesideApplication()
     {
         string name = $"resolver-{Guid.NewGuid():N}.exe";

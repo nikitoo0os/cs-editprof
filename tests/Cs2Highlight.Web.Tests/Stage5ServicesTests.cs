@@ -186,6 +186,14 @@ public sealed class Stage5ServicesTests
         Assert.DoesNotContain("1-(1-", graph);
         Assert.DoesNotContain("MusicDuckOnKill", graph);
         Assert.Contains("eval=frame", graph);
+        Assert.Contains(
+            "atrim=duration=8,afade=t=out:st=7.25:d=0.75",
+            graph);
+
+        string exactLengthGraph = FfmpegMovieFilterBuilder.AudioMix(
+            settings,
+            plan with { MusicDurationSeconds = 8 });
+        Assert.DoesNotContain("afade=t=out", exactLengthGraph);
     }
 
     [Fact]
@@ -314,6 +322,90 @@ public sealed class Stage5ServicesTests
                 .Where(value => value.SelectedByUser)
                 .OrderBy(value => value.SelectionOrder)
                 .Select(value => value.HighlightId));
+    }
+
+    [Fact]
+    public async Task ReselectionReusesAnalyzedMusicAndReplacesEffectPlans()
+    {
+        await using SqliteConnection connection = new("Data Source=:memory:");
+        await connection.OpenAsync();
+        DbContextOptions<GenerationDbContext> dbOptions =
+            new DbContextOptionsBuilder<GenerationDbContext>()
+                .UseSqlite(connection)
+                .Options;
+        TestFactory factory = new(dbOptions);
+        await using (GenerationDbContext db =
+                     await factory.CreateDbContextAsync())
+        {
+            await db.Database.EnsureCreatedAsync();
+            Generation generation = new()
+            {
+                PublicId = "stage5-reselection",
+                Status = GenerationStatus.AwaitingHighlightSelection,
+                SelectedSteamId = "76561198000000001"
+            };
+            generation.Highlights.Add(Highlight("h1", 100, 500));
+            generation.Highlights.Add(Highlight("h2", 600, 1100));
+            generation.Artifacts.Add(new GenerationArtifact
+            {
+                Type = ArtifactType.MusicAnalysis,
+                FileName = "music-analysis.json",
+                StoredPath = "music-analysis.json",
+                ContentType = "application/json",
+                CreatedAt = DateTimeOffset.UtcNow
+            });
+            generation.Music = new GenerationMusic
+            {
+                OriginalFileName = "track.mp3",
+                StoredPath = "track.mp3",
+                Sha256 = new string('a', 64),
+                RightsConfirmed = true,
+                CreatedAt = DateTimeOffset.UtcNow
+            };
+            db.Generations.Add(generation);
+            await db.SaveChangesAsync();
+            generation.Music.AnalysisArtifactId = generation.Artifacts.Single().Id;
+            generation.EffectPlans.Add(new GenerationEffectPlan
+            {
+                GenerationHighlightId = generation.Highlights[0].Id,
+                Preset = EffectPreset.Clean,
+                TimelineJson = "[]",
+                EffectPlanJson = "{}",
+                CreatedAt = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync();
+        }
+        HighlightSelectionService service = new(
+            factory,
+            new RecommendedSelectionOptions(),
+            new EffectPlanner(),
+            TimeProvider.System);
+
+        await service.SaveSelectionAsync(
+            "stage5-reselection",
+            ["h2"],
+            EffectPreset.Dynamic,
+            CancellationToken.None);
+
+        await using GenerationDbContext verification =
+            await factory.CreateDbContextAsync();
+        Generation saved = await verification.Generations
+            .Include(value => value.Highlights)
+            .SingleAsync();
+        Assert.Equal(
+            GenerationStatus.AwaitingMovieConfiguration,
+            saved.Status);
+        Assert.Equal(
+            ["h2"],
+            saved.Highlights
+                .Where(value => value.SelectedByUser)
+                .Select(value => value.HighlightId));
+        GenerationEffectPlan effect = Assert.Single(
+            await verification.GenerationEffectPlans.ToArrayAsync());
+        Assert.Equal(EffectPreset.Dynamic, effect.Preset);
+        Assert.Equal(
+            saved.Highlights.Single(value => value.HighlightId == "h2").Id,
+            effect.GenerationHighlightId);
     }
 
     private static GenerationHighlight Highlight(

@@ -34,6 +34,7 @@ public sealed class MusicModel(
     public int StrongAnchorCount { get; private set; }
     public int DropCount { get; private set; }
     public string EstimatedDurationText { get; private set; } = "—";
+    public bool ShowHighlightSelectionReturn { get; private set; }
     public IReadOnlyList<string> AvailableLuts => trustedLuts.Keys;
 
     [BindProperty] public IFormFile? MusicFile { get; set; }
@@ -152,6 +153,7 @@ public sealed class MusicModel(
             .SumAsync(value => value.EstimatedDurationMilliseconds, cancellationToken);
         if (safeDuration / 1.3 > music.DurationMilliseconds)
         {
+            ShowHighlightSelectionReturn = true;
             ModelState.AddModelError(
                 string.Empty,
                 UiText.Error("MUSIC_TOO_SHORT_FOR_SELECTION"));
@@ -242,6 +244,8 @@ public sealed class MusicModel(
                 GenerationStatus.AwaitingMovieConfiguration.ToString();
             resetGeneration.UpdatedAt = now;
             await db.SaveChangesAsync(cancellationToken);
+            ShowHighlightSelectionReturn = exception.Message ==
+                "MUSIC_TOO_SHORT_FOR_SELECTION";
             ModelState.AddModelError(
                 string.Empty,
                 UiText.Error(exception.Message));
@@ -250,6 +254,28 @@ public sealed class MusicModel(
         return MovieStyle == MovieStyle.CinematicDirector
             ? RedirectToPage("/Timeline", new { publicId })
             : RedirectToPage("/Checkout", new { publicId });
+    }
+
+    public async Task<IActionResult> OnPostReturnToHighlightsAsync(
+        string publicId,
+        CancellationToken cancellationToken)
+    {
+        await using GenerationDbContext db =
+            await dbFactory.CreateDbContextAsync(cancellationToken);
+        Generation? generation = await db.Generations.SingleOrDefaultAsync(
+            value => value.PublicId == publicId,
+            cancellationToken);
+        if (generation is null)
+            return NotFound();
+        if (generation.Status != GenerationStatus.AwaitingMovieConfiguration)
+            return StatusCode(StatusCodes.Status409Conflict);
+
+        GenerationStateMachine.Transition(
+            generation,
+            GenerationStatus.AwaitingHighlightSelection,
+            timeProvider.GetUtcNow());
+        await db.SaveChangesAsync(cancellationToken);
+        return RedirectToPage("/Highlights", new { publicId });
     }
 
     private async Task<IActionResult> LoadAsync(

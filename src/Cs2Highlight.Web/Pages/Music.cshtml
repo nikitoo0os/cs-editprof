@@ -19,6 +19,23 @@
 
   <div asp-validation-summary="All" class="validation-summary-errors" role="alert"></div>
 
+  @if (Model.ShowHighlightSelectionReturn)
+  {
+    <section class="surface surface-pad"
+             data-highlight-duration-error
+             style="margin-bottom:20px;border-color:var(--color-app-danger)">
+      <h2 class="section-title">Выбранные моменты длиннее трека</h2>
+      <p class="page-lead" style="margin-top:8px">
+        Вернитесь к каталогу и уберите часть моментов — загруженная музыка и её анализ сохранятся.
+      </p>
+      <form method="post" asp-page-handler="ReturnToHighlights">
+        <button type="submit" class="btn btn-secondary">
+          Вернуться к выбору моментов
+        </button>
+      </form>
+    </section>
+  }
+
   @if (Model.Generation.Status == GenerationStatus.AwaitingMusicUpload)
   {
     <div class="section-grid-2" data-music-upload>

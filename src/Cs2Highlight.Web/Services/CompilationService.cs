@@ -1333,6 +1333,14 @@ public static class FfmpegMovieFilterBuilder
                 gameplay: false,
                 fallbackDb: options.MusicGainDb,
                 adjustmentDb: options.MusicGainDb - (-3));
+        double outputDuration = cinematic?.TargetDurationSeconds ??
+            PlanDurationSeconds(plan);
+        double availableMusicDuration = plan is null
+            ? 0
+            : Math.Max(0, plan.MusicDurationSeconds - plan.MusicStartSeconds);
+        string musicTail = MusicTailFade(
+            availableMusicDuration,
+            outputDuration);
         if (killTimes.Length > 0)
         {
             gameplayVolume =
@@ -1341,7 +1349,9 @@ public static class FfmpegMovieFilterBuilder
         StringBuilder graph = new();
         graph.Append("[0:a:0]aresample=48000,volume='")
             .Append(gameplayVolume).Append("':eval=frame[game];")
-            .Append("[1:a:0]aresample=48000,volume='")
+            .Append("[1:a:0]aresample=48000")
+            .Append(musicTail)
+            .Append(",volume='")
             .Append(musicVolume).Append("':eval=frame[music];")
             .Append("[music][game]amix=inputs=2:duration=shortest:normalize=0,")
             .Append("loudnorm=I=-14:TP=")
@@ -1427,6 +1437,35 @@ public static class FfmpegMovieFilterBuilder
         graph.Append("concat=n=").Append(plan.Segments.Count)
             .Append(":v=0:a=1[warped_audio]");
         return graph.ToString();
+    }
+
+    private static double PlanDurationSeconds(MusicEditPlan? plan)
+    {
+        if (plan is null || plan.Segments.Count == 0)
+            return 0;
+        return plan.Segments.Max(segment =>
+            segment.OutputStartSeconds + TimeWarpMath.OutputDuration(
+                segment.TimeWarp,
+                Math.Max(0.001,
+                    segment.SourceEndSeconds - segment.SourceStartSeconds)));
+    }
+
+    private static string MusicTailFade(
+        double availableMusicDuration,
+        double outputDuration)
+    {
+        if (outputDuration <= 0 ||
+            availableMusicDuration <= outputDuration + 0.05)
+        {
+            return string.Empty;
+        }
+        double fadeDuration = Math.Min(
+            outputDuration,
+            Math.Clamp(outputDuration * 0.08, 0.75, 1.5));
+        double fadeStart = Math.Max(0, outputDuration - fadeDuration);
+        return ",atrim=duration=" + Number(outputDuration) +
+            ",afade=t=out:st=" + Number(fadeStart) +
+            ":d=" + Number(fadeDuration);
     }
 
     public static string DurationLock(
