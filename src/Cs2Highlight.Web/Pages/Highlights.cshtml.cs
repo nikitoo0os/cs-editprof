@@ -3,6 +3,7 @@ using Cs2Highlight.Analysis;
 using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
 using Cs2Highlight.Web.Services;
+using Cs2Highlight.Web.Ui;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
@@ -76,7 +77,9 @@ public sealed class HighlightsModel(
         }
         catch (InvalidOperationException exception)
         {
-            ModelState.AddModelError(string.Empty, exception.Message);
+            ModelState.AddModelError(
+                string.Empty,
+                UiText.Error(exception.Message));
             return await LoadAsync(publicId, cancellationToken);
         }
     }

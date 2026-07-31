@@ -116,7 +116,7 @@
         </span>
         <h2 class="section-title">Не удалось завершить текущий этап</h2>
         <p class="page-lead" data-error-message>
-          @(Model.Generation.ErrorMessage ?? "Попробуйте повторить генерацию.")
+          @UiText.Error(Model.Generation.ErrorMessage ?? Model.Generation.ErrorCode)
         </p>
         <p class="muted">Код для поддержки: <code data-error-reference>@Model.Generation.ErrorCode</code></p>
         @if (Model.CanRetry)

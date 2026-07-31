@@ -4,6 +4,7 @@ using Cs2Highlight.Music;
 using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
 using Cs2Highlight.Web.Services;
+using Cs2Highlight.Web.Ui;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using Microsoft.EntityFrameworkCore;
@@ -61,7 +62,9 @@ public sealed class MusicModel(
     {
         if (MusicFile is null)
         {
-            ModelState.AddModelError(string.Empty, "MUSIC_FILE_REQUIRED");
+            ModelState.AddModelError(
+                string.Empty,
+                UiText.Error("MUSIC_FILE_REQUIRED"));
             return await LoadAsync(publicId, cancellationToken);
         }
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
@@ -109,7 +112,9 @@ public sealed class MusicModel(
         }
         catch (InvalidOperationException exception)
         {
-            ModelState.AddModelError(string.Empty, exception.Message);
+            ModelState.AddModelError(
+                string.Empty,
+                UiText.Error(exception.Message));
             return await LoadAsync(publicId, cancellationToken);
         }
     }
@@ -128,7 +133,9 @@ public sealed class MusicModel(
         }
         catch (InvalidOperationException exception)
         {
-            ModelState.AddModelError(string.Empty, exception.Message);
+            ModelState.AddModelError(
+                string.Empty,
+                UiText.Error(exception.Message));
             return await LoadAsync(publicId, cancellationToken);
         }
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
@@ -145,7 +152,9 @@ public sealed class MusicModel(
             .SumAsync(value => value.EstimatedDurationMilliseconds, cancellationToken);
         if (safeDuration / 1.3 > music.DurationMilliseconds)
         {
-            ModelState.AddModelError(string.Empty, "MUSIC_TOO_SHORT_FOR_SELECTION");
+            ModelState.AddModelError(
+                string.Empty,
+                UiText.Error("MUSIC_TOO_SHORT_FOR_SELECTION"));
             return await LoadAsync(publicId, cancellationToken);
         }
         await using var transaction =
@@ -233,7 +242,9 @@ public sealed class MusicModel(
                 GenerationStatus.AwaitingMovieConfiguration.ToString();
             resetGeneration.UpdatedAt = now;
             await db.SaveChangesAsync(cancellationToken);
-            ModelState.AddModelError(string.Empty, exception.Message);
+            ModelState.AddModelError(
+                string.Empty,
+                UiText.Error(exception.Message));
             return await LoadAsync(publicId, cancellationToken);
         }
         return MovieStyle == MovieStyle.CinematicDirector

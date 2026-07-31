@@ -5,6 +5,73 @@ namespace Cs2Highlight.Web.Ui;
 
 public static class UiText
 {
+    public static string Error(string? code)
+    {
+        if (string.IsNullOrWhiteSpace(code))
+            return "Не удалось выполнить операцию. Попробуйте ещё раз.";
+
+        if (code.StartsWith("MUSIC_ANALYSIS_FAILED", StringComparison.Ordinal))
+        {
+            return "Не удалось проанализировать трек. Проверьте аудиофайл или загрузите другой.";
+        }
+
+        return code switch
+        {
+            "MUSIC_FILE_REQUIRED" => "Выберите музыкальный файл.",
+            "MUSIC_RIGHTS_CONFIRMATION_REQUIRED" =>
+                "Подтвердите право использовать этот трек.",
+            "MUSIC_FILE_EMPTY" => "Выбранный музыкальный файл пуст.",
+            "MUSIC_FILE_TOO_LARGE" =>
+                "Музыкальный файл превышает допустимый размер.",
+            "MUSIC_UNSUPPORTED_FORMAT" =>
+                "Формат трека не поддерживается. Используйте MP3, WAV, FLAC, M4A или AAC.",
+            "MUSIC_ALREADY_UPLOADED" => "Этот трек уже загружен.",
+            "MUSIC_TOO_SHORT" => "Трек слишком короткий для монтажа.",
+            "MUSIC_TOO_LONG" => "Трек превышает допустимую длительность.",
+            "MUSIC_TOO_SHORT_FOR_SELECTION" =>
+                "Трек слишком короткий для выбранных моментов. Уберите часть хайлайтов или загрузите более длинный трек.",
+            "MUSIC_FFPROBE_FAILED" or
+            "MUSIC_DECODING_FAILED" or
+            "MUSIC_NO_AUDIO_STREAM" =>
+                "Не удалось прочитать аудиодорожку. Проверьте файл или загрузите другой трек.",
+            "MUSIC_ANALYZER_START_FAILED" or
+            "MUSIC_ANALYZER_TIMEOUT" or
+            "MUSIC_ANALYSIS_INVALID" =>
+                "Не удалось завершить анализ музыки. Попробуйте загрузить трек ещё раз.",
+            "UNKNOWN_LUT_ASSET" or
+            "UNTRUSTED_LUT_ASSET" or
+            "LUT_ASSET_MISSING" =>
+                "Выбранный цветовой профиль недоступен. Выберите другой вариант.",
+            "CINEMATIC_HIGHLIGHTS_REQUIRED" =>
+                "Для Cinematic Director нужно выбрать хотя бы один хайлайт.",
+            "CINEMATIC_MUSIC_REANALYSIS_REQUIRED" =>
+                "Для Cinematic Director нужно заново проанализировать трек.",
+            "CINEMATIC_INSUFFICIENT_HIGH_ENERGY_PEAKS" =>
+                "В треке недостаточно сильных музыкальных акцентов для всех выбранных моментов. Уберите часть хайлайтов или выберите другой трек.",
+            "CINEMATIC_MUSIC_EXCERPT_UNAVAILABLE" =>
+                "Не удалось подобрать подходящий фрагмент трека. Выберите другую длительность или другой трек.",
+            "CINEMATIC_GAMEPLAY_TIMELINE_UNAVAILABLE_REANALYZE_DEMOS" =>
+                "Для Cinematic Director не хватает данных о движении игроков. Заново проанализируйте демки.",
+            "CINEMATIC_BROLL_INSUFFICIENT" or
+            "CINEMATIC_BROLL_INSUFFICIENT_FOR_CONTIGUOUS_TIMELINE" =>
+                "Не хватает безопасных игровых фрагментов, чтобы заполнить паузы без повторов. Выберите меньшую длительность или добавьте больше хайлайтов.",
+            "CINEMATIC_LOCKED_PLAN_INVALID" =>
+                "Сохранённый план монтажа повреждён. Настройте мувик заново.",
+            "PRIMARY_KILL_OUTSIDE_HIGH_ENERGY_SECTION" =>
+                "Не удалось совместить основные убийства с сильными частями трека. Выберите другой трек или меньше хайлайтов.",
+            "CINEMATIC_DURATION_LIMIT_EXCEEDED" =>
+                "План монтажа превышает выбранную длительность. Выберите более длинный вариант или меньше хайлайтов.",
+            "NO_HIGHLIGHTS_SELECTED" => "Выберите хотя бы один хайлайт.",
+            "GENERATION_SELECTION_LOCKED" =>
+                "Выбор моментов уже зафиксирован для этой генерации.",
+            "INVALID_HIGHLIGHT_SELECTION" =>
+                "Не удалось сохранить выбранные моменты. Обновите страницу и попробуйте снова.",
+            "INSUFFICIENT_DISK_SPACE" =>
+                "На диске недостаточно свободного места для загрузки.",
+            _ => "Не удалось выполнить операцию. Попробуйте ещё раз."
+        };
+    }
+
     public static string Status(GenerationStatus status) => Status(status.ToString());
 
     public static string Status(string? status) => status switch
