@@ -4,7 +4,7 @@ namespace Cs2Highlight.RenderAgent.Infrastructure;
 
 public static class CaptureUiProfileAdapter
 {
-    public const string TemplateVersion = "capture-presentation-reset.v3";
+    public const string TemplateVersion = "capture-presentation-reset.v4";
 
     private static readonly string[] CommonResetCommands =
     [
@@ -14,6 +14,8 @@ public static class CaptureUiProfileAdapter
         "cl_draw_only_deathnotices 0",
         "spec_show_xray 0",
         "r_drawviewmodel 1",
+        "r_show_build_info 0",
+        "cl_trueview_show_status 0",
         "gameui_hide",
         "hideconsole"
     ];

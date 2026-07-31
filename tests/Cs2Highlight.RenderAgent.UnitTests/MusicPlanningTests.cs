@@ -114,6 +114,19 @@ public sealed class MusicPlanningTests
         Assert.Equal(8, result.Segments.Max(value => value.SourceEndSeconds), 6);
     }
 
+    [Fact]
+    public void CoveredOutputDurationIgnoresCaptureContainerTail()
+    {
+        TimeWarpPlan plan = new(
+            1,
+            [new TimeWarpSegment(0, 2, 1)],
+            true,
+            []);
+
+        Assert.Equal(2, TimeWarpMath.CoveredOutputDuration(plan, 2.05), 6);
+        Assert.Equal(2.05, TimeWarpMath.OutputDuration(plan, 2.05), 6);
+    }
+
     private static MusicAnalysis Music(
         IReadOnlyList<MusicBeat> beats,
         IReadOnlyList<MusicDropCandidate> drops) =>

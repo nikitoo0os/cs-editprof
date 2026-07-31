@@ -131,6 +131,9 @@ public enum BrollCandidateType
     BombDefuse,
     PreFightSetup,
     PostFightExit,
+    TeamMovement,
+    TeamSetup,
+    PovContinuity,
     EnvironmentShot
 }
 
@@ -148,6 +151,10 @@ public sealed record BrollCandidate
     public required double ActionDensity { get; init; }
     public required PlayerTrajectory Trajectory { get; init; }
     public required IReadOnlyList<string> Tags { get; init; }
+    public IReadOnlyList<string> SubjectIds { get; init; } = [];
+    public IReadOnlyDictionary<string, PlayerTrajectory> SubjectTrajectories
+        { get; init; } = new Dictionary<string, PlayerTrajectory>(
+            StringComparer.Ordinal);
 }
 
 public sealed record GameplayInterval(long StartTick, long EndTick);
@@ -166,6 +173,21 @@ public sealed record BrollDetectionContext
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
+public enum CameraShotFamily
+{
+    PlayerPov,
+    StaticTripod,
+    SideTracking,
+    RearTracking,
+    FrontTracking,
+    GroupWide,
+    Orbit,
+    WeaponDetail,
+    BulletPath,
+    EnvironmentReveal
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
 public enum CameraShotType
 {
     PlayerPov,
@@ -179,7 +201,13 @@ public enum CameraShotType
     LowAngleTracking,
     LinearCampath,
     CurvedCampath,
-    EnvironmentReveal
+    EnvironmentReveal,
+    StaticTripod,
+    FrontTracking,
+    GroupWide,
+    Orbit,
+    WeaponDetail,
+    BulletPath
 }
 
 public sealed record CameraKeyframe
@@ -188,6 +216,30 @@ public sealed record CameraKeyframe
     public required GameplayVector3 Position { get; init; }
     public required GameplayVector3 Rotation { get; init; }
     public required double Fov { get; init; }
+}
+
+public sealed record CameraTargetPoint(
+    double TimeSeconds,
+    GameplayVector3 Position,
+    IReadOnlyList<string> SubjectIds);
+
+public sealed record CameraFovPoint(
+    double TimeSeconds,
+    double Fov);
+
+public sealed record CameraShotSignature
+{
+    public required CameraShotFamily Family { get; init; }
+    public required string MapName { get; init; }
+    public required string SourceInterval { get; init; }
+    public required IReadOnlyList<string> SubjectIds { get; init; }
+    public required string ApproximateStartCell { get; init; }
+    public required string ApproximateEndCell { get; init; }
+    public required string MovementVector { get; init; }
+    public required string FovRange { get; init; }
+    public required string OrbitDirection { get; init; }
+    public required string FramingClass { get; init; }
+    public required string DeterministicHash { get; init; }
 }
 
 public sealed record CameraShotPlan
@@ -204,6 +256,19 @@ public sealed record CameraShotPlan
     public required bool RequiresHighFpsCapture { get; init; }
     public required string FallbackShotId { get; init; }
     public required IReadOnlyList<string> Warnings { get; init; }
+    public CameraShotFamily Family { get; init; } = CameraShotFamily.PlayerPov;
+    public IReadOnlyList<string> SubjectIds { get; init; } = [];
+    public IReadOnlyList<CameraTargetPoint> TargetPoints { get; init; } = [];
+    public IReadOnlyList<CameraFovPoint> FovCurve { get; init; } = [];
+    public string FramingIntent { get; init; } = "POV continuity";
+    public GameplayVector3 MovementDirection { get; init; } =
+        GameplayVector3.Zero;
+    public SafeCameraVolume? SafetyVolume { get; init; }
+    public bool PreviewRequired { get; init; }
+    public string? VerifiedPresetId { get; init; }
+    public IReadOnlyList<CameraShotFamily> FallbackChain { get; init; } =
+        [CameraShotFamily.PlayerPov];
+    public CameraShotSignature? Signature { get; init; }
 }
 
 public sealed record SafeCameraVolume(
@@ -297,6 +362,29 @@ public sealed record MotivatedEffectDirective(
     double EndSeconds,
     double Intensity);
 
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum EffectRarityTier
+{
+    Common,
+    Occasional,
+    Rare
+}
+
+public sealed record EffectRarityEntry(
+    string SegmentId,
+    string EffectType,
+    EffectRarityTier Tier,
+    double DurationMilliseconds,
+    bool Accepted,
+    string Decision);
+
+public sealed record EffectRarityReport(
+    string SchemaVersion,
+    int RareEffectCount,
+    int LensWarpCount,
+    IReadOnlyList<EffectRarityEntry> Entries,
+    IReadOnlyList<string> Violations);
+
 public sealed record CinematicSequenceSegment
 {
     public required string Id { get; init; }
@@ -356,7 +444,27 @@ public sealed record CameraPreviewMetrics(
     double MotionScore,
     double JumpScore,
     double StaticRatio,
-    bool HasVideo);
+    bool HasVideo)
+{
+    public double? SubjectVisibleRatio { get; init; }
+    public double? SubjectCenterDistance { get; init; }
+    public double? HeadRoom { get; init; }
+    public double? LeadRoom { get; init; }
+    public double? SubjectScale { get; init; }
+    public double? SubjectClippingRatio { get; init; }
+    public double? SubjectLossDurationSeconds { get; init; }
+    public double? GroupCoverageRatio { get; init; }
+    public int WallIntersectionCount { get; init; }
+    public bool CameraInsideGeometry { get; init; }
+    public double? MaximumAngularVelocity { get; init; }
+    public double? MaximumFovVelocity { get; init; }
+    public double? RepeatedCompositionScore { get; init; }
+    public double? ExcessiveMotionRatio { get; init; }
+    public int CameraTeleportCount { get; init; }
+    public double? ModelClippingRatio { get; init; }
+    public bool DemoPlaybackStripDetected { get; init; }
+    public bool UnexpectedHandsOnlyPresentation { get; init; }
+}
 
 public sealed record CameraPreviewResult
 {
@@ -403,6 +511,8 @@ public sealed record CinematicMoviePlan
     public required SoundDesignPlan SoundDesign { get; init; }
     public required ColorNarrativePlan Color { get; init; }
     public required IReadOnlyList<string> Warnings { get; init; }
+    public EffectRarityReport? EffectRarity { get; init; }
+    public ShotDiversityReport? CameraDiversity { get; init; }
 }
 
 public sealed record CinematicAlignmentReport
@@ -430,7 +540,7 @@ public sealed class CinematicEffectPolicy
     public int MaximumVisibleFilterEffectsPerHighlight { get; init; } = 1;
     public int MaximumFlashEffectsPerMovie { get; init; } = 2;
     public int MaximumRgbSplitEffectsPerMovie { get; init; } = 1;
-    public int MaximumLensWarpEffectsPerMovie { get; init; } = 1;
+    public int MaximumLensWarpEffectsPerMovie { get; init; } = 2;
     public bool PreferCameraMotionOverFilterEffects { get; init; } = true;
 }
 

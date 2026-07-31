@@ -46,7 +46,12 @@ public enum ArtifactType
     MusicAlignmentResult, ColorGradeResult, DynamicEffectPlan, DynamicEffectResult,
     FfmpegCapabilities, CinematicMusicNarrative, CinematicMoviePlan,
     CinematicAlignmentReport, CameraCapabilities, CameraPreview,
-    InteractiveTimelinePlan, TimelineDiagnostics
+    InteractiveTimelinePlan, TimelineDiagnostics, RealWaveformEnvelope,
+    LocalRegionPlans, CameraShotCandidates, CameraShotSelectionReport,
+    CameraShotDiversityReport, CameraPreviewQualityReport,
+    SourceIntervalReuseReport, EffectRarityReport, TransitionBoundaryReport,
+    FrameContinuityReport, MusicGainEnvelope, GameplayAudioEnvelope,
+    DemoUiDetectionReport, ExcerptExtensionReport, CinematicAcceptanceReport
 }
 
 public sealed class Generation

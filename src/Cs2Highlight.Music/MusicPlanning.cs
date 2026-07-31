@@ -301,6 +301,18 @@ public static class TimeWarpMath
     public static double OutputDuration(TimeWarpPlan plan, double sourceDuration) =>
         MapSourceTime(plan, sourceDuration);
 
+    public static double CoveredOutputDuration(
+        TimeWarpPlan plan,
+        double sourceDuration)
+    {
+        if (!plan.UsesLocalRamp || plan.Segments.Count == 0)
+            return OutputDuration(plan, sourceDuration);
+        double coveredSourceDuration = Math.Min(
+            sourceDuration,
+            plan.Segments.Max(value => value.SourceEndSeconds));
+        return OutputDuration(plan, coveredSourceDuration);
+    }
+
     public static double MapSourceTime(TimeWarpPlan plan, double sourceTime)
     {
         if (sourceTime <= 0)
@@ -354,7 +366,7 @@ public sealed class MusicEditPlanner(
         IReadOnlyList<SelectedHighlight> highlights,
         MusicEditOptions options)
     {
-        if (music.SchemaVersion is not ("1.0" or "2.0"))
+        if (music.SchemaVersion is not ("1.0" or "2.0" or "2.1"))
             throw new InvalidOperationException("UNSUPPORTED_MUSIC_ANALYSIS_SCHEMA");
         SelectedHighlight[] ordered = highlights
             .OrderBy(value => value.SelectionOrder)

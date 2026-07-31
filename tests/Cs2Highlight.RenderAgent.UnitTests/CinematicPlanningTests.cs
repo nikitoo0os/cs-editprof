@@ -587,30 +587,12 @@ public sealed class CinematicPlanningTests
         Assert.Equal(MotivatedEffectReason.FinalKill, pov[0].Reason);
         Assert.Empty(camera);
         Assert.Empty(calm);
-        Assert.Equal(
-            7,
-            treatments
-                .Select(value => string.Join(
-                    "+",
-                    value.Select(effect => effect.EffectType)))
-                .Distinct(StringComparer.Ordinal)
-                .Count());
-        Assert.All(treatments, value => Assert.InRange(value.Count, 3, 5));
-        Assert.True(treatments.Count(value => value.All(effect =>
-            !effect.EffectType.Contains(
-                "Zoom",
-                StringComparison.Ordinal))) >= 4);
-        string[] allTypes = treatments
-            .SelectMany(value => value)
-            .Select(value => value.EffectType)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        Assert.Contains("CrashZoom", allTypes);
-        Assert.Contains("SmoothZoom", allTypes);
-        Assert.Contains("FrameEcho", allTypes);
-        Assert.Contains("LensWarpPulse", allTypes);
-        Assert.Contains("HitStop", allTypes);
-        Assert.Contains("ZoomBlur", allTypes);
+        Assert.All(treatments, value => Assert.Single(value));
+        Assert.All(treatments, value =>
+            Assert.Equal("PunchZoom", value[0].EffectType));
+        Assert.Single(treatments
+            .Select(value => value[0].EffectType)
+            .Distinct(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -754,7 +736,7 @@ public sealed class CinematicPlanningTests
             highlights.Length,
             plan.Segments.Count(value => value.HighlightId is not null));
         Assert.Contains("HIGHLIGHT_PEAK_TIMELINE_FALLBACK", plan.Warnings);
-        Assert.DoesNotContain(
+        Assert.Contains(
             plan.Warnings,
             value => value.StartsWith(
                 "CINEMATIC_TIMELINE_GAP:",
@@ -1113,7 +1095,7 @@ public sealed class CinematicPlanningTests
         Assert.True(combat[0].OutputStartSeconds >= 4.88);
         Assert.Equal("long-multi", combat[^1].HighlightId);
         Assert.True(combat[^1].OutputEndSeconds <= 39.375);
-        Assert.DoesNotContain(
+        Assert.Contains(
             plan.Warnings,
             value => value.StartsWith(
                 "CINEMATIC_TIMELINE_GAP:",
@@ -1121,7 +1103,7 @@ public sealed class CinematicPlanningTests
     }
 
     [Fact]
-    public void DirectorBuildsContinuousTimelineWhenBrollIsSufficient()
+    public void DirectorDoesNotRepeatSourceIntervalsToHideTimelineGaps()
     {
         SelectedHighlight[] highlights =
         [
@@ -1143,13 +1125,9 @@ public sealed class CinematicPlanningTests
             .ToArray();
 
         Assert.Equal(0, ordered[0].OutputStartSeconds, 6);
-        Assert.All(
-            ordered.Zip(ordered.Skip(1)),
-            pair => Assert.Equal(
-                pair.First.OutputEndSeconds,
-                pair.Second.OutputStartSeconds,
-                6));
-        Assert.DoesNotContain(
+        Assert.Single(ordered.Where(value =>
+            value.BrollCandidateId is not null));
+        Assert.Contains(
             plan.Warnings,
             value => value.StartsWith(
                 "CINEMATIC_TIMELINE_GAP:",
@@ -1600,7 +1578,7 @@ public sealed class CinematicPlanningTests
         new()
         {
             Id = "broll-1",
-            DemoId = "demo",
+            DemoId = "broll-demo",
             RoundNumber = 1,
             Type = BrollCandidateType.PlayerApproach,
             StartTick = 0,

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Cs2Highlight.Analysis;
+using Cs2Highlight.Music;
 using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
 using Microsoft.EntityFrameworkCore;
@@ -9,6 +10,8 @@ namespace Cs2Highlight.Web.Tests;
 
 public sealed class VisualRegressionTests
 {
+    private static readonly JsonSerializerOptions WebJson =
+        new(JsonSerializerDefaults.Web);
     [Fact(Timeout = 180_000)]
     [Trait("Category", "Visual")]
     public async Task KeyProductStatesHaveStableDesktopAndMobileScreenshotsWhenOptedIn()
@@ -52,6 +55,39 @@ public sealed class VisualRegressionTests
             await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["movie-settings"]}/music", output, "music-analyzed");
             await ScreenshotAsync(page, output, "movie-settings");
             await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["timeline"]}/timeline", output, "interactive-timeline");
+            await Assertions.Expect(
+                    page.Locator("[data-timeline-waveform] canvas"))
+                .ToHaveCountAsync(1);
+            await page.Locator("[data-timeline-suggest]").ClickAsync();
+            ILocator markers = page.Locator("[data-anchor-id]");
+            await Assertions.Expect(markers).ToHaveCountAsync(5);
+            ILocator regions = page.Locator("[data-region-id]");
+            await Assertions.Expect(regions).ToHaveCountAsync(6);
+            await regions.Last.EvaluateAsync(
+                "element => { element.dataset.unchangedSentinel = 'preserved'; }");
+            const string anchorUpdatePattern =
+                "**/api/generations/*/timeline/anchors/*";
+            await page.RouteAsync(anchorUpdatePattern, async route =>
+            {
+                await Task.Delay(350);
+                await route.ContinueAsync();
+            });
+            await markers.Nth(1).ClickAsync();
+            await page.Keyboard.PressAsync("ArrowRight");
+            await Assertions.Expect(
+                    page.Locator("[data-region-id].is-replanning"))
+                .ToHaveCountAsync(2);
+            await Assertions.Expect(
+                    page.Locator("[data-timeline-validation]"))
+                .ToContainTextAsync("Replanning region");
+            await Assertions.Expect(page.Locator(
+                    "[data-region-id][data-unchanged-sentinel=preserved]"))
+                .ToHaveCountAsync(1);
+            await Assertions.Expect(
+                    page.Locator("[data-region-id].is-replanning"))
+                .ToHaveCountAsync(0, new() { Timeout = 10_000 });
+            await page.UnrouteAsync(anchorUpdatePattern);
+            await ScreenshotAsync(page, output, "timeline-region-replanned");
             await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["checkout"]}/checkout", output, "checkout");
             await CaptureAsync(page, $"{baseUrl}/generations/{fixtures["running"]}", output, "generation-running");
             await page.GetByRole(AriaRole.Button, new() { Name = "Отменить генерацию" }).ClickAsync();
@@ -98,8 +134,20 @@ public sealed class VisualRegressionTests
         string output,
         string name)
     {
-        await page.GotoAsync(url, new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
-        await Assertions.Expect(page.Locator("main")).ToBeVisibleAsync();
+        IResponse? response = await page.GotoAsync(
+            url,
+            new PageGotoOptions { WaitUntil = WaitUntilState.NetworkIdle });
+        ILocator main = page.Locator("main");
+        if (await main.CountAsync() == 0)
+        {
+            string body = await page.Locator("body").InnerTextAsync();
+            throw new InvalidOperationException(
+                $"Visual route did not render <main>: requested={url}, actual={page.Url}, " +
+                $"status={response?.Status}, title={await page.TitleAsync()}, " +
+                $"body={body[..Math.Min(body.Length, 1_000)]}");
+        }
+
+        await Assertions.Expect(main).ToBeVisibleAsync();
         await ScreenshotAsync(page, output, name);
     }
 
@@ -164,6 +212,40 @@ public sealed class VisualRegressionTests
         timeline.EstimatedDurationMilliseconds = 30_000;
         AddHighlights(timeline, selected: true);
         AddMusic(timeline);
+        string waveformDirectory = Path.Combine(
+            Path.GetDirectoryName(databasePath)!,
+            "visual-waveforms",
+            timeline.PublicId);
+        Directory.CreateDirectory(waveformDirectory);
+        string waveformPath = Path.Combine(
+            waveformDirectory,
+            "real-waveform-envelope.json");
+        RealWaveformEnvelopeArtifact waveform = new()
+        {
+            Available = true,
+            ExcerptStartSeconds = 0,
+            ExcerptEndSeconds = 30,
+            SamplesPerSecond = 160,
+            Peaks = Enumerable.Range(0, 4_800)
+                .Select(index => new MusicWaveformPeak(
+                    index / 160d,
+                    0.10 + index % 9 / 18d,
+                    0.15 + index % 13 / 15d))
+                .ToArray(),
+            Warnings = []
+        };
+        await File.WriteAllTextAsync(
+            waveformPath,
+            JsonSerializer.Serialize(waveform, WebJson));
+        timeline.Artifacts.Add(new GenerationArtifact
+        {
+            Type = ArtifactType.RealWaveformEnvelope,
+            FileName = Path.GetFileName(waveformPath),
+            StoredPath = waveformPath,
+            ContentType = "application/json",
+            FileSizeBytes = new FileInfo(waveformPath).Length,
+            CreatedAt = DateTimeOffset.UtcNow
+        });
 
         // This non-worker status keeps the progress dashboard stable while the
         // external test server's real background worker remains enabled.
@@ -339,10 +421,16 @@ public sealed class VisualRegressionTests
                 .Options;
         await using GenerationDbContext db = new(options);
         string[] ids = publicIds.Distinct().ToArray();
-        Generation[] generations = await db.Generations
-            .Where(value => ids.Contains(value.PublicId))
-            .ToArrayAsync();
-        db.Generations.RemoveRange(generations);
+        foreach (string id in ids)
+        {
+            Generation? generation = await db.Generations
+                .SingleOrDefaultAsync(value => value.PublicId == id);
+            if (generation is not null)
+            {
+                db.Generations.Remove(generation);
+            }
+        }
+
         await db.SaveChangesAsync();
     }
 

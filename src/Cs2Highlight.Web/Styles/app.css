@@ -1914,12 +1914,19 @@
     background: linear-gradient(180deg, rgb(34 211 238 / 0.045), rgb(34 211 238 / 0.01));
   }
 
-  .timeline-waveform i {
+  .timeline-waveform__canvas {
     width: 100%;
-    height: max(2px, var(--wave-height));
-    border-radius: 2px;
-    background: linear-gradient(180deg, #67e8f9, #0891b2);
-    opacity: 0.68;
+    height: 100%;
+  }
+
+  .timeline-waveform.is-unavailable {
+    justify-content: center;
+  }
+
+  .timeline-waveform__unavailable {
+    color: var(--color-app-muted);
+    font-size: 11px;
+    letter-spacing: 0.02em;
   }
 
   .timeline-playhead {
@@ -2122,11 +2129,41 @@
     color: #9fc5ff;
     font-size: 8px;
     white-space: nowrap;
+    cursor: pointer;
+    font-family: inherit;
+    text-align: left;
   }
 
   .timeline-gap small {
     color: #7186a4;
     font-size: 8px;
+  }
+
+  .timeline-gap em {
+    color: #64748b;
+    font-size: 7px;
+    font-style: normal;
+    text-transform: uppercase;
+  }
+
+  .timeline-gap--camerafallback,
+  .timeline-gap--retiming {
+    border-color: rgb(251 191 36 / 0.32);
+  }
+
+  .timeline-gap--shortenedexcerpt,
+  .timeline-gap--invalid {
+    border-color: rgb(251 113 133 / 0.4);
+  }
+
+  .timeline-gap.is-replanning {
+    opacity: 0.62;
+    outline: 1px dashed #67e8f9;
+    animation: timeline-region-pulse 0.8s ease-in-out infinite alternate;
+  }
+
+  @keyframes timeline-region-pulse {
+    to { opacity: 1; }
   }
 
   .timeline-gap--intro,
@@ -2202,6 +2239,22 @@
   .timeline-status--acceptable { color: #fde68a; }
   .timeline-status--risky { color: #fdba74; }
   .timeline-status--invalid { color: #fda4af; }
+  .timeline-status--retiming,
+  .timeline-status--camerafallback { color: #fde68a; }
+  .timeline-status--shortenedexcerpt { color: #fdba74; }
+
+  .timeline-region-preview {
+    color: var(--color-app-text-secondary);
+    font-size: 11px;
+  }
+
+  .timeline-region-preview video {
+    display: block;
+    width: 100%;
+    margin-top: 10px;
+    border: 1px solid var(--color-app-border);
+    border-radius: 8px;
+  }
 
   .timeline-inspector-grid {
     display: grid;

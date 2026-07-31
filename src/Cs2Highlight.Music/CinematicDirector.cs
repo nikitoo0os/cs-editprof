@@ -21,8 +21,8 @@ public sealed class CinematicDirector(
     IColorNarrativePlanner color,
     ICinematicDurationPolicy durationPolicy) : ICinematicDirector
 {
-    public const string SchemaVersion = "1.0";
-    public const string PlannerVersion = "10.0";
+    public const string SchemaVersion = "2.0";
+    public const string PlannerVersion = "10.1";
 
     public CinematicMoviePlan Create(
         MusicNarrative music,
@@ -307,6 +307,10 @@ public sealed class CinematicDirector(
             .ThenBy(value => value.Role)
             .ThenBy(value => value.Id, StringComparer.Ordinal)
             .ToArray();
+        ordered = EffectRarityPolicy.Apply(
+                ordered,
+                out EffectRarityReport effectRarity)
+            .ToArray();
         int highFpsShots = 0;
         ordered = ordered.Select(value =>
         {
@@ -366,7 +370,11 @@ public sealed class CinematicDirector(
             HighlightMatches = effectiveMatches,
             SoundDesign = sound.Create(sections),
             Color = color.Create(sections, options.ColorGrade),
-            Warnings = warnings.Distinct(StringComparer.Ordinal).ToArray()
+            Warnings = warnings.Distinct(StringComparer.Ordinal).ToArray(),
+            EffectRarity = effectRarity,
+            CameraDiversity = ShotDiversityPolicy.AnalyzeFilm(
+                ordered.Select(value => value.Camera).ToArray(),
+                targetDuration)
         };
     }
 
@@ -528,20 +536,29 @@ public sealed class CinematicDirector(
         List<string> warnings)
     {
         double used = 0;
-        double brollLimit = duration.MaximumBrollSeconds;
+        double brollLimit = Math.Min(
+            duration.MaximumBrollSeconds,
+            targetDuration * 0.45);
         HashSet<string> selected = new(StringComparer.Ordinal);
+        List<CameraShotPlan> selectedCameras = [];
         int index = 0;
         CinematicSequenceSegment[] highlights = segments
             .Where(value => value.HighlightId is not null)
             .OrderBy(value => value.OutputStartSeconds)
             .ToArray();
+        HashSet<string> selectedIntervals = highlights
+            .Select(value =>
+                $"{value.Camera.DemoId}:{value.Camera.StartTick}-" +
+                $"{value.Camera.EndTick}")
+            .ToHashSet(StringComparer.Ordinal);
         double cursor = 0;
         foreach (CinematicSequenceSegment? next in highlights
                      .Cast<CinematicSequenceSegment?>()
                      .Append(null))
         {
             double gapEnd = next?.OutputStartSeconds ?? targetDuration;
-            while (gapEnd - cursor >= 0.05 &&
+            while (gapEnd - cursor >=
+                       MeaningfulShotMinimumSeconds &&
                    used < brollLimit - 0.001)
             {
                 double absoluteMusicTime =
@@ -560,7 +577,11 @@ public sealed class CinematicDirector(
                     MusicSectionType.BuildUp or
                     MusicSectionType.PreDrop;
                 var choice = broll
-                    .Where(value => !selected.Contains(value.Id))
+                    .Where(value =>
+                        !selected.Contains(value.Id) &&
+                        !SourceIntervalPolicy.OverlapsAny(
+                            SourceInterval(value),
+                            selectedIntervals))
                     .Select(candidate =>
                     {
                         double durationForCandidate = Math.Min(
@@ -581,17 +602,39 @@ public sealed class CinematicDirector(
                         BrollCandidate plannedCandidate = TrimCandidate(
                             candidate,
                             durationForCandidate);
+                        CameraShotPlan camera = cameraPlanner.Create(
+                            plannedCandidate,
+                            options.Camera);
+                        if (camera.Family != CameraShotFamily.PlayerPov &&
+                            durationForCandidate <
+                            MinimumFreeCameraShotSeconds)
+                        {
+                            camera = CameraPathPlanner.Pov(
+                                plannedCandidate,
+                                ["FREE_CAMERA_SHOT_BELOW_MINIMUM_DURATION"]);
+                        }
+                        ShotDiversityDecision diversity =
+                            ShotDiversityPolicy.Evaluate(
+                                camera,
+                                options.MapName,
+                                selectedCameras);
+                        if (!diversity.Accepted &&
+                            camera.Family != CameraShotFamily.PlayerPov)
+                        {
+                            camera = CameraPathPlanner.Pov(
+                                plannedCandidate,
+                                diversity.RejectionReasons);
+                        }
                         return new
                         {
                             Candidate = candidate,
                             Planned = plannedCandidate,
                             Duration = durationForCandidate,
-                            Camera = cameraPlanner.Create(
-                                plannedCandidate,
-                                options.Camera)
+                            Camera = camera
                         };
                     })
-                    .Where(value => value.Duration >= 0.05)
+                    .Where(value => value.Duration >=
+                        MeaningfulShotMinimumSeconds)
                     .OrderByDescending(value =>
                         preferCinematicCamera &&
                         value.Camera.Type != CameraShotType.PlayerPov)
@@ -611,7 +654,7 @@ public sealed class CinematicDirector(
                     break;
                 BrollCandidate candidate = choice.Candidate;
                 double clipDuration = choice.Duration;
-                if (clipDuration < 0.05)
+                if (clipDuration < MeaningfulShotMinimumSeconds)
                     break;
                 CameraShotPlan camera = choice.Camera;
                 if (camera.Type == CameraShotType.PlayerPov)
@@ -621,6 +664,8 @@ public sealed class CinematicDirector(
                 }
                 double end = cursor + clipDuration;
                 selected.Add(candidate.Id);
+                selectedIntervals.Add(SourceInterval(candidate));
+                selectedCameras.Add(camera);
                 used += clipDuration;
                 segments.Add(new CinematicSequenceSegment
                 {
@@ -636,7 +681,7 @@ public sealed class CinematicDirector(
                 });
                 cursor = end;
             }
-            if (gapEnd - cursor > 0.05)
+            if (gapEnd - cursor >= MeaningfulShotMinimumSeconds)
             {
                 warnings.Add(
                     $"CINEMATIC_TIMELINE_GAP:{cursor:F3}-{gapEnd:F3}");
@@ -645,6 +690,12 @@ public sealed class CinematicDirector(
                 cursor = Math.Max(cursor, next.OutputEndSeconds);
         }
     }
+
+    private const double MeaningfulShotMinimumSeconds = 0.4;
+    private const double MinimumFreeCameraShotSeconds = 0.75;
+
+    private static string SourceInterval(BrollCandidate candidate) =>
+        $"{candidate.DemoId}:{candidate.StartTick}-{candidate.EndTick}";
 
     private static CinematicSequenceRole Role(MusicSectionType section) =>
         section switch

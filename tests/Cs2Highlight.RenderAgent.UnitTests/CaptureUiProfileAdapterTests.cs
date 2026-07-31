@@ -14,6 +14,8 @@ public sealed class CaptureUiProfileAdapterTests
         Assert.Contains("cl_showdemooverlay 0", commands);
         Assert.Contains("cl_drawhud 1", commands);
         Assert.Contains("r_drawviewmodel 1", commands);
+        Assert.Contains("r_show_build_info 0", commands);
+        Assert.Contains("cl_trueview_show_status 0", commands);
         Assert.DoesNotContain("demoui", commands);
         List<string> ordered = commands.ToList();
         Assert.True(
@@ -32,6 +34,8 @@ public sealed class CaptureUiProfileAdapterTests
         Assert.Contains("cl_showdemooverlay 0", commands);
         Assert.Equal("r_drawviewmodel 1", commands[5]);
         Assert.Equal("r_drawviewmodel 0", commands[^1]);
+        Assert.Contains("r_show_build_info 0", commands);
+        Assert.Contains("cl_trueview_show_status 0", commands);
         Assert.DoesNotContain("demoui", commands);
     }
 }

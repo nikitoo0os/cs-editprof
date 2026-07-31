@@ -1,5 +1,6 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json.Serialization;
+using Cs2Highlight.Music;
 
 namespace Cs2Highlight.Web.Domain;
 
@@ -59,6 +60,117 @@ public enum TimelineGapState
     Planned,
     Failed,
     Locked
+}
+
+[JsonConverter(typeof(JsonStringEnumConverter))]
+public enum LocalRegionOutcome
+{
+    Natural,
+    Retiming,
+    CameraFallback,
+    ShortenedExcerpt,
+    Invalid
+}
+
+public sealed record LocalMusicBounds(
+    long StartMilliseconds,
+    long EndMilliseconds);
+
+public sealed record LocalSourceMaterial
+{
+    public required string MaterialId { get; init; }
+    public required string MaterialType { get; init; }
+    public required string SourceInterval { get; init; }
+    public required int NarrativePriority { get; init; }
+    public required double EditorialScore { get; init; }
+    public required bool Reused { get; init; }
+    public required string Rationale { get; init; }
+}
+
+public sealed record LocalHighlightSegmentPlan
+{
+    public required string AnchorId { get; init; }
+    public required string HighlightId { get; init; }
+    public required long SourceStartTick { get; init; }
+    public required long PrimaryKillTick { get; init; }
+    public required long SafeEndTick { get; init; }
+    public required long OutputStartMilliseconds { get; init; }
+    public required long PrimaryKillOutputMilliseconds { get; init; }
+    public required long OutputEndMilliseconds { get; init; }
+    public required double PreRollSeconds { get; init; }
+    public required double PostKillSeconds { get; init; }
+    public required AnchorFeasibilityStatus Feasibility { get; init; }
+}
+
+public sealed record LocalBrollSegmentPlan
+{
+    public required string MaterialId { get; init; }
+    public required string SourceInterval { get; init; }
+    public required long OutputStartMilliseconds { get; init; }
+    public required long OutputEndMilliseconds { get; init; }
+    public required string NarrativeRole { get; init; }
+    public required bool IsFreeCamera { get; init; }
+}
+
+public sealed record LocalTransitionDecision(
+    string Type,
+    long BoundaryMilliseconds,
+    int DurationMilliseconds,
+    string Rationale);
+
+public sealed record LocalRetimingDecision(
+    double BaseSpeed,
+    double LocalSpeed,
+    bool UsesLocalRamp,
+    string Rationale);
+
+public sealed record LocalAudioDecision(
+    double MusicGainDb,
+    double GameplayGainDb,
+    bool MusicDuckingEnabled,
+    bool GameplayTransientAccent,
+    string Rationale);
+
+public sealed record LocalEffectDecision(
+    string EffectType,
+    string Rarity,
+    long StartMilliseconds,
+    long EndMilliseconds,
+    string Motivation);
+
+public sealed record LocalRegionValidation
+{
+    public required bool IsValid { get; init; }
+    public required LocalRegionOutcome Outcome { get; init; }
+    public required int SourceIntervalReuseCount { get; init; }
+    public required int OneFrameSegmentCount { get; init; }
+    public required bool LockedAnchorTimesExact { get; init; }
+    public required IReadOnlyList<string> Warnings { get; init; }
+}
+
+public sealed record LocalTimelineRegionPlan
+{
+    public required string SchemaVersion { get; init; }
+    public required string RegionId { get; init; }
+    public string? PreviousAnchorId { get; init; }
+    public string? NextAnchorId { get; init; }
+    public required LocalMusicBounds MusicBounds { get; init; }
+    public required double AvailableDurationSeconds { get; init; }
+    public required IReadOnlyList<LocalSourceMaterial> SelectedSourceMaterials
+        { get; init; }
+    public LocalHighlightSegmentPlan? HighlightSegment { get; init; }
+    public required IReadOnlyList<LocalBrollSegmentPlan> BrollSegments
+        { get; init; }
+    public required IReadOnlyList<CameraShotPlan> CameraShots { get; init; }
+    public required IReadOnlyList<LocalTransitionDecision> Transitions
+        { get; init; }
+    public required LocalRetimingDecision Retiming { get; init; }
+    public required LocalAudioDecision Audio { get; init; }
+    public required IReadOnlyList<LocalEffectDecision> Effects { get; init; }
+    public required LocalRegionValidation Validation { get; init; }
+    public required string DeterministicSeed { get; init; }
+    public required string PlannerVersion { get; init; }
+    public required bool ReusedSuccessfulPlan { get; init; }
 }
 
 public sealed record UserKillAnchor

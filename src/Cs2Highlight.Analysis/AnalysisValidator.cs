@@ -3,7 +3,7 @@ namespace Cs2Highlight.Analysis;
 public static class AnalysisValidator
 {
     private static readonly HashSet<string> SupportedSchemaVersions =
-        new(StringComparer.Ordinal) { "1.0", "1.1", "1.2" };
+        new(StringComparer.Ordinal) { "1.0", "1.1", "1.2", "1.3" };
 
     public static DemoAnalysis Validate(DemoAnalysis analysis)
     {
@@ -11,7 +11,7 @@ public static class AnalysisValidator
         {
             throw Error(
                 "UNSUPPORTED_ANALYSIS_SCHEMA",
-                $"Expected demo-analysis schema 1.0, 1.1 or 1.2, got {analysis.SchemaVersion}.");
+                $"Expected demo-analysis schema 1.0, 1.1, 1.2 or 1.3, got {analysis.SchemaVersion}.");
         }
         if (analysis.Demo.TickRate <= 0)
         {

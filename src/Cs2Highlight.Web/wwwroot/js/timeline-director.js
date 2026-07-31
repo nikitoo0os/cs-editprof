@@ -19,9 +19,11 @@ if (root) {
 
   let state;
   let selectedAnchorId = null;
+  let selectedRegionId = null;
   let draggedHighlightId = null;
   let pointerDrag = null;
   let optimisticTime = null;
+  let previewEndTime = null;
 
   const statusLabels = {
     natural: "Natural",
@@ -79,6 +81,17 @@ if (root) {
 
   async function mutate(path, method, body) {
     const previous = state;
+    const anchorMatch = path.match(/\/anchors\/([^?]+)/);
+    if (anchorMatch) {
+      const anchorId = decodeURIComponent(anchorMatch[1]);
+      state.gaps
+        .filter(gap => gap.previousAnchorId === anchorId || gap.nextAnchorId === anchorId)
+        .forEach(gap => {
+          const element = gapTrack.querySelector(`[data-region-id="${CSS.escape(gap.id)}"]`);
+          if (element) element.classList.add("is-replanning");
+        });
+      announce("Replanning region", "neutral");
+    }
     try {
       state = await api(path, {
         method,
@@ -87,7 +100,7 @@ if (root) {
           concurrencyToken: state.concurrencyToken
         })
       });
-      render();
+      render(previous);
       return true;
     } catch {
       state = state || previous;
@@ -97,18 +110,42 @@ if (root) {
   }
 
   function renderWaveform() {
-    if (waveform.childElementCount) return;
-    const fragment = document.createDocumentFragment();
-    for (let index = 0; index < 240; index += 1) {
-      const bar = document.createElement("i");
-      const shape = Math.sin(index * 0.39) * 0.22
-        + Math.sin(index * 0.071) * 0.28
-        + Math.sin(index * 1.17) * 0.12;
-      const envelope = 0.45 + 0.55 * Math.sin((index / 239) * Math.PI);
-      bar.style.setProperty("--wave-height", `${Math.round((0.35 + Math.abs(shape)) * envelope * 100)}%`);
-      fragment.append(bar);
+    const pixelWidth = Math.round(waveform.getBoundingClientRect().width * Math.max(1, window.devicePixelRatio || 1));
+    const key = `${state.waveform.schemaVersion}:${state.waveform.available}:${state.waveform.peaks.length}:${state.durationSeconds}:${pixelWidth}`;
+    if (waveform.dataset.renderKey === key) return;
+    waveform.dataset.renderKey = key;
+    waveform.replaceChildren();
+    waveform.classList.toggle("is-unavailable", !state.waveform.available);
+    if (!state.waveform.available || !state.waveform.peaks.length) {
+      const message = document.createElement("span");
+      message.className = "timeline-waveform__unavailable";
+      message.textContent = "Waveform unavailable · аудио доступно";
+      waveform.append(message);
+      announce("Waveform не построена. Показывать декоративную форму запрещено; воспроизведение остаётся доступным.", "warning");
+      return;
     }
-    waveform.append(fragment);
+    const drawing = document.createElement("canvas");
+    drawing.className = "timeline-waveform__canvas";
+    drawing.setAttribute("aria-hidden", "true");
+    waveform.append(drawing);
+    const bounds = waveform.getBoundingClientRect();
+    const ratio = Math.max(1, window.devicePixelRatio || 1);
+    const width = Math.max(1, Math.round(bounds.width * ratio));
+    const height = Math.max(1, Math.round(bounds.height * ratio));
+    drawing.width = width;
+    drawing.height = height;
+    const context = drawing.getContext("2d");
+    const center = height / 2;
+    context.clearRect(0, 0, width, height);
+    context.strokeStyle = "rgba(103, 232, 249, 0.78)";
+    context.lineWidth = Math.max(1, ratio);
+    context.beginPath();
+    for (const peak of state.waveform.peaks) {
+      const x = clamp(peak.timeSeconds / state.durationSeconds, 0, 1) * width;
+      context.moveTo(x, center - clamp(peak.max, 0, 1) * center);
+      context.lineTo(x, center + clamp(peak.min, 0, 1) * center);
+    }
+    context.stroke();
   }
 
   function renderRuler() {
@@ -170,17 +207,55 @@ if (root) {
     }).join("");
   }
 
-  function renderGaps() {
-    gapTrack.innerHTML = state.gaps.map(gap => `
-      <span class="timeline-gap timeline-gap--${gap.role.toLowerCase()}"
-            style="left:${percent(gap.startSeconds)};width:${percent(gap.endSeconds - gap.startSeconds)}"
-            title="${escapeHtml(gap.role)} · ${escapeHtml(gap.camera)}">
+  function renderGaps(previousGaps = null) {
+    const previous = new Map((previousGaps || []).map(gap => [gap.id, JSON.stringify(gap)]));
+    const retained = new Set();
+    for (const gap of state.gaps) {
+      retained.add(gap.id);
+      let element = gapTrack.querySelector(`[data-region-id="${CSS.escape(gap.id)}"]`);
+      if (element && previous.get(gap.id) === JSON.stringify(gap)) continue;
+      if (!element) {
+        element = document.createElement("button");
+        element.type = "button";
+        gapTrack.append(element);
+      }
+      element.className = `timeline-gap timeline-gap--${gap.role.toLowerCase()} timeline-gap--${gap.outcome.toLowerCase()}`;
+      element.dataset.regionId = gap.id;
+      element.style.left = percent(gap.startSeconds);
+      element.style.width = percent(gap.endSeconds - gap.startSeconds);
+      element.title = `${gap.role} · ${gap.camera} · ${gap.material} · ${gap.cameraVerification}`;
+      element.innerHTML = `
         <strong>${escapeHtml(gap.role)}</strong>
-        <small>${escapeHtml(gap.camera)}</small>
-      </span>`).join("");
+        <small>${escapeHtml(gap.camera)} · ${escapeHtml(gap.outcome)}</small>
+        <em>${gap.reused ? "Reused" : "Unique"}${gap.cameraFallback ? " · fallback" : ""}</em>`;
+    }
+    gapTrack.querySelectorAll("[data-region-id]").forEach(element => {
+      if (!retained.has(element.dataset.regionId)) element.remove();
+    });
   }
 
   function renderInspector() {
+    const region = state.gaps.find(item => item.id === selectedRegionId);
+    if (region) {
+      inspector.innerHTML = `
+        <div class="timeline-inspector-content">
+          <div class="timeline-inspector-title">
+            <div><strong>${escapeHtml(region.role)}</strong><span>${formatTime(region.startSeconds)}–${formatTime(region.endSeconds)}</span></div>
+            <span class="timeline-status timeline-status--${region.outcome.toLowerCase()}">${escapeHtml(region.outcome)}</span>
+          </div>
+          <dl class="timeline-inspector-grid">
+            <div><dt>Camera</dt><dd>${escapeHtml(region.camera)}</dd></div>
+            <div><dt>Material</dt><dd>${escapeHtml(region.material)}</dd></div>
+            <div><dt>Source</dt><dd>${region.reused ? "Reused plan" : "Unique interval"}</dd></div>
+            <div><dt>Verification</dt><dd>${escapeHtml(region.cameraVerification)}</dd></div>
+          </dl>
+          <div class="timeline-inspector-actions">
+            <button type="button" class="btn btn-ghost" data-region-preview="${escapeHtml(region.id)}">Preview region</button>
+          </div>
+          <div class="timeline-region-preview" data-region-preview-media></div>
+        </div>`;
+      return;
+    }
     const anchor = state.anchors.find(item => item.id === selectedAnchorId);
     if (!anchor) {
       inspector.innerHTML = `
@@ -252,13 +327,13 @@ if (root) {
     }
   }
 
-  function render() {
+  function render(previous = null) {
     renderWaveform();
     renderRuler();
     renderSections();
     renderPeaks();
     renderAnchors();
-    renderGaps();
+    renderGaps(previous?.gaps);
     renderInspector();
     renderSummary();
   }
@@ -298,6 +373,7 @@ if (root) {
     if (!marker || state.isLocked) return;
     const anchor = state.anchors.find(item => item.id === marker.dataset.anchorId);
     selectedAnchorId = anchor.id;
+    selectedRegionId = null;
     renderInspector();
     if (anchor.isLocked) return;
     marker.setPointerCapture(event.pointerId);
@@ -339,6 +415,16 @@ if (root) {
     const marker = event.target.closest("[data-anchor-id]");
     if (!marker) return;
     selectedAnchorId = marker.dataset.anchorId;
+    selectedRegionId = null;
+    renderAnchors();
+    renderInspector();
+  });
+
+  gapTrack.addEventListener("click", event => {
+    const region = event.target.closest("[data-region-id]");
+    if (!region) return;
+    selectedRegionId = region.dataset.regionId;
+    selectedAnchorId = null;
     renderAnchors();
     renderInspector();
   });
@@ -426,12 +512,35 @@ if (root) {
     }
     if (event.target.closest("[data-inspector-preview]")) {
       const anchor = state.anchors.find(item => item.id === selectedAnchorId);
-      audio.currentTime = anchor.targetMusicTimeSeconds;
+      audio.currentTime = state.waveform.excerptStartSeconds + anchor.targetMusicTimeSeconds;
+      previewEndTime = state.waveform.excerptStartSeconds + Math.min(
+        state.durationSeconds,
+        anchor.targetMusicTimeSeconds + 3);
       await audio.play().catch(() => announce("Audio preview недоступен", "warning"));
       return;
     }
+    const regionPreview = event.target.closest("[data-region-preview]");
+    if (regionPreview) {
+      const preview = await api(`/regions/${encodeURIComponent(regionPreview.dataset.regionPreview)}/preview`);
+      previewEndTime = state.waveform.excerptStartSeconds + preview.endSeconds;
+      audio.currentTime = state.waveform.excerptStartSeconds + preview.startSeconds;
+      const media = inspector.querySelector("[data-region-preview-media]");
+      if (preview.cameraPreviewUrl) {
+        media.innerHTML = `<video controls playsinline src="${escapeHtml(preview.cameraPreviewUrl)}"></video>`;
+      } else {
+        media.textContent = `${preview.audioMix} · camera preview unavailable`;
+      }
+      await audio.play().catch(() => announce("Audio preview unavailable", "warning"));
+      return;
+    }
     if (event.target.closest("[data-timeline-play]")) {
-      if (audio.paused) await audio.play().catch(() => announce("Audio preview недоступен", "warning"));
+      if (audio.paused) {
+        const excerptStart = state.waveform.excerptStartSeconds;
+        const excerptEnd = excerptStart + state.durationSeconds;
+        if (audio.currentTime < excerptStart || audio.currentTime >= excerptEnd) audio.currentTime = excerptStart;
+        previewEndTime = null;
+        await audio.play().catch(() => announce("Audio preview недоступен", "warning"));
+      }
       else audio.pause();
       return;
     }
@@ -453,7 +562,7 @@ if (root) {
       });
     }
     if (event.target.matches("[data-timeline-zoom]")) {
-      const playheadRatio = audio.currentTime / state.durationSeconds;
+      const playheadRatio = (audio.currentTime - state.waveform.excerptStartSeconds) / state.durationSeconds;
       canvas.style.setProperty("--timeline-zoom", event.target.value);
       requestAnimationFrame(() => {
         scroll.scrollLeft = Math.max(
@@ -478,7 +587,7 @@ if (root) {
   canvas.addEventListener("click", event => {
     if (event.target.closest("[data-anchor-id]")) return;
     const rect = canvas.getBoundingClientRect();
-    audio.currentTime = clamp(
+    audio.currentTime = state.waveform.excerptStartSeconds + clamp(
       ((event.clientX - rect.left) / rect.width) * state.durationSeconds,
       0,
       state.durationSeconds);
@@ -522,7 +631,16 @@ if (root) {
 
   function updatePlayhead() {
     if (!state) return;
-    const current = clamp(audio.currentTime, 0, state.durationSeconds);
+    const excerptEnd = state.waveform.excerptStartSeconds + state.durationSeconds;
+    if (!audio.paused && (audio.currentTime >= excerptEnd ||
+      (previewEndTime && audio.currentTime >= previewEndTime))) {
+      audio.pause();
+      previewEndTime = null;
+    }
+    const current = clamp(
+      audio.currentTime - state.waveform.excerptStartSeconds,
+      0,
+      state.durationSeconds);
     playhead.style.left = percent(current);
     timeOutput.textContent = formatTime(current);
     root.querySelector("[data-timeline-play]").textContent = audio.paused ? "▶" : "❚❚";
@@ -531,6 +649,12 @@ if (root) {
   audio.addEventListener("timeupdate", updatePlayhead);
   audio.addEventListener("play", updatePlayhead);
   audio.addEventListener("pause", updatePlayhead);
+
+  new ResizeObserver(() => {
+    if (!state) return;
+    delete waveform.dataset.renderKey;
+    renderWaveform();
+  }).observe(waveform);
 
   load().catch(error => announce(error.message, "error"));
 }

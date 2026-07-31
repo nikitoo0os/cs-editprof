@@ -15,9 +15,10 @@ dotnet build .\Cs2Highlight.RenderPoC.sln -c Release
 dotnet test .\Cs2Highlight.RenderPoC.sln -c Release --no-build
 ```
 
-The parser output must use schema `1.2`, contain timeline frames for the
-selected SteamID and have non-empty trajectories. Music analysis must use
-schema `2.0`, a frame hop between 20 and 50 ms, detailed sections and musical
+The parser output must use schema `1.3`, contain sampled timeline frames for
+all connected players, gameplay state and non-empty trajectories. Music
+analysis must use schema `2.1`, include a real 100–200 Hz mono waveform
+envelope, a frame hop between 20 and 50 ms, detailed sections and musical
 peaks.
 
 ## 2. FFmpeg cinematic fixture

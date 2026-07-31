@@ -216,7 +216,7 @@ public sealed partial class GenerationWorker(
             analysis = await ReadJsonAsync<MusicAnalysis>(
                 analysisPath, cancellationToken);
         }
-        if (analysis?.SchemaVersion != "2.0" ||
+        if (analysis?.SchemaVersion is not ("2.0" or "2.1") ||
             analysis.Frames.Count == 0 ||
             analysis.FrameHopSeconds is < 0.02 or > 0.05)
         {
@@ -594,6 +594,10 @@ public sealed partial class GenerationWorker(
             ? GenerationStatus.RenderingHighlights
             : GenerationStatus.RenderingClips;
         Dictionary<string, string> rendered = new(StringComparer.Ordinal);
+        Dictionary<string, string> renderJobPaths =
+            new(StringComparer.Ordinal);
+        IReadOnlyList<CameraPreviewResult> persistedCameraFallbacks = [];
+        bool cameraStagesCompleted = false;
         int renderedCount = 0;
         foreach (IGrouping<long, GlobalHighlightCandidate> demoGroup in
                  renderSelection.GroupBy(value => value.SourceDemoId))
@@ -693,6 +697,8 @@ public sealed partial class GenerationWorker(
                         cancellationToken);
                 }
             }
+            foreach (BatchRenderItem item in plan.Items)
+                renderJobPaths[item.HighlightId] = item.RenderJobPath;
             BatchExecutionResult result = await new BatchRenderOrchestrator(
                 new ProcessRenderAgentClient(
                     PipelinePathResolver.Resolve(pipelineOptions.RenderAgentPath) ??
@@ -712,6 +718,202 @@ public sealed partial class GenerationWorker(
                 publicId, renderingStatus,
                 40 + (int)(45d * renderedCount / renderSelection.Count),
                 $"Rendered {renderedCount}/{renderSelection.Count} cinematic sources",
+                cancellationToken);
+        }
+        if (cinematicPlan is not null)
+        {
+            PersistedCameraFallbackReuse persisted =
+                await ReusePersistedCameraFallbacksAsync(
+                    snapshot.Id,
+                    cinematicPlan,
+                    rendered,
+                    cancellationToken);
+            cinematicPlan = persisted.Plan;
+            persistedCameraFallbacks = persisted.Results;
+        }
+        if (cinematicPlan is not null && cinematicPlan.Segments.Any(value =>
+                value.Camera.Family != CameraShotFamily.PlayerPov))
+        {
+            await SetStatusAsync(
+                publicId,
+                GenerationStatus.VerifyingClips,
+                85,
+                "Verifying rendered cinematic source boundaries",
+                cancellationToken);
+            await SetStatusAsync(
+                publicId,
+                GenerationStatus.SynchronizingPeaks,
+                86,
+                "Synchronizing locked kill anchors before camera preview",
+                cancellationToken);
+            await SetStatusAsync(
+                publicId,
+                GenerationStatus.RenderingCameraPreviews,
+                87,
+                "Analyzing rendered non-POV camera previews",
+                cancellationToken);
+            CameraPreviewMediaAnalyzer previewAnalyzer = new(pipelineOptions);
+            CameraShotQualityAnalyzer qualityAnalyzer = new();
+            List<CameraPreviewResult> previews =
+                [.. persistedCameraFallbacks];
+            Dictionary<string, CameraShotPlan> effectiveCameras =
+                new(StringComparer.Ordinal);
+            foreach (CinematicSequenceSegment source in cinematicPlan.Segments
+                         .Where(value =>
+                             value.Camera.Family !=
+                             CameraShotFamily.PlayerPov)
+                         .OrderBy(value => value.OutputStartSeconds)
+                         .ThenBy(value => value.Id, StringComparer.Ordinal))
+            {
+                string sourceId = source.HighlightId ??
+                    source.BrollCandidateId ?? source.Id;
+                if (!rendered.TryGetValue(sourceId, out string? previewPath))
+                    continue;
+                CameraPreviewMetrics metrics =
+                    await previewAnalyzer.AnalyzeAsync(
+                        previewPath,
+                        source.Camera,
+                        cancellationToken);
+                IReadOnlyList<string> warnings = qualityAnalyzer.Validate(
+                    source.Camera,
+                    metrics);
+                if (warnings.Count == 0)
+                {
+                    effectiveCameras[source.Id] = source.Camera;
+                    previews.Add(new CameraPreviewResult
+                    {
+                        CameraShotId = source.Camera.Id,
+                        Status = CameraPreviewStatus.Passed,
+                        PreviewPath = previewPath,
+                        Metrics = metrics,
+                        EffectiveShot = source.Camera,
+                        Attempt = 1,
+                        Warnings = []
+                    });
+                    continue;
+                }
+                if (!renderJobPaths.TryGetValue(
+                        sourceId,
+                        out string? renderJobPath))
+                {
+                    throw new InvalidOperationException(
+                        $"CAMERA_FALLBACK_RENDER_JOB_MISSING:{sourceId}");
+                }
+                JsonBatchStateStore fallbackStore = new();
+                Cs2Highlight.RenderAgent.Application.RenderJob original =
+                    await fallbackStore.LoadAsync<
+                        Cs2Highlight.RenderAgent.Application.RenderJob>(
+                        renderJobPath,
+                        cancellationToken);
+                string fallbackDirectory = Path.Combine(
+                    original.OutputDirectory,
+                    "pov-fallback");
+                Directory.CreateDirectory(fallbackDirectory);
+                Cs2Highlight.RenderAgent.Application.RenderJob fallbackJob =
+                    original with
+                    {
+                        JobId = original.JobId + "-pov-fallback",
+                        OutputDirectory = fallbackDirectory,
+                        CaptureUi = Cs2Highlight.RenderAgent.Application
+                            .CaptureUiProfile.Gameplay,
+                        PresentationMode = Cs2Highlight.RenderAgent.Application
+                            .CapturePresentationMode.PovCombat,
+                        Camera = Cs2Highlight.RenderAgent.Application
+                            .RenderCameraPlan.PlayerPov
+                    };
+                string fallbackJobPath = Path.Combine(
+                    fallbackDirectory,
+                    "render-job.json");
+                await fallbackStore.SaveAsync(
+                    fallbackJobPath,
+                    fallbackJob,
+                    cancellationToken);
+                ProcessRenderAgentClient client = new(
+                    PipelinePathResolver.Resolve(
+                        pipelineOptions.RenderAgentPath) ??
+                    throw new InvalidOperationException(
+                        $"RENDER_AGENT_NOT_FOUND: {pipelineOptions.RenderAgentPath}"));
+                RenderInvocationResult fallback = await client.RenderAsync(
+                    fallbackJobPath,
+                    1,
+                    cancellationToken);
+                if (fallback.ExitCode != 0 ||
+                    fallback.Result?.OutputFile is null)
+                {
+                    throw new InvalidOperationException(
+                        $"CAMERA_POV_FALLBACK_FAILED:{sourceId}:" +
+                        fallback.Error?.Message);
+                }
+                CameraShotPlan effective = PovFallback(
+                    source.Camera,
+                    warnings.Concat(
+                    [
+                        "ALTERNATIVE_TRAJECTORY_UNAVAILABLE",
+                        "ALTERNATIVE_CAMERA_FAMILY_UNAVAILABLE",
+                        "VERIFIED_TRIPOD_FALLBACK_UNAVAILABLE",
+                        "POV_FALLBACK_RENDERED"
+                    ]).ToArray());
+                rendered[sourceId] = fallback.Result.OutputFile;
+                effectiveCameras[source.Id] = effective;
+                previews.Add(new CameraPreviewResult
+                {
+                    CameraShotId = source.Camera.Id,
+                    Status = CameraPreviewStatus.PovFallback,
+                    PreviewPath = fallback.Result.OutputFile,
+                    Metrics = metrics,
+                    EffectiveShot = effective,
+                    Attempt = 2,
+                    Warnings = effective.Warnings
+                });
+            }
+            await SetStatusAsync(
+                publicId,
+                GenerationStatus.ValidatingCameraShots,
+                88,
+                "Resolving camera preview validation and fallbacks",
+                cancellationToken);
+            cinematicPlan = cinematicPlan with
+            {
+                Segments = cinematicPlan.Segments.Select(value =>
+                    effectiveCameras.TryGetValue(
+                        value.Id,
+                        out CameraShotPlan? camera)
+                            ? value with { Camera = camera }
+                            : value).ToArray(),
+                CameraDiversity = ShotDiversityPolicy.AnalyzeFilm(
+                    cinematicPlan.Segments.Select(value =>
+                        effectiveCameras.GetValueOrDefault(
+                            value.Id,
+                            value.Camera)).ToArray(),
+                    cinematicPlan.TargetDurationSeconds)
+            };
+            await PersistCameraPreviewArtifactsAsync(
+                snapshot.Id,
+                publicId,
+                cinematicPlan,
+                previews,
+                cancellationToken);
+            await SetStatusAsync(
+                publicId,
+                GenerationStatus.RenderingCinematicShots,
+                89,
+                "Camera previews accepted or replaced by rendered POV fallbacks",
+                cancellationToken);
+            await SetStatusAsync(
+                publicId,
+                GenerationStatus.ComposingCinematicTimeline,
+                90,
+                "Using preview-validated cinematic sources",
+                cancellationToken);
+            cameraStagesCompleted = true;
+        }
+        else if (cinematicPlan is not null)
+        {
+            await PersistCameraPreviewArtifactsAsync(
+                snapshot.Id,
+                publicId,
+                cinematicPlan,
+                persistedCameraFallbacks,
                 cancellationToken);
         }
         GlobalHighlightCandidate[] renderedSelection = selected
@@ -768,6 +970,11 @@ public sealed partial class GenerationWorker(
                 .ToArray();
         }
         int resumeStage = GenerationStageOrder(snapshot.Status);
+        if (cameraStagesCompleted)
+        {
+            resumeStage = GenerationStageOrder(
+                GenerationStatus.ComposingCinematicTimeline);
+        }
         if (snapshot.Status is
             GenerationStatus.RenderingCameraPreviews or
             GenerationStatus.ValidatingCameraShots or
@@ -1596,12 +1803,30 @@ public sealed partial class GenerationWorker(
             storage.EnsureDirectory(publicId, "output"), "compilation-result.json");
         string audioMixResultPath = Path.Combine(
             storage.EnsureDirectory(publicId, "output"), "audio-mix-result.json");
+        string musicGainEnvelopePath = Path.Combine(
+            storage.EnsureDirectory(publicId, "output"),
+            "music-gain-envelope.json");
+        string gameplayAudioEnvelopePath = Path.Combine(
+            storage.EnsureDirectory(publicId, "output"),
+            "gameplay-audio-envelope.json");
         string alignmentResultPath = Path.Combine(
             storage.EnsureDirectory(publicId, "output"), "music-alignment-result.json");
         string colorGradeResultPath = Path.Combine(
             storage.EnsureDirectory(publicId, "output"), "color-grade-result.json");
         string dynamicEffectResultPath = Path.Combine(
             storage.EnsureDirectory(publicId, "output"), "dynamic-effect-result.json");
+        string frameContinuityReportPath = Path.Combine(
+            storage.EnsureDirectory(publicId, "output"),
+            "frame-continuity-report.json");
+        string demoUiDetectionReportPath = Path.Combine(
+            storage.EnsureDirectory(publicId, "output"),
+            "demo-ui-detection-report.json");
+        string transitionBoundaryReportPath = Path.Combine(
+            storage.EnsureDirectory(publicId, "output"),
+            "transition-boundary-report.json");
+        string cinematicAcceptanceReportPath = Path.Combine(
+            storage.EnsureDirectory(publicId, "output"),
+            "cinematic-acceptance-report.json");
         await File.WriteAllTextAsync(
             reportPath,
             JsonSerializer.Serialize(new
@@ -1630,6 +1855,91 @@ public sealed partial class GenerationWorker(
                 completedAt = now
             }, JsonOptions),
             cancellationToken);
+        GenerationMovieSettings? movieSettings =
+            await db.GenerationMovieSettings.AsNoTracking()
+                .SingleOrDefaultAsync(
+                    value => value.GenerationId == generation.Id,
+                    cancellationToken);
+        if (movieSettings?.MovieStyle == MovieStyle.CinematicDirector)
+        {
+            string planDirectory = storage.EnsureDirectory(publicId, "plan");
+            string sourceReusePath = Path.Combine(
+                planDirectory,
+                "source-interval-reuse-report.json");
+            string cameraDiversityPath = Path.Combine(
+                planDirectory,
+                "camera-shot-diversity-report.json");
+            string effectRarityPath = Path.Combine(
+                planDirectory,
+                "effect-rarity-report.json");
+            int? reuseCount = await ReadReportValueAsync<int>(
+                sourceReusePath,
+                "reuseCount",
+                cancellationToken);
+            bool? frameValid = await ReadReportValueAsync<bool>(
+                frameContinuityReportPath,
+                "isValid",
+                cancellationToken);
+            bool? demoStrip = await ReadReportValueAsync<bool>(
+                demoUiDetectionReportPath,
+                "demoPlaybackStripDetected",
+                cancellationToken);
+            bool? musicDucking = await ReadReportValueAsync<bool>(
+                audioMixResultPath,
+                "musicDucking",
+                cancellationToken);
+            string[] cameraViolations =
+                await ReadReportValueAsync<string[]>(
+                    cameraDiversityPath,
+                    "violations",
+                    cancellationToken) ?? [];
+            string[] effectViolations =
+                await ReadReportValueAsync<string[]>(
+                    effectRarityPath,
+                    "violations",
+                    cancellationToken) ?? [];
+            List<string> limitations = [];
+            if (reuseCount is null)
+                limitations.Add("SOURCE_INTERVAL_REUSE_NOT_MEASURED");
+            if (cameraViolations.Length > 0)
+                limitations.AddRange(cameraViolations);
+            if (effectViolations.Length > 0)
+                limitations.AddRange(effectViolations);
+            bool technicalAcceptance =
+                reuseCount == 0 &&
+                frameValid == true &&
+                demoStrip == false &&
+                musicDucking == false;
+            await File.WriteAllTextAsync(
+                cinematicAcceptanceReportPath,
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    generationId = publicId,
+                    evaluatedFromRenderedMedia = true,
+                    technicalAcceptance,
+                    artisticAcceptance = "Requires full manual review",
+                    sourceIntervalReuseCount = reuseCount,
+                    frameContinuityPassed = frameValid,
+                    demoPlaybackStripDetected = demoStrip,
+                    musicKillDuckingEnabled = musicDucking,
+                    cameraDiversityViolations = cameraViolations,
+                    effectRarityViolations = effectViolations,
+                    limitations = limitations
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray(),
+                    evidence = new
+                    {
+                        frameContinuityReportPath,
+                        demoUiDetectionReportPath,
+                        audioMixResultPath,
+                        sourceReusePath,
+                        cameraDiversityPath,
+                        effectRarityPath
+                    }
+                }, JsonOptions),
+                cancellationToken);
+        }
         if (File.Exists(compilationResultPath))
             await AddArtifactAsync(
                 db, generation.Id, ArtifactType.CompilationResult,
@@ -1638,6 +1948,14 @@ public sealed partial class GenerationWorker(
             await AddArtifactAsync(
                 db, generation.Id, ArtifactType.AudioMixResult,
                 audioMixResultPath, cancellationToken);
+        if (File.Exists(musicGainEnvelopePath))
+            await AddArtifactAsync(
+                db, generation.Id, ArtifactType.MusicGainEnvelope,
+                musicGainEnvelopePath, cancellationToken);
+        if (File.Exists(gameplayAudioEnvelopePath))
+            await AddArtifactAsync(
+                db, generation.Id, ArtifactType.GameplayAudioEnvelope,
+                gameplayAudioEnvelopePath, cancellationToken);
         if (File.Exists(alignmentResultPath))
             await AddArtifactAsync(
                 db, generation.Id, ArtifactType.MusicAlignmentResult,
@@ -1650,6 +1968,22 @@ public sealed partial class GenerationWorker(
             await AddArtifactAsync(
                 db, generation.Id, ArtifactType.DynamicEffectResult,
                 dynamicEffectResultPath, cancellationToken);
+        if (File.Exists(frameContinuityReportPath))
+            await AddArtifactAsync(
+                db, generation.Id, ArtifactType.FrameContinuityReport,
+                frameContinuityReportPath, cancellationToken);
+        if (File.Exists(demoUiDetectionReportPath))
+            await AddArtifactAsync(
+                db, generation.Id, ArtifactType.DemoUiDetectionReport,
+                demoUiDetectionReportPath, cancellationToken);
+        if (File.Exists(transitionBoundaryReportPath))
+            await AddArtifactAsync(
+                db, generation.Id, ArtifactType.TransitionBoundaryReport,
+                transitionBoundaryReportPath, cancellationToken);
+        if (File.Exists(cinematicAcceptanceReportPath))
+            await AddArtifactAsync(
+                db, generation.Id, ArtifactType.CinematicAcceptanceReport,
+                cinematicAcceptanceReportPath, cancellationToken);
         await AddArtifactAsync(
             db, generation.Id, ArtifactType.GenerationReport, reportPath, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
@@ -1904,6 +2238,211 @@ public sealed partial class GenerationWorker(
         };
     }
 
+    private static CameraShotPlan PovFallback(
+        CameraShotPlan source,
+        IReadOnlyList<string> warnings) =>
+        CameraShotSignatureBuilder.Attach(
+            source with
+            {
+                Id = source.Id + "-pov-fallback",
+                Type = CameraShotType.PlayerPov,
+                Family = CameraShotFamily.PlayerPov,
+                Keyframes = [],
+                TargetPoints = [],
+                FovCurve =
+                [
+                    new CameraFovPoint(0, 90),
+                    new CameraFovPoint(source.TargetDurationSeconds, 90)
+                ],
+                FovStart = 90,
+                FovEnd = 90,
+                FramingIntent = "selected player POV fallback",
+                PreviewRequired = false,
+                VerifiedPresetId = null,
+                FallbackShotId = string.Empty,
+                FallbackChain = [],
+                Warnings = warnings
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray(),
+                Signature = null
+            },
+            source.Signature?.MapName ?? string.Empty);
+
+    private async Task<PersistedCameraFallbackReuse>
+        ReusePersistedCameraFallbacksAsync(
+            long generationId,
+            CinematicMoviePlan source,
+            Dictionary<string, string> rendered,
+            CancellationToken cancellationToken)
+    {
+        await using GenerationDbContext db =
+            await dbFactory.CreateDbContextAsync(cancellationToken);
+        GenerationCameraShot[] rows = await db.GenerationCameraShots
+            .AsNoTracking()
+            .Where(value =>
+                value.GenerationId == generationId &&
+                value.PreviewStatus == CameraPreviewStatus.PovFallback &&
+                value.PreviewPath != null)
+            .ToArrayAsync(cancellationToken);
+        Dictionary<string, GenerationCameraShot> byShotId = rows
+            .Where(value => File.Exists(value.PreviewPath))
+            .ToDictionary(value => value.ShotId, StringComparer.Ordinal);
+        if (byShotId.Count == 0)
+            return new PersistedCameraFallbackReuse(source, []);
+        List<CameraPreviewResult> reused = [];
+        CinematicSequenceSegment[] segments = source.Segments
+            .Select(segment =>
+            {
+                if (!byShotId.TryGetValue(
+                        segment.Camera.Id,
+                        out GenerationCameraShot? row))
+                    return segment;
+                string sourceId = segment.HighlightId ??
+                    segment.BrollCandidateId ?? segment.Id;
+                rendered[sourceId] = row.PreviewPath!;
+                CameraShotPlan effective = PovFallback(
+                    segment.Camera,
+                    [
+                        "PERSISTED_POV_FALLBACK_REUSED",
+                        "LOCKED_CAMERA_CANDIDATE_REJECTED_BY_PREVIEW"
+                    ]);
+                reused.Add(new CameraPreviewResult
+                {
+                    CameraShotId = segment.Camera.Id,
+                    Status = CameraPreviewStatus.PovFallback,
+                    PreviewPath = row.PreviewPath,
+                    Metrics = null,
+                    EffectiveShot = effective,
+                    Attempt = Math.Max(1, row.PreviewAttempts),
+                    Warnings = effective.Warnings
+                });
+                return segment with { Camera = effective };
+            })
+            .ToArray();
+        return new PersistedCameraFallbackReuse(
+            source with
+            {
+                Segments = segments,
+                CameraDiversity = ShotDiversityPolicy.AnalyzeFilm(
+                    segments.Select(value => value.Camera).ToArray(),
+                    source.TargetDurationSeconds)
+            },
+            reused);
+    }
+
+    private async Task PersistCameraPreviewArtifactsAsync(
+        long generationId,
+        string publicId,
+        CinematicMoviePlan effectivePlan,
+        IReadOnlyList<CameraPreviewResult> previews,
+        CancellationToken cancellationToken)
+    {
+        await using GenerationDbContext db =
+            await dbFactory.CreateDbContextAsync(cancellationToken);
+        GenerationCameraShot[] rows = await db.GenerationCameraShots
+            .Where(value => value.GenerationId == generationId)
+            .ToArrayAsync(cancellationToken);
+        foreach (CameraPreviewResult preview in previews)
+        {
+            GenerationCameraShot? row = rows.SingleOrDefault(value =>
+                value.ShotId == preview.CameraShotId);
+            if (row is null)
+                continue;
+            row.PreviewStatus = preview.Status;
+            row.PreviewAttempts = preview.Attempt;
+            row.PreviewPath = preview.PreviewPath;
+        }
+        string directory = storage.EnsureDirectory(publicId, "plan");
+        Dictionary<string, (ArtifactType Type, object Content)> artifacts =
+            new(StringComparer.Ordinal)
+            {
+                ["camera-shot-candidates.json"] = (
+                    ArtifactType.CameraShotCandidates,
+                    new
+                    {
+                        schemaVersion = "2.0",
+                        candidates = effectivePlan.Segments.Select(value =>
+                            new
+                            {
+                                value.Id,
+                                value.HighlightId,
+                                value.BrollCandidateId,
+                                value.Camera
+                            }).ToArray()
+                    }),
+                ["camera-shot-selection-report.json"] = (
+                    ArtifactType.CameraShotSelectionReport,
+                    new
+                    {
+                        schemaVersion = "1.0",
+                        previewValidationRequired = true,
+                        selections = previews.Select(value => new
+                        {
+                            value.CameraShotId,
+                            value.Status,
+                            effectiveFamily = value.EffectiveShot.Family,
+                            effectiveSignature = value.EffectiveShot.Signature,
+                            value.Attempt,
+                            value.Warnings
+                        }).ToArray()
+                    }),
+                ["camera-shot-diversity-report.json"] = (
+                    ArtifactType.CameraShotDiversityReport,
+                    effectivePlan.CameraDiversity ??
+                    ShotDiversityPolicy.AnalyzeFilm(
+                        effectivePlan.Segments.Select(value =>
+                            value.Camera).ToArray(),
+                        effectivePlan.TargetDurationSeconds)),
+                ["camera-preview-quality-report.json"] = (
+                    ArtifactType.CameraPreviewQualityReport,
+                    new
+                    {
+                        schemaVersion = "1.0",
+                        previews
+                    })
+            };
+        if (effectivePlan.EffectRarity is not null)
+        {
+            artifacts["effect-rarity-report.json"] = (
+                ArtifactType.EffectRarityReport,
+                effectivePlan.EffectRarity);
+        }
+        foreach ((string fileName, (ArtifactType type, object content)) in
+                 artifacts)
+        {
+            string path = Path.Combine(directory, fileName);
+            await File.WriteAllTextAsync(
+                path,
+                JsonSerializer.Serialize(content, JsonOptions),
+                cancellationToken);
+            await AddArtifactAsync(
+                db,
+                generationId,
+                type,
+                path,
+                cancellationToken);
+        }
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private static async Task<T?> ReadReportValueAsync<T>(
+        string path,
+        string property,
+        CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path))
+            return default;
+        await using FileStream stream = File.OpenRead(path);
+        using JsonDocument document = await JsonDocument.ParseAsync(
+            stream,
+            cancellationToken: cancellationToken);
+        if (!document.RootElement.TryGetProperty(
+                property,
+                out JsonElement value))
+            return default;
+        return value.Deserialize<T>(JsonOptions);
+    }
+
     private static T DeserializeJson<T>(string json, T fallback)
     {
         try
@@ -1915,6 +2454,10 @@ public sealed partial class GenerationWorker(
             return fallback;
         }
     }
+
+    private sealed record PersistedCameraFallbackReuse(
+        CinematicMoviePlan Plan,
+        IReadOnlyList<CameraPreviewResult> Results);
 
     private static async Task<T> ReadJsonAsync<T>(string path, CancellationToken cancellationToken)
     {

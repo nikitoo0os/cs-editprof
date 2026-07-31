@@ -9,6 +9,7 @@
     <ProjectReference Include="..\Cs2Highlight.Analysis\Cs2Highlight.Analysis.csproj" />
     <ProjectReference Include="..\Cs2Highlight.Music\Cs2Highlight.Music.csproj" />
     <ProjectReference Include="..\Cs2Highlight.RenderAgent.Application\Cs2Highlight.RenderAgent.Application.csproj" />
+    <ProjectReference Include="..\Cs2Highlight.RenderAgent.Infrastructure\Cs2Highlight.RenderAgent.Infrastructure.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="8.0.13">

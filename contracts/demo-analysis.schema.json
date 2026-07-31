@@ -9,7 +9,7 @@
     "timeline", "warnings"
   ],
   "properties": {
-    "schemaVersion": { "const": "1.2" },
+    "schemaVersion": { "const": "1.3" },
     "parser": { "$ref": "#/$defs/parserInfo" },
     "demo": { "$ref": "#/$defs/demoMetadata" },
     "players": {
@@ -96,7 +96,8 @@
         "weapon", "headshot", "killerTeam", "victimTeam", "wallbang",
         "oneTap", "noScope", "throughSmoke", "roundEndingKill",
         "lastEnemyKill", "killerHealth", "distanceMeters",
-        "shotsSinceLastKill"
+        "shotsSinceLastKill", "shooterPosition", "victimPosition",
+        "hitPosition", "bulletTrajectoryStatus"
       ],
       "properties": {
         "eventIndex": { "type": "integer", "minimum": 1 },
@@ -122,6 +123,31 @@
         "shotsSinceLastKill": {
           "type": ["integer", "null"],
           "minimum": 0
+        },
+        "shooterPosition": {
+          "oneOf": [
+            { "$ref": "#/$defs/vector3" },
+            { "type": "null" }
+          ]
+        },
+        "victimPosition": {
+          "oneOf": [
+            { "$ref": "#/$defs/vector3" },
+            { "type": "null" }
+          ]
+        },
+        "hitPosition": {
+          "oneOf": [
+            { "$ref": "#/$defs/vector3" },
+            { "type": "null" }
+          ]
+        },
+        "bulletTrajectoryStatus": {
+          "enum": [
+            "ExactShooterOriginAndImpact",
+            "UnavailableExactImpact",
+            "UnavailableShooterOrigin"
+          ]
         }
       }
     },
@@ -162,7 +188,8 @@
       "required": [
         "tick", "roundNumber", "player", "movementSpeed",
         "actionDensity", "alive", "inFreezeTime", "nearKillEvent",
-        "events"
+        "events", "team", "activeWeapon", "firing", "reloading",
+        "utilityActive", "scoped", "planting", "defusing", "hasBomb"
       ],
       "properties": {
         "tick": { "type": "integer", "minimum": 0 },
@@ -173,6 +200,15 @@
         "alive": { "type": "boolean" },
         "inFreezeTime": { "type": "boolean" },
         "nearKillEvent": { "type": "boolean" },
+        "team": { "enum": ["T", "CT", null] },
+        "activeWeapon": { "type": ["string", "null"] },
+        "firing": { "type": "boolean" },
+        "reloading": { "type": "boolean" },
+        "utilityActive": { "type": "boolean" },
+        "scoped": { "type": "boolean" },
+        "planting": { "type": "boolean" },
+        "defusing": { "type": "boolean" },
+        "hasBomb": { "type": "boolean" },
         "events": {
           "type": "array",
           "items": { "$ref": "#/$defs/gameplayEventReference" }

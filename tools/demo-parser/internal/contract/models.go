@@ -40,27 +40,31 @@ type Round struct {
 }
 
 type Kill struct {
-	EventIndex         int      `json:"eventIndex"`
-	Tick               int64    `json:"tick"`
-	RoundNumber        int      `json:"roundNumber"`
-	KillerPlayerID     *string  `json:"killerPlayerId"`
-	KillerName         *string  `json:"killerName"`
-	VictimPlayerID     string   `json:"victimPlayerId"`
-	VictimName         string   `json:"victimName"`
-	AssisterPlayerID   *string  `json:"assisterPlayerId"`
-	Weapon             string   `json:"weapon"`
-	Headshot           bool     `json:"headshot"`
-	KillerTeam         *string  `json:"killerTeam"`
-	VictimTeam         *string  `json:"victimTeam"`
-	Wallbang           *bool    `json:"wallbang"`
-	OneTap             *bool    `json:"oneTap"`
-	NoScope            *bool    `json:"noScope"`
-	ThroughSmoke       *bool    `json:"throughSmoke"`
-	RoundEndingKill    *bool    `json:"roundEndingKill"`
-	LastEnemyKill      *bool    `json:"lastEnemyKill"`
-	KillerHealth       *int     `json:"killerHealth"`
-	DistanceMeters     *float64 `json:"distanceMeters"`
-	ShotsSinceLastKill *int     `json:"shotsSinceLastKill"`
+	EventIndex             int              `json:"eventIndex"`
+	Tick                   int64            `json:"tick"`
+	RoundNumber            int              `json:"roundNumber"`
+	KillerPlayerID         *string          `json:"killerPlayerId"`
+	KillerName             *string          `json:"killerName"`
+	VictimPlayerID         string           `json:"victimPlayerId"`
+	VictimName             string           `json:"victimName"`
+	AssisterPlayerID       *string          `json:"assisterPlayerId"`
+	Weapon                 string           `json:"weapon"`
+	Headshot               bool             `json:"headshot"`
+	KillerTeam             *string          `json:"killerTeam"`
+	VictimTeam             *string          `json:"victimTeam"`
+	Wallbang               *bool            `json:"wallbang"`
+	OneTap                 *bool            `json:"oneTap"`
+	NoScope                *bool            `json:"noScope"`
+	ThroughSmoke           *bool            `json:"throughSmoke"`
+	RoundEndingKill        *bool            `json:"roundEndingKill"`
+	LastEnemyKill          *bool            `json:"lastEnemyKill"`
+	KillerHealth           *int             `json:"killerHealth"`
+	DistanceMeters         *float64         `json:"distanceMeters"`
+	ShotsSinceLastKill     *int             `json:"shotsSinceLastKill"`
+	ShooterPosition        *GameplayVector3 `json:"shooterPosition"`
+	VictimPosition         *GameplayVector3 `json:"victimPosition"`
+	HitPosition            *GameplayVector3 `json:"hitPosition"`
+	BulletTrajectoryStatus string           `json:"bulletTrajectoryStatus"`
 }
 
 type GameplayVector3 struct {
@@ -92,4 +96,13 @@ type GameplayTimelineFrame struct {
 	InFreezeTime  bool                     `json:"inFreezeTime"`
 	NearKillEvent bool                     `json:"nearKillEvent"`
 	Events        []GameplayEventReference `json:"events"`
+	Team          *string                  `json:"team"`
+	ActiveWeapon  *string                  `json:"activeWeapon"`
+	Firing        bool                     `json:"firing"`
+	Reloading     bool                     `json:"reloading"`
+	UtilityActive bool                     `json:"utilityActive"`
+	Scoped        bool                     `json:"scoped"`
+	Planting      bool                     `json:"planting"`
+	Defusing      bool                     `json:"defusing"`
+	HasBomb       bool                     `json:"hasBomb"`
 }

@@ -86,6 +86,11 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             commands.FindIndex(command =>
                 command.StartsWith("playdemo \"", StringComparison.Ordinal)) <
             commands.FindIndex(command => command == "demo_gototick 70"));
+        Assert.Equal(1, commands.Count(command => command == "demoui"));
+        Assert.InRange(
+            commands.FindIndex(command => command == "demoui"),
+            playDemo + 1,
+            commands.FindIndex(command => command == "demo_gototick 70") - 1);
         Assert.True(commands.Count(command =>
             command == "echo AFX_RENDER_NETCON_READY") >= 2);
         Assert.True(commands.Count(command => command == "status") >= 2);
@@ -111,11 +116,13 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             command.StartsWith("spec_player ", StringComparison.Ordinal));
         Assert.Contains("mirv_streams record start", commands);
         Assert.Contains("demo_resume", commands);
-        Assert.Equal(4, commands.Count(command => command == "cl_drawhud 1"));
-        Assert.Equal(4, commands.Count(command => command == "cl_showdemooverlay 0"));
-        Assert.True(commands.Count(command => command == "r_drawviewmodel 1") >= 4);
+        Assert.True(commands.Count(command => command == "cl_drawhud 1") >= 5);
+        Assert.True(commands.Count(command => command == "cl_showdemooverlay 0") >= 5);
+        Assert.True(commands.Count(command => command == "r_drawviewmodel 1") >= 5);
+        Assert.True(commands.Count(command => command == "r_show_build_info 0") >= 5);
+        Assert.True(commands.Count(command => command == "cl_trueview_show_status 0") >= 5);
         Assert.DoesNotContain("demoui false", commands);
-        Assert.Equal(4, commands.Count(command => command == "hideconsole"));
+        Assert.True(commands.Count(command => command == "hideconsole") >= 5);
         Assert.Contains(commands, command =>
             command.Contains("addAtTick 150", StringComparison.Ordinal) &&
             command.Contains("AFX_RENDER_SAFE_TAIL", StringComparison.Ordinal));
@@ -181,6 +188,7 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
 
         Assert.DoesNotContain(commands, command =>
             command.StartsWith("playdemo ", StringComparison.Ordinal));
+        Assert.DoesNotContain("demoui", commands);
         Assert.DoesNotContain("demoui false", commands);
         Assert.Contains("status", commands);
         Assert.Contains("demo_gototick 70", commands);
@@ -464,7 +472,8 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             {
                 await writer.WriteLineAsync("AFX_RENDER_CAPTURE_PROFILE_APPLIED");
             }
-            if (command is "cl_showdemooverlay" or "spec_show_xray")
+            if (command is "cl_showdemooverlay" or "spec_show_xray" or
+                "r_show_build_info" or "cl_trueview_show_status")
             {
                 await writer.WriteLineAsync($"\"{command}\" = \"false\"");
             }

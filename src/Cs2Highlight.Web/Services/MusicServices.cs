@@ -306,13 +306,22 @@ public sealed class ProcessMusicAnalyzerClient(PipelineOptions pipeline) : IMusi
             await JsonSerializer.DeserializeAsync<MusicAnalysis>(
                 stream, JsonOptions, cancellationToken) ??
             throw new InvalidOperationException("MUSIC_ANALYSIS_INVALID");
-        if (analysis.SchemaVersion is not ("1.0" or "2.0") ||
+        if (analysis.SchemaVersion is not ("1.0" or "2.0" or "2.1") ||
             analysis.Audio.DurationSeconds <= 0 ||
             analysis.Audio.SampleRate <= 0 ||
             analysis.Audio.Channels <= 0 ||
-            (analysis.SchemaVersion == "2.0" &&
+            (analysis.SchemaVersion is "2.0" or "2.1" &&
                 (analysis.FrameHopSeconds is < 0.02 or > 0.05 ||
                  analysis.Frames.Count == 0)) ||
+            (analysis.SchemaVersion == "2.1" &&
+                (analysis.Waveform is null ||
+                 analysis.Waveform.SchemaVersion != "1.0" ||
+                 analysis.Waveform.SamplesPerSecond is < 100 or > 200 ||
+                 analysis.Waveform.Peaks.Count == 0 ||
+                 analysis.Waveform.Peaks.Any(value =>
+                     value.TimeSeconds < 0 ||
+                     value.Min is < 0 or > 1 ||
+                     value.Max is < 0 or > 1))) ||
             analysis.Beats.Zip(analysis.Beats.Skip(1))
                 .Any(pair => pair.First.TimeSeconds > pair.Second.TimeSeconds) ||
             analysis.Frames.Zip(analysis.Frames.Skip(1))

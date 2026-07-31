@@ -6,6 +6,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using Cs2Highlight.Music;
+using Cs2Highlight.RenderAgent.Infrastructure;
 using Cs2Highlight.Web.Domain;
 
 namespace Cs2Highlight.Web.Services;
@@ -93,7 +94,7 @@ public sealed partial class FfmpegHighlightCompilationService(
     ILogger<FfmpegHighlightCompilationService> logger)
     : IHighlightCompilationService
 {
-    private const string NormalizationPipelineVersion = "4";
+    private const string NormalizationPipelineVersion = "5";
     private static readonly Encoding Utf8WithoutBom = new UTF8Encoding(false);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -143,6 +144,11 @@ public sealed partial class FfmpegHighlightCompilationService(
         List<string> normalized = [];
         List<string> probeErrors = [];
         List<DynamicEffectClipResult> effectResults = [];
+        CinematicSequenceSegment[] cinematicSegments =
+            request.CinematicMoviePlan?.Segments
+                .OrderBy(value => value.OutputStartSeconds)
+                .ThenBy(value => value.Id, StringComparer.Ordinal)
+                .ToArray() ?? [];
         int skipped = 0;
         LogCompositionStarted(
             logger,
@@ -210,18 +216,23 @@ public sealed partial class FfmpegHighlightCompilationService(
                 index < request.MusicEditPlan.Segments.Count
                     ? request.MusicEditPlan.Segments[index].TimeWarp
                     : null;
-            if (request.CinematicMoviePlan is not null &&
-                index < request.CinematicMoviePlan.Segments.Count)
+            CinematicSequenceSegment? cinematicSegment =
+                index < cinematicSegments.Length
+                    ? cinematicSegments[index]
+                    : null;
+            if (cinematicSegment is not null)
             {
-                timeWarp =
-                    request.CinematicMoviePlan.Segments[index].TimeWarp;
+                timeWarp = cinematicSegment.TimeWarp;
             }
             double speed = timeWarp?.BaseSpeedFactor ?? 1;
-            double expectedOutputDuration = timeWarp is null
-                ? metadata.DurationSeconds
-                : TimeWarpMath.OutputDuration(
-                    timeWarp,
-                    metadata.DurationSeconds);
+            double expectedOutputDuration = cinematicSegment is not null
+                ? cinematicSegment.OutputEndSeconds -
+                  cinematicSegment.OutputStartSeconds
+                : timeWarp is null
+                    ? metadata.DurationSeconds
+                    : TimeWarpMath.CoveredOutputDuration(
+                        timeWarp,
+                        metadata.DurationSeconds);
             string videoFilters = graph.Video;
             string audioFilters = graph.Audio;
             (string introVideoFade, string introAudioFade) =
@@ -237,13 +248,10 @@ public sealed partial class FfmpegHighlightCompilationService(
             {
                 string color = FfmpegMovieFilterBuilder.Color(
                     request.MovieSettings.ColorGradePreset);
-                if (request.CinematicMoviePlan is not null &&
-                    index < request.CinematicMoviePlan.Segments.Count)
+                if (cinematicSegment is not null)
                 {
-                    CinematicSequenceSegment cinematicSegment =
-                        request.CinematicMoviePlan.Segments[index];
                     ColorNarrativeSection? narrativeColor =
-                        request.CinematicMoviePlan.Color.Sections
+                        request.CinematicMoviePlan!.Color.Sections
                             .FirstOrDefault(value => string.Equals(
                                 value.MusicSectionId,
                                 cinematicSegment.MusicSectionId,
@@ -294,7 +302,10 @@ public sealed partial class FfmpegHighlightCompilationService(
                     lutFingerprint,
                     JsonSerializer.Serialize(dynamicEffectPlan, JsonOptions),
                     JsonSerializer.Serialize(request.FfmpegCapabilities, JsonOptions),
-                    JsonSerializer.Serialize(timeWarp, JsonOptions))))).ToLowerInvariant();
+                    JsonSerializer.Serialize(timeWarp, JsonOptions),
+                    expectedOutputDuration.ToString(
+                        "0.######",
+                        CultureInfo.InvariantCulture))))).ToLowerInvariant();
             if (File.Exists(target) &&
                 File.Exists(signaturePath) &&
                 string.Equals(
@@ -338,7 +349,8 @@ public sealed partial class FfmpegHighlightCompilationService(
                         request.Height,
                         request.Fps),
                     audioFilters,
-                    postEffectVideoFilters);
+                    postEffectVideoFilters,
+                    expectedOutputDuration);
                 if (logger.IsEnabled(LogLevel.Information))
                 {
                     string stages = string.Join(
@@ -369,11 +381,18 @@ public sealed partial class FfmpegHighlightCompilationService(
                     audioFilters,
                     metadata.HasAudio ? "0:a:0" : "1:a:0",
                     timeWarp);
+                timeWarpGraph += FfmpegMovieFilterBuilder.DurationLock(
+                    "warped_video",
+                    "warped_audio",
+                    "locked_video",
+                    "locked_audio",
+                    expectedOutputDuration,
+                    request.Fps);
                 arguments.AddRange(
                 [
                     "-filter_complex", timeWarpGraph,
-                    "-map", "[warped_video]",
-                    "-map", "[warped_audio]"
+                    "-map", "[locked_video]",
+                    "-map", "[locked_audio]"
                 ]);
             }
             else
@@ -382,6 +401,14 @@ public sealed partial class FfmpegHighlightCompilationService(
                 {
                     videoFilters += FormattableString.Invariant($",setpts=PTS/{speed:0.######}");
                     audioFilters += FormattableString.Invariant($",atempo={speed:0.######}");
+                }
+                if (cinematicSegment is not null || timeWarp is not null)
+                {
+                    videoFilters += FfmpegMovieFilterBuilder.DurationLockVideo(
+                        expectedOutputDuration,
+                        request.Fps);
+                    audioFilters += FfmpegMovieFilterBuilder.DurationLockAudio(
+                        expectedOutputDuration);
                 }
                 arguments.AddRange(
                 [
@@ -563,13 +590,6 @@ public sealed partial class FfmpegHighlightCompilationService(
                         MusicSyncIntensity.Aggressive => -5,
                         _ => -7
                     },
-                MusicDuckOnKillDb =
-                    request.MovieSettings.SyncIntensity switch
-                    {
-                        MusicSyncIntensity.Soft => -2.5,
-                        MusicSyncIntensity.Aggressive => -6,
-                        _ => -4.5
-                    },
                 KillAccentAttackMilliseconds = 120,
                 KillAccentHoldMilliseconds = 110,
                 KillAccentReleaseMilliseconds = 280,
@@ -663,6 +683,64 @@ public sealed partial class FfmpegHighlightCompilationService(
                 skipped,
                 watch.ElapsedMilliseconds);
         }
+        FrameContinuityScan continuity = await AnalyzeFrameContinuityAsync(
+            temporary,
+            request,
+            cancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "frame-continuity-report.json"),
+            JsonSerializer.Serialize(continuity, JsonOptions),
+            cancellationToken);
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "transition-boundary-report.json"),
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = "1.0",
+                checkedFromRenderedMedia = true,
+                continuity.TransitionBoundaryValid,
+                continuity.BlackFrameCount,
+                continuity.OneFrameSegmentCount,
+                continuity.OneToFiveFrameSegmentCount,
+                minimumTransitionShotDurationSeconds = 0.4,
+                violations = continuity.Violations.Where(value =>
+                    value.Contains(
+                        "BOUNDARY",
+                        StringComparison.Ordinal) ||
+                    value.Contains(
+                        "FRAME",
+                        StringComparison.Ordinal)).ToArray()
+            }, JsonOptions),
+            cancellationToken);
+        if (!continuity.IsValid)
+        {
+            File.Delete(temporary);
+            return Failure(
+                "FRAME_CONTINUITY_FAILED: " +
+                string.Join(',', continuity.Violations),
+                request.ClipPaths.Count,
+                skipped,
+                watch.ElapsedMilliseconds);
+        }
+        DemoUiDetectionReport demoUi = await DemoUiDetector.AnalyzeAsync(
+            options.FfmpegPath,
+            temporary,
+            Math.Min(12, finalMetadata.DurationSeconds),
+            cancellationToken);
+        await DemoUiDetector.WriteAsync(
+            Path.Combine(outputDirectory, "demo-ui-detection-report.json"),
+            demoUi,
+            cancellationToken);
+        if (!demoUi.Analyzed || demoUi.DemoPlaybackStripDetected)
+        {
+            File.Delete(temporary);
+            return Failure(
+                demoUi.DemoPlaybackStripDetected
+                    ? "DEMO_PLAYBACK_STRIP_DETECTED"
+                    : $"DEMO_UI_DETECTION_FAILED: {demoUi.Error}",
+                request.ClipPaths.Count,
+                skipped,
+                watch.ElapsedMilliseconds);
+        }
         LoudnessMeasurement? loudness = null;
         if (request.MusicPath is not null && request.MovieSettings is not null)
         {
@@ -706,21 +784,109 @@ public sealed partial class FfmpegHighlightCompilationService(
         }
         if (request.MusicPath is not null && request.MovieSettings is not null)
         {
+            double[] killTimes = request.MusicEditPlan?.Segments
+                .Select(value => value.PrimaryKillOutputTimeSeconds)
+                .Where(value => value >= 0)
+                .OrderBy(value => value)
+                .ToArray() ?? request.CinematicMoviePlan?.HighlightMatches
+                .Select(value => value.PlannedKillSeconds)
+                .Where(value => value >= 0)
+                .OrderBy(value => value)
+                .ToArray() ?? [];
             await File.WriteAllTextAsync(
                 Path.Combine(outputDirectory, "audio-mix-result.json"),
                 JsonSerializer.Serialize(new
                 {
-                    schemaVersion = "1.0",
+                    schemaVersion = "2.0",
                     musicGainDb = request.MovieSettings.MusicGainDb,
                     gameplayGainDb = request.MovieSettings.GameplayGainDb,
-                    killAccents = request.MusicEditPlan?.Segments.Count ?? 0,
-                    musicDucking = true,
+                    killAccents = killTimes.Length,
+                    musicDucking = false,
+                    musicGainDeltaAroundKillsDb = killTimes.Select(value =>
+                        new
+                        {
+                            killTimeSeconds = value,
+                            windowStartSeconds = Math.Max(0, value - 0.5),
+                            windowEndSeconds = Math.Min(
+                                finalMetadata.DurationSeconds,
+                                value + 0.5),
+                            minimumGainDb = request.MovieSettings.MusicGainDb,
+                            maximumGainDb = request.MovieSettings.MusicGainDb,
+                            deltaDb = 0.0
+                        }).ToArray(),
                     limiter = true,
                     targetIntegratedLoudnessLufs = -14.0,
                     targetTruePeakDb = -1.0,
                     measuredIntegratedLoudnessLufs =
                         loudness?.IntegratedLoudnessLufs,
                     measuredTruePeakDb = loudness?.TruePeakDb
+                }, JsonOptions),
+                cancellationToken);
+            double[] musicTimes = killTimes
+                .SelectMany(value => new[]
+                {
+                    Math.Max(0, value - 0.5),
+                    value,
+                    Math.Min(finalMetadata.DurationSeconds, value + 0.5)
+                })
+                .Append(0)
+                .Append(finalMetadata.DurationSeconds)
+                .Distinct()
+                .OrderBy(value => value)
+                .ToArray();
+            await File.WriteAllTextAsync(
+                Path.Combine(outputDirectory, "music-gain-envelope.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    source = "ffmpeg-filter-plan",
+                    killLinkedGainAutomation = false,
+                    points = musicTimes.Select(value => new
+                    {
+                        timeSeconds = value,
+                        gainDb = request.MovieSettings.MusicGainDb
+                    }).ToArray()
+                }, JsonOptions),
+                cancellationToken);
+            double gameplayBase = request.MovieSettings.GameplayGainDb;
+            double gameplayAccent = request.MovieSettings.SyncIntensity switch
+            {
+                MusicSyncIntensity.Soft => -9,
+                MusicSyncIntensity.Aggressive => -5,
+                _ => -7
+            };
+            await File.WriteAllTextAsync(
+                Path.Combine(outputDirectory, "gameplay-audio-envelope.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    source = "ffmpeg-filter-plan",
+                    transientShaping = true,
+                    parallelCompression = true,
+                    truePeakLimiter = true,
+                    points = killTimes.SelectMany(value => new[]
+                    {
+                        new
+                        {
+                            timeSeconds = Math.Max(0, value - 0.12),
+                            gainDb = gameplayBase,
+                            role = "attack-start"
+                        },
+                        new
+                        {
+                            timeSeconds = value,
+                            gainDb = gameplayAccent,
+                            role = "transient-accent"
+                        },
+                        new
+                        {
+                            timeSeconds = Math.Min(
+                                finalMetadata.DurationSeconds,
+                                value + 0.28),
+                            gainDb = gameplayBase,
+                            role = "release-end"
+                        }
+                    }).ToArray()
                 }, JsonOptions),
                 cancellationToken);
         }
@@ -903,6 +1069,93 @@ public sealed partial class FfmpegHighlightCompilationService(
             integrated is null ? "FFmpeg did not emit an integrated loudness summary." : null);
     }
 
+    private async Task<FrameContinuityScan> AnalyzeFrameContinuityAsync(
+        string path,
+        CompilationRequest request,
+        CancellationToken cancellationToken)
+    {
+        double frameDuration = 1d / Math.Max(1, request.Fps);
+        string filter = FormattableString.Invariant(
+            $"blackdetect=d={frameDuration * 0.8:0.######}:pix_th=0.02,freezedetect=n=0.001:d=0.08,signalstats,metadata=print:key=lavfi.signalstats.YAVG");
+        ProcessResult scan = await RunAsync(
+            options.FfmpegPath,
+            [
+                "-hide_banner", "-nostats", "-i", path,
+                "-an", "-vf", filter, "-f", "null", "-"
+            ],
+            cancellationToken);
+        int blackFrames = Regex.Count(
+            scan.Error,
+            "black_start:",
+            RegexOptions.CultureInvariant);
+        int duplicateBursts = Regex.Count(
+            scan.Error,
+            "freeze_start:",
+            RegexOptions.CultureInvariant);
+        double[] luminance = Regex.Matches(
+                scan.Error,
+                @"lavfi\.signalstats\.YAVG=(?<value>\d+(?:\.\d+)?)",
+                RegexOptions.CultureInvariant)
+            .Cast<Match>()
+            .Select(value => double.Parse(
+                value.Groups["value"].Value,
+                CultureInfo.InvariantCulture))
+            .ToArray();
+        int spikes = luminance.Zip(luminance.Skip(1)).Count(pair =>
+            Math.Abs(pair.Second - pair.First) >= 48);
+        int flashes = 0;
+        for (int index = 1; index + 1 < luminance.Length; index++)
+        {
+            if (luminance[index] - luminance[index - 1] >= 42 &&
+                luminance[index] - luminance[index + 1] >= 42)
+                flashes++;
+        }
+        CinematicSequenceSegment[] segments =
+            request.CinematicMoviePlan?.Segments
+                .OrderBy(value => value.OutputStartSeconds)
+                .ThenBy(value => value.Id, StringComparer.Ordinal)
+                .ToArray() ?? [];
+        double minimumShot = segments
+            .Select(value =>
+                value.OutputEndSeconds - value.OutputStartSeconds)
+            .DefaultIfEmpty(0)
+            .Min();
+        int oneFrame = segments.Count(value =>
+            value.OutputEndSeconds - value.OutputStartSeconds <=
+            frameDuration * 1.5);
+        int microSegments = segments.Count(value =>
+            value.OutputEndSeconds - value.OutputStartSeconds <=
+            frameDuration * 5.5);
+        int boundaryDefects = segments.Zip(segments.Skip(1)).Count(pair =>
+            Math.Abs(
+                pair.Second.OutputStartSeconds -
+                pair.First.OutputEndSeconds) > frameDuration * 0.55);
+        List<string> violations = [];
+        if (scan.ExitCode != 0)
+            violations.Add("FRAME_SCAN_FFMPEG_FAILED");
+        if (oneFrame > 0)
+            violations.Add("ONE_FRAME_SEGMENT_DETECTED");
+        if (microSegments > 0)
+            violations.Add("ONE_TO_FIVE_FRAME_SEGMENT_DETECTED");
+        if (blackFrames > 0)
+            violations.Add("BLACK_FRAME_TRANSITION_DEFECT");
+        if (boundaryDefects > 0)
+            violations.Add("TRANSITION_BOUNDARY_INVALID");
+        return new FrameContinuityScan(
+            "1.0",
+            violations.Count == 0,
+            Math.Round(minimumShot, 6),
+            oneFrame,
+            microSegments,
+            blackFrames,
+            duplicateBursts,
+            flashes,
+            spikes,
+            boundaryDefects == 0,
+            scan.ExitCode == 0,
+            violations);
+    }
+
     private static double? ParseLast(MatchCollection matches)
     {
         if (matches.Count == 0)
@@ -987,6 +1240,20 @@ public sealed partial class FfmpegHighlightCompilationService(
         double? IntegratedLoudnessLufs,
         double? TruePeakDb,
         string? Error);
+
+    private sealed record FrameContinuityScan(
+        string SchemaVersion,
+        bool IsValid,
+        double MinimumShotDurationSeconds,
+        int OneFrameSegmentCount,
+        int OneToFiveFrameSegmentCount,
+        int BlackFrameCount,
+        int DuplicateFrameBurstCount,
+        int FlashEventCount,
+        int UnexpectedLuminanceSpikeCount,
+        bool TransitionBoundaryValid,
+        bool StablePts,
+        IReadOnlyList<string> Violations);
     private sealed class MediaMetadata
     {
         public bool HasVideo { get; init; }
@@ -1051,7 +1318,6 @@ public static class FfmpegMovieFilterBuilder
             options.GameplayBaseGainDb,
             options.GameplayKillAccentGainDb));
         double musicBase = Linear(options.MusicGainDb);
-        double duckFactor = Linear(options.MusicDuckOnKillDb);
         string gameplayVolume = cinematic is null
             ? Number(gameplayBase)
             : NarrativeVolume(
@@ -1071,8 +1337,6 @@ public static class FfmpegMovieFilterBuilder
         {
             gameplayVolume =
                 $"({gameplayVolume})*(1+({Number(gameplayAccent / gameplayBase)}-1)*({pulse}))";
-            musicVolume =
-                $"({musicVolume})*(1-(1-{Number(duckFactor)})*({pulse}))";
         }
         StringBuilder graph = new();
         graph.Append("[0:a:0]aresample=48000,volume='")
@@ -1164,6 +1428,29 @@ public static class FfmpegMovieFilterBuilder
             .Append(":v=0:a=1[warped_audio]");
         return graph.ToString();
     }
+
+    public static string DurationLock(
+        string videoInput,
+        string audioInput,
+        string videoOutput,
+        string audioOutput,
+        double durationSeconds,
+        int fps) =>
+        $";[{videoInput}]{DurationLockVideo(durationSeconds, fps).TrimStart(',')}[{videoOutput}];" +
+        $"[{audioInput}]{DurationLockAudio(durationSeconds).TrimStart(',')}[{audioOutput}]";
+
+    public static string DurationLockVideo(
+        double durationSeconds,
+        int fps) =>
+        ",fps=" + Math.Max(1, fps).ToString(CultureInfo.InvariantCulture) +
+        ",tpad=stop_mode=clone:stop_duration=" + Number(durationSeconds) +
+        ",trim=duration=" + Number(durationSeconds) +
+        ",setpts=PTS-STARTPTS";
+
+    public static string DurationLockAudio(double durationSeconds) =>
+        ",apad=whole_dur=" + Number(durationSeconds) +
+        ",atrim=duration=" + Number(durationSeconds) +
+        ",asetpts=PTS-STARTPTS";
 
     private static string Db(double value) =>
         FormattableString.Invariant($"{Math.Clamp(value, -60, 12):0.###}dB");

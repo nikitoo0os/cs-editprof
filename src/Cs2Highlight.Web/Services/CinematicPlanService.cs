@@ -131,6 +131,12 @@ public sealed partial class CinematicPlanService(
             CinematicMoviePlan locked = Deserialize<CinematicMoviePlan>(
                 existing.PlanJson,
                 "CINEMATIC_LOCKED_PLAN_INVALID");
+            await PersistWaveformArtifactAsync(
+                db,
+                generation,
+                musicAnalysis,
+                locked.MusicExcerpt,
+                cancellationToken);
             MusicNarrative recoveredNarrative = narrativeAnalyzer.Analyze(musicAnalysis);
             return new CinematicLockedPlan(
                 recoveredNarrative,
@@ -142,7 +148,7 @@ public sealed partial class CinematicPlanService(
         }
         if (highlights.Count == 0)
             throw new InvalidOperationException("CINEMATIC_HIGHLIGHTS_REQUIRED");
-        if (musicAnalysis.SchemaVersion != "2.0" ||
+        if (musicAnalysis.SchemaVersion is not ("2.0" or "2.1") ||
             musicAnalysis.Frames.Count == 0 ||
             musicAnalysis.FrameHopSeconds is < 0.02 or > 0.05)
         {
@@ -477,6 +483,12 @@ public sealed partial class CinematicPlanService(
         string directory = storage.EnsureDirectory(
             generation.PublicId,
             "plan");
+        await PersistWaveformArtifactAsync(
+            db,
+            generation,
+            musicAnalysis,
+            excerpt,
+            cancellationToken);
         await WriteAtomicallyAsync(
             Path.Combine(directory, "cinematic-music-narrative.json"),
             narrative,
@@ -502,6 +514,73 @@ public sealed partial class CinematicPlanService(
             capabilitiesPath,
             capabilities,
             cancellationToken);
+        string cameraCandidatesPath = Path.Combine(
+            directory,
+            "camera-shot-candidates.json");
+        await WriteAtomicallyAsync(
+            cameraCandidatesPath,
+            new
+            {
+                schemaVersion = "2.0",
+                plannerVersion = plan.PlannerVersion,
+                candidates = plan.Segments.Select(value => new
+                {
+                    value.Id,
+                    value.BrollCandidateId,
+                    value.HighlightId,
+                    value.Camera
+                }).ToArray()
+            },
+            cancellationToken);
+        string cameraDiversityPath = Path.Combine(
+            directory,
+            "camera-shot-diversity-report.json");
+        await WriteAtomicallyAsync(
+            cameraDiversityPath,
+            plan.CameraDiversity ?? ShotDiversityPolicy.AnalyzeFilm(
+                plan.Segments.Select(value => value.Camera).ToArray(),
+                plan.TargetDurationSeconds),
+            cancellationToken);
+        string effectRarityPath = Path.Combine(
+            directory,
+            "effect-rarity-report.json");
+        await WriteAtomicallyAsync(
+            effectRarityPath,
+            plan.EffectRarity ?? new EffectRarityReport(
+                "1.0",
+                0,
+                0,
+                [],
+                []),
+            cancellationToken);
+        string[] intervals = plan.Segments
+            .Select(value => value.Camera.Signature?.SourceInterval)
+            .Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => value!)
+            .ToArray();
+        string sourceReusePath = Path.Combine(
+            directory,
+            "source-interval-reuse-report.json");
+        string[] repeatedIntervals = intervals
+            .Select((value, index) => new { value, index })
+            .Where(current => intervals.Take(current.index).Any(previous =>
+                SourceIntervalPolicy.Overlaps(previous, current.value)))
+            .Select(value => value.value)
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(value => value, StringComparer.Ordinal)
+            .ToArray();
+        await WriteAtomicallyAsync(
+            sourceReusePath,
+            new
+            {
+                schemaVersion = "1.0",
+                checkedIntervalCount = intervals.Length,
+                uniqueIntervalCount = intervals.Length -
+                    repeatedIntervals.Length,
+                reuseCount = repeatedIntervals.Length,
+                repeatedIntervals
+            },
+            cancellationToken);
         AddArtifact(
             db,
             generation.Id,
@@ -526,6 +605,30 @@ public sealed partial class CinematicPlanService(
             ArtifactType.CameraCapabilities,
             capabilitiesPath,
             now);
+        AddArtifact(
+            db,
+            generation.Id,
+            ArtifactType.CameraShotCandidates,
+            cameraCandidatesPath,
+            now);
+        AddArtifact(
+            db,
+            generation.Id,
+            ArtifactType.CameraShotDiversityReport,
+            cameraDiversityPath,
+            now);
+        AddArtifact(
+            db,
+            generation.Id,
+            ArtifactType.EffectRarityReport,
+            effectRarityPath,
+            now);
+        AddArtifact(
+            db,
+            generation.Id,
+            ArtifactType.SourceIntervalReuseReport,
+            sourceReusePath,
+            now);
         await db.SaveChangesAsync(cancellationToken);
 
         if (logger.IsEnabled(LogLevel.Information))
@@ -549,6 +652,57 @@ public sealed partial class CinematicPlanService(
             plan,
             alignment,
             uniqueBroll);
+    }
+
+    private async Task PersistWaveformArtifactAsync(
+        GenerationDbContext db,
+        Generation generation,
+        MusicAnalysis analysis,
+        MusicExcerptPlan excerpt,
+        CancellationToken cancellationToken)
+    {
+        string directory = storage.EnsureDirectory(
+            generation.PublicId,
+            "plan");
+        string path = Path.Combine(directory, "real-waveform-envelope.json");
+        RealWaveformEnvelopeArtifact waveform =
+            WaveformEnvelopeMapper.MapExcerpt(
+                analysis.Waveform,
+                excerpt.StartSeconds,
+                excerpt.EndSeconds);
+        await WriteAtomicallyAsync(path, waveform, cancellationToken);
+        GenerationArtifact? artifact =
+            await db.GenerationArtifacts.SingleOrDefaultAsync(
+                value =>
+                    value.GenerationId == generation.Id &&
+                    value.FileName == "real-waveform-envelope.json",
+                cancellationToken);
+        if (artifact is null)
+        {
+            artifact = new GenerationArtifact
+            {
+                GenerationId = generation.Id,
+                FileName = "real-waveform-envelope.json",
+                CreatedAt = timeProvider.GetUtcNow()
+            };
+            db.GenerationArtifacts.Add(artifact);
+        }
+        artifact.Type = ArtifactType.RealWaveformEnvelope;
+        artifact.StoredPath = path;
+        artifact.ContentType = "application/json";
+        artifact.FileSizeBytes = new FileInfo(path).Length;
+        if (!waveform.Available)
+        {
+            db.GenerationEvents.Add(new GenerationEvent
+            {
+                GenerationId = generation.Id,
+                Level = "Warning",
+                Stage = "Waveform",
+                Message = string.Join(',', waveform.Warnings),
+                ProgressPercent = generation.ProgressPercent,
+                CreatedAt = timeProvider.GetUtcNow()
+            });
+        }
     }
 
     private void Advance(

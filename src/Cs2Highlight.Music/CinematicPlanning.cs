@@ -74,7 +74,15 @@ public sealed class BrollCandidateDetector : IBrollCandidateDetector
                     !preparation &&
                     action <= context.MaximumIdleActionDensity)
                     continue;
+                Dictionary<string, PlayerTrajectory> subjects =
+                    SceneSubjects(context, window);
                 BrollCandidateType type = Classify(window);
+                if (subjects.Count >= 2)
+                {
+                    type = preparation
+                        ? BrollCandidateType.TeamSetup
+                        : BrollCandidateType.TeamMovement;
+                }
                 double continuity = TrajectoryContinuity(window);
                 double cinematic = Math.Clamp(
                     0.45 * movement +
@@ -107,7 +115,11 @@ public sealed class BrollCandidateDetector : IBrollCandidateDetector
                             value.Tick,
                             value.Player.Position,
                             value.Player.ViewAngles)).ToArray()),
-                    Tags = Tags(window, preparation)
+                    Tags = Tags(window, preparation, subjects.Count),
+                    SubjectIds = subjects.Keys
+                        .OrderBy(value => value, StringComparer.Ordinal)
+                        .ToArray(),
+                    SubjectTrajectories = subjects
                 });
             }
         }
@@ -164,7 +176,8 @@ public sealed class BrollCandidateDetector : IBrollCandidateDetector
 
     private static string[] Tags(
         GameplayTimelineFrame[] frames,
-        bool preparation)
+        bool preparation,
+        int subjectCount)
     {
         HashSet<string> tags = new(StringComparer.Ordinal)
         {
@@ -176,7 +189,63 @@ public sealed class BrollCandidateDetector : IBrollCandidateDetector
             tags.Add("PREPARATION");
         if (frames.Average(value => value.MovementSpeed) > 150)
             tags.Add("FAST_MOVEMENT");
+        if (subjectCount >= 2)
+            tags.Add("TEAM_GROUP");
         return tags.OrderBy(value => value, StringComparer.Ordinal).ToArray();
+    }
+
+    private static Dictionary<string, PlayerTrajectory> SceneSubjects(
+        BrollDetectionContext context,
+        GameplayTimelineFrame[] selectedFrames)
+    {
+        Dictionary<string, PlayerTrajectory> result = new(
+            StringComparer.Ordinal)
+        {
+            [context.PlayerId] = new PlayerTrajectory(
+                selectedFrames.Select(value => new PlayerTransformSample(
+                    value.Tick,
+                    value.Player.Position,
+                    value.Player.ViewAngles)).ToArray())
+        };
+        string? team = selectedFrames
+            .Select(value => value.Team)
+            .FirstOrDefault(value => !string.IsNullOrWhiteSpace(value));
+        if (team is null)
+            return result;
+        long start = selectedFrames[0].Tick;
+        long end = selectedFrames[^1].Tick;
+        foreach (IGrouping<string, GameplayTimelineFrame> group in
+                 context.Frames.Where(value =>
+                         value.Player.PlayerId != context.PlayerId &&
+                         value.Alive &&
+                         value.RoundNumber == selectedFrames[0].RoundNumber &&
+                         value.Tick >= start &&
+                         value.Tick <= end &&
+                         string.Equals(value.Team, team, StringComparison.Ordinal))
+                     .GroupBy(value => value.Player.PlayerId))
+        {
+            GameplayTimelineFrame[] nearby = group
+                .OrderBy(value => value.Tick)
+                .Where(value =>
+                {
+                    GameplayTimelineFrame closest = selectedFrames
+                        .OrderBy(item => Math.Abs(item.Tick - value.Tick))
+                        .First();
+                    return Math.Abs(closest.Tick - value.Tick) <=
+                               context.TickRate / 3 &&
+                           closest.Player.Position.DistanceTo(
+                               value.Player.Position) <= 640;
+                })
+                .ToArray();
+            if (nearby.Length < Math.Max(2, selectedFrames.Length / 2))
+                continue;
+            result[group.Key] = new PlayerTrajectory(
+                nearby.Select(value => new PlayerTransformSample(
+                    value.Tick,
+                    value.Player.Position,
+                    value.Player.ViewAngles)).ToArray());
+        }
+        return result;
     }
 
     private static double NormalizeMovement(double speed) =>
@@ -339,6 +408,17 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             warnings.Add("CAMERA_TRAJECTORY_INSUFFICIENT");
             return Pov(candidate, warnings);
         }
+        CameraShotFamily family = FamilyFor(candidate);
+        if (family == CameraShotFamily.PlayerPov)
+            return Pov(candidate, warnings);
+        if (family == CameraShotFamily.StaticTripod)
+        {
+            return CreateStaticTripod(
+                candidate,
+                context.Profile,
+                context,
+                warnings);
+        }
         List<CameraKeyframe> keyframes = [];
         const int count = 4;
         for (int index = 0; index < count; index++)
@@ -355,18 +435,37 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             if (Length(direction) < 0.001)
                 direction = DirectionFromYaw(sample.ViewAngles.Y);
             GameplayVector3 side = new(-direction.Y, direction.X, 0);
-            bool sideTracking = candidate.Type is
-                BrollCandidateType.SideMovement or
-                BrollCandidateType.UtilityThrow;
-            GameplayVector3 offset = sideTracking
-                ? Scale(side, context.CameraDistance)
-                : Scale(direction, -context.CameraDistance);
+            GameplayVector3 offset = family switch
+            {
+                CameraShotFamily.SideTracking or
+                CameraShotFamily.GroupWide =>
+                    Scale(side, context.CameraDistance *
+                        (family == CameraShotFamily.GroupWide ? 1.35 : 1)),
+                CameraShotFamily.FrontTracking =>
+                    Scale(direction, context.CameraDistance),
+                CameraShotFamily.WeaponDetail => Add(
+                    Scale(direction, -42),
+                    Scale(side, index % 2 == 0 ? 24 : -24)),
+                CameraShotFamily.Orbit => new GameplayVector3(
+                    Math.Cos((-18 + 36 * position) * Math.PI / 180) *
+                        context.CameraDistance,
+                    Math.Sin((-18 + 36 * position) * Math.PI / 180) *
+                        context.CameraDistance,
+                    0),
+                _ => Scale(direction, -context.CameraDistance)
+            };
+            GameplayVector3 subject = SubjectPosition(
+                candidate,
+                position,
+                sample.Position);
             GameplayVector3 camera = Add(
-                sample.Position,
+                subject,
                 new GameplayVector3(
                     offset.X,
                     offset.Y,
-                    context.CameraHeight));
+                    family == CameraShotFamily.WeaponDetail
+                        ? 46
+                        : context.CameraHeight));
             if (!context.Profile.SafeVolumes.Any(value => value.Contains(camera)))
             {
                 warnings.Add("CAMERA_PATH_OUTSIDE_SAFE_VOLUME");
@@ -383,10 +482,21 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
                 Rotation = LookAt(
                     camera,
                     Add(
-                        sample.Position,
-                        new GameplayVector3(0, 0, 54))),
+                        subject,
+                        new GameplayVector3(
+                            0,
+                            0,
+                            family == CameraShotFamily.WeaponDetail
+                                ? 44
+                                : 54))),
                 Fov = Math.Clamp(
-                    86 - 8 * position,
+                    family switch
+                    {
+                        CameraShotFamily.GroupWide => 96 - 2 * position,
+                        CameraShotFamily.WeaponDetail => 68,
+                        CameraShotFamily.Orbit => 82,
+                        _ => 86 - 8 * position
+                    },
                     context.MinimumFov,
                     context.MaximumFov)
             });
@@ -398,13 +508,18 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             warnings.Add("CAMERA_KEYFRAMES_NOT_DISTINCT");
             return Pov(candidate, warnings);
         }
-        CameraShotType type = candidate.Type switch
+        CameraShotType type = family switch
         {
-            BrollCandidateType.SideMovement => CameraShotType.SideTracking,
-            BrollCandidateType.PlayerApproach => CameraShotType.RearTracking,
+            CameraShotFamily.SideTracking => CameraShotType.SideTracking,
+            CameraShotFamily.RearTracking => CameraShotType.RearTracking,
+            CameraShotFamily.FrontTracking => CameraShotType.FrontTracking,
+            CameraShotFamily.GroupWide => CameraShotType.GroupWide,
+            CameraShotFamily.Orbit => CameraShotType.Orbit,
+            CameraShotFamily.WeaponDetail => CameraShotType.WeaponDetail,
+            CameraShotFamily.EnvironmentReveal => CameraShotType.EnvironmentReveal,
             _ => CameraShotType.LinearCampath
         };
-        return new CameraShotPlan
+        CameraShotPlan shot = new()
         {
             Id = $"camera-{candidate.Id}",
             Type = type,
@@ -417,8 +532,102 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             FovEnd = keyframes[^1].Fov,
             RequiresHighFpsCapture = candidate.CinematicScore >= 0.8,
             FallbackShotId = $"camera-{candidate.Id}-pov",
+            Warnings = warnings,
+            Family = family,
+            SubjectIds = candidate.SubjectIds.Count > 0
+                ? candidate.SubjectIds
+                : [candidate.Trajectory.Samples.Count > 0
+                    ? "selected-player"
+                    : "unknown-subject"],
+            TargetPoints = keyframes.Select((value, index) =>
+                new CameraTargetPoint(
+                    value.TimeSeconds,
+                    SubjectPosition(
+                        candidate,
+                        index / (double)(keyframes.Count - 1),
+                        samples[Math.Clamp(
+                            (int)Math.Round(index /
+                                (double)(keyframes.Count - 1) *
+                                (samples.Length - 1)),
+                            0,
+                            samples.Length - 1)].Position),
+                    candidate.SubjectIds)).ToArray(),
+            FovCurve = keyframes.Select(value =>
+                new CameraFovPoint(value.TimeSeconds, value.Fov)).ToArray(),
+            FramingIntent = FramingIntent(family),
+            SafetyVolume = context.Profile.SafeVolumes.FirstOrDefault(value =>
+                keyframes.All(keyframe => value.Contains(keyframe.Position))),
+            PreviewRequired = true,
+            FallbackChain =
+            [
+                CameraShotFamily.StaticTripod,
+                CameraShotFamily.PlayerPov
+            ]
+        };
+        return CameraShotSignatureBuilder.Attach(shot, context.MapName);
+    }
+
+    private static CameraShotPlan CreateStaticTripod(
+        BrollCandidate candidate,
+        MapCameraProfile profile,
+        CameraPlanningContext context,
+        IReadOnlyList<string> warnings)
+    {
+        EstablishingCameraPreset? preset = profile.EstablishingShots
+            .FirstOrDefault(value => value.Keyframes.Count > 0);
+        if (preset is null)
+            return Pov(candidate, [.. warnings, "VERIFIED_TRIPOD_UNAVAILABLE"]);
+        CameraKeyframe source = preset.Keyframes[0];
+        PlayerTransformSample[] samples = candidate.Trajectory.Samples
+            .OrderBy(value => value.Tick)
+            .ToArray();
+        GameplayVector3 subject = SubjectPosition(
+            candidate,
+            0.5,
+            samples[samples.Length / 2].Position);
+        if (source.Position.DistanceTo(subject) >
+            Math.Max(640, context.CameraDistance * 8))
+        {
+            return Pov(
+                candidate,
+                [.. warnings, "CAMERA_TARGET_OUTSIDE_VERIFIED_VOLUME"]);
+        }
+        CameraKeyframe keyframe = source with
+        {
+            TimeSeconds = 0,
+            Rotation = LookAt(
+                source.Position,
+                Add(subject, new GameplayVector3(0, 0, 54)))
+        };
+        CameraShotPlan shot = new()
+        {
+            Id = $"camera-{candidate.Id}-{preset.Id}-tripod",
+            Type = CameraShotType.StaticTripod,
+            Family = CameraShotFamily.StaticTripod,
+            DemoId = candidate.DemoId,
+            StartTick = candidate.StartTick,
+            EndTick = candidate.EndTick,
+            TargetDurationSeconds = candidate.DurationSeconds,
+            Keyframes = [keyframe],
+            TargetPoints =
+            [
+                new CameraTargetPoint(0, subject, candidate.SubjectIds)
+            ],
+            FovCurve = [new CameraFovPoint(0, keyframe.Fov)],
+            FovStart = keyframe.Fov,
+            FovEnd = keyframe.Fov,
+            FramingIntent = "subject enters and crosses a verified frame",
+            SafetyVolume = profile.SafeVolumes.FirstOrDefault(value =>
+                value.Contains(keyframe.Position)),
+            PreviewRequired = true,
+            VerifiedPresetId = preset.Id,
+            RequiresHighFpsCapture = false,
+            FallbackShotId = $"camera-{candidate.Id}-pov",
+            FallbackChain = [CameraShotFamily.PlayerPov],
+            SubjectIds = candidate.SubjectIds,
             Warnings = warnings
         };
+        return CameraShotSignatureBuilder.Attach(shot, context.MapName);
     }
 
     private static CameraShotPlan EstablishingFallback(
@@ -479,7 +688,14 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
                 };
             })
             .ToArray();
-        return new CameraShotPlan
+        CameraShotFamily family = candidate.Type is
+                BrollCandidateType.PlayerApproach or
+                BrollCandidateType.SideMovement or
+                BrollCandidateType.RearMovement or
+                BrollCandidateType.TeamMovement
+            ? CameraShotFamily.SideTracking
+            : CameraShotFamily.EnvironmentReveal;
+        CameraShotPlan shot = new()
         {
             Id = $"camera-{candidate.Id}-{preset.Id}",
             Type = candidate.Type is
@@ -497,14 +713,41 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             FovEnd = keyframes[^1].Fov,
             RequiresHighFpsCapture = false,
             FallbackShotId = $"camera-{candidate.Id}-pov",
-            Warnings = warnings
+            Warnings = warnings,
+            Family = family,
+            SubjectIds = candidate.SubjectIds,
+            TargetPoints = keyframes.Select((value, index) =>
+            {
+                double progress = index / (double)(keyframes.Length - 1);
+                GameplayVector3 target = SubjectPosition(
+                    candidate,
+                    progress,
+                    Sample(targetSamples, progress).Position);
+                return new CameraTargetPoint(
+                    value.TimeSeconds,
+                    target,
+                    candidate.SubjectIds);
+            }).ToArray(),
+            FovCurve = keyframes.Select(value =>
+                new CameraFovPoint(value.TimeSeconds, value.Fov)).ToArray(),
+            FramingIntent = FramingIntent(family),
+            SafetyVolume = profile.SafeVolumes.FirstOrDefault(value =>
+                keyframes.All(keyframe => value.Contains(keyframe.Position))),
+            PreviewRequired = true,
+            VerifiedPresetId = preset.Id,
+            FallbackChain =
+            [
+                CameraShotFamily.StaticTripod,
+                CameraShotFamily.PlayerPov
+            ]
         };
+        return CameraShotSignatureBuilder.Attach(shot, context.MapName);
     }
 
     public static CameraShotPlan Pov(
         BrollCandidate candidate,
         IReadOnlyList<string> warnings) =>
-        new()
+        CameraShotSignatureBuilder.Attach(new CameraShotPlan
         {
             Id = $"camera-{candidate.Id}-pov",
             Type = CameraShotType.PlayerPov,
@@ -517,7 +760,89 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             FovEnd = 90,
             RequiresHighFpsCapture = false,
             FallbackShotId = string.Empty,
-            Warnings = warnings
+            Warnings = warnings,
+            Family = CameraShotFamily.PlayerPov,
+            SubjectIds = candidate.SubjectIds,
+            TargetPoints = [],
+            FovCurve =
+            [
+                new CameraFovPoint(0, 90),
+                new CameraFovPoint(candidate.DurationSeconds, 90)
+            ],
+            FramingIntent = "selected player POV continuity",
+            PreviewRequired = false,
+            FallbackChain = []
+        }, string.Empty);
+
+    private static CameraShotFamily FamilyFor(BrollCandidate candidate) =>
+        candidate.Type switch
+        {
+            BrollCandidateType.EstablishingShot or
+            BrollCandidateType.EnvironmentShot =>
+                CameraShotFamily.StaticTripod,
+            BrollCandidateType.TeamMovement or
+            BrollCandidateType.TeamSetup => CameraShotFamily.GroupWide,
+            BrollCandidateType.PlayerRotation => CameraShotFamily.Orbit,
+            BrollCandidateType.SideMovement => CameraShotFamily.SideTracking,
+            BrollCandidateType.RearMovement or
+            BrollCandidateType.PostFightExit => CameraShotFamily.RearTracking,
+            BrollCandidateType.PlayerApproach or
+            BrollCandidateType.BombApproach or
+            BrollCandidateType.PreFightSetup =>
+                CameraShotFamily.FrontTracking,
+            BrollCandidateType.UtilityPreparation or
+            BrollCandidateType.UtilityThrow or
+            BrollCandidateType.WeaponDraw or
+            BrollCandidateType.WeaponReload or
+            BrollCandidateType.WeaponSwitch or
+            BrollCandidateType.ScopePreparation =>
+                CameraShotFamily.WeaponDetail,
+            BrollCandidateType.PovContinuity or
+            BrollCandidateType.BombPlant or
+            BrollCandidateType.BombDefuse => CameraShotFamily.PlayerPov,
+            _ => CameraShotFamily.RearTracking
+        };
+
+    private static GameplayVector3 SubjectPosition(
+        BrollCandidate candidate,
+        double progress,
+        GameplayVector3 fallback)
+    {
+        GameplayVector3[] positions = candidate.SubjectTrajectories.Values
+            .Select(value => value.Samples
+                .OrderBy(sample => sample.Tick)
+                .ToArray())
+            .Where(value => value.Length > 0)
+            .Select(value => Sample(value, progress).Position)
+            .ToArray();
+        if (positions.Length == 0)
+            return fallback;
+        return new GameplayVector3(
+            positions.Average(value => value.X),
+            positions.Average(value => value.Y),
+            positions.Average(value => value.Z));
+    }
+
+    private static string FramingIntent(CameraShotFamily family) =>
+        family switch
+        {
+            CameraShotFamily.StaticTripod =>
+                "subject crosses a verified static composition",
+            CameraShotFamily.SideTracking =>
+                "medium side profile with forward lead room",
+            CameraShotFamily.RearTracking =>
+                "rear pursuit preserving route context",
+            CameraShotFamily.FrontTracking =>
+                "front approach with visible destination context",
+            CameraShotFamily.GroupWide =>
+                "wide composition retaining all stable team subjects",
+            CameraShotFamily.Orbit =>
+                "short motivated orbit around the primary subject",
+            CameraShotFamily.WeaponDetail =>
+                "brief weapon and hands detail without clipping",
+            CameraShotFamily.EnvironmentReveal =>
+                "environment reveal with subject-scale continuity",
+            _ => "selected player POV continuity"
         };
 
     private static PlayerTransformSample Sample(
@@ -596,9 +921,12 @@ public sealed class CameraShotQualityAnalyzer : ICameraShotQualityAnalyzer
         if (metrics.JumpScore > 0.40)
             warnings.Add("CAMERA_PREVIEW_ABRUPT_JUMP");
         if (metrics.StaticRatio > 0.80 &&
-            shot.Type is not CameraShotType.StaticEstablishing)
+            shot.Type is not CameraShotType.StaticEstablishing and
+                not CameraShotType.StaticTripod)
             warnings.Add("CAMERA_PREVIEW_TOO_STATIC");
         if (shot.Type is not CameraShotType.PlayerPov &&
+            shot.Type is not CameraShotType.StaticEstablishing &&
+            shot.Type is not CameraShotType.StaticTripod &&
             shot.Keyframes.Count < 4)
             warnings.Add("CAMERA_CAMPATH_KEYFRAME_COUNT_INVALID");
         if (shot.Keyframes.Zip(shot.Keyframes.Skip(1)).Any(pair =>
@@ -606,6 +934,39 @@ public sealed class CameraShotQualityAnalyzer : ICameraShotQualityAnalyzer
             warnings.Add("CAMERA_KEYFRAME_TIME_ORDER_INVALID");
         if (shot.Keyframes.Any(value => value.Fov is < 20 or > 140))
             warnings.Add("CAMERA_FOV_INVALID");
+        if (metrics.CameraInsideGeometry || metrics.WallIntersectionCount > 0)
+            warnings.Add("CAMERA_PREVIEW_GEOMETRY_INTERSECTION");
+        if (metrics.CameraTeleportCount > 0)
+            warnings.Add("CAMERA_PREVIEW_TELEPORT");
+        if (metrics.ModelClippingRatio is > 0.02)
+            warnings.Add("CAMERA_PREVIEW_MODEL_CLIPPING");
+        if (metrics.MaximumAngularVelocity is > 240)
+            warnings.Add("CAMERA_PREVIEW_ANGULAR_VELOCITY_EXCESSIVE");
+        if (metrics.MaximumFovVelocity is > 55)
+            warnings.Add("CAMERA_PREVIEW_FOV_CHANGE_EXCESSIVE");
+        if (metrics.ExcessiveMotionRatio is > 0.15)
+            warnings.Add("CAMERA_PREVIEW_EXCESSIVE_MOTION");
+        if (metrics.DemoPlaybackStripDetected)
+            warnings.Add("CAMERA_PREVIEW_DEMO_PLAYBACK_STRIP_VISIBLE");
+        if (metrics.UnexpectedHandsOnlyPresentation &&
+            shot.Family != CameraShotFamily.WeaponDetail)
+            warnings.Add("CAMERA_PREVIEW_UNEXPECTED_HANDS_ONLY");
+        if (shot.Family != CameraShotFamily.PlayerPov)
+        {
+            if (metrics.SubjectVisibleRatio is null ||
+                metrics.SubjectCenterDistance is null ||
+                metrics.SubjectLossDurationSeconds is null)
+                warnings.Add("CAMERA_PREVIEW_SUBJECT_ANALYSIS_UNAVAILABLE");
+            if (metrics.SubjectVisibleRatio is < 0.92)
+                warnings.Add("CAMERA_PREVIEW_SUBJECT_VISIBILITY_LOW");
+            if (metrics.SubjectLossDurationSeconds is > 0.10)
+                warnings.Add("CAMERA_PREVIEW_SUBJECT_LOST");
+            if (metrics.SubjectClippingRatio is > 0.02)
+                warnings.Add("CAMERA_PREVIEW_SUBJECT_CLIPPED");
+            if (shot.Family == CameraShotFamily.GroupWide &&
+                metrics.GroupCoverageRatio is < 0.90)
+                warnings.Add("CAMERA_PREVIEW_GROUP_COVERAGE_LOW");
+        }
         return warnings;
     }
 }
@@ -999,115 +1360,47 @@ public sealed class MotivatedEffectPlanner : IMotivatedEffectPlanner
         (double Start, double End) freezeWindow = Window(
             center, 0.025, 0.075, segmentDuration);
         (double Start, double End) motionWindow = Window(
-            center, 0.025, 0.18, segmentDuration);
-        (double Start, double End) blurWindow = Window(
-            center, 0.075, 0.12, segmentDuration);
-        (double Start, double End) flashWindow = Window(
-            center,
-            0.012,
-            0.075,
-            segmentDuration);
-        (double Start, double End) echoWindow = Window(
-            center, 0.035, 0.22, segmentDuration);
+            center, 0.025, 0.12, segmentDuration);
         (double Start, double End) distortionWindow = Window(
-            center, 0.13, 0.18, segmentDuration);
-        (double Start, double End) driftWindow = Window(
-            center, 0.62, 0.10, segmentDuration);
-        (double Start, double End) accentWindow = Window(
-            center, 0.025, 0.16, segmentDuration);
+            center, 0.05, 0.07, segmentDuration);
 
-        List<MotivatedEffectDirective> planned = climax
-            ?
-            [
-                Directive("HitStop", reason, freezeWindow, 0.72),
-                Directive(
-                    "PunchZoom",
-                    MotivatedEffectReason.TimeRamp,
-                    impactWindow,
-                    0.62),
-                Directive(
-                    "DirectionalMotionBlur",
-                    MotivatedEffectReason.TimeRamp,
-                    blurWindow,
-                    0.48),
-                Directive(
-                    "RollBurst",
-                    MotivatedEffectReason.CameraTransition,
-                    accentWindow,
-                    0.34),
-                Directive("FlashAccent", reason, flashWindow, 0.30)
-            ]
-            : (Math.Abs(sequenceIndex) % 7) switch
-            {
-                0 =>
-                [
-                    Directive("RecoilShake", reason, motionWindow, 0.52),
-                    Directive("FlashAccent", reason, flashWindow, 0.24),
-                    Directive(
-                        "VignettePulse",
-                        MotivatedEffectReason.CameraTransition,
-                        accentWindow,
-                        0.20)
-                ],
-                1 =>
-                [
-                    Directive("CrashZoom", reason, impactWindow, impactStrength),
-                    Directive(
-                        "ZoomBlur",
-                        MotivatedEffectReason.TimeRamp,
-                        blurWindow,
-                        0.40),
-                    Directive("RecoilShake", reason, motionWindow, 0.38)
-                ],
-                2 =>
-                [
-                    Directive("FrameEcho", reason, echoWindow, 0.48),
-                    Directive("RgbSplit", reason, accentWindow, 0.34),
-                    Directive("FlashAccent", reason, flashWindow, 0.18)
-                ],
-                3 =>
-                [
-                    Directive("OffsetZoom", reason, impactWindow, 0.52),
-                    Directive(
-                        "DirectionalMotionBlur",
-                        MotivatedEffectReason.TimeRamp,
-                        blurWindow,
-                        0.38),
-                    Directive(
-                        "RollBurst",
-                        MotivatedEffectReason.CameraTransition,
-                        motionWindow,
-                        0.28)
-                ],
-                4 =>
-                [
-                    Directive("LensWarpPulse", reason, distortionWindow, 0.46),
-                    Directive("RecoilShake", reason, motionWindow, 0.44),
-                    Directive(
-                        "VignettePulse",
-                        MotivatedEffectReason.CameraTransition,
-                        accentWindow,
-                        0.24),
-                    Directive("FlashAccent", reason, flashWindow, 0.16)
-                ],
-                5 =>
-                [
-                    Directive("SmoothZoom", reason, driftWindow, 0.38),
-                    Directive("FrameEcho", reason, echoWindow, 0.26),
-                    Directive(
-                        "VignettePulse",
-                        MotivatedEffectReason.CameraTransition,
-                        accentWindow,
-                        0.18)
-                ],
-                _ =>
-                [
-                    Directive("HitStop", reason, freezeWindow, 0.48),
-                    Directive("RecoilShake", reason, motionWindow, 0.48),
-                    Directive("RgbSplit", reason, accentWindow, 0.28),
-                    Directive("FlashAccent", reason, flashWindow, 0.20)
-                ]
-            };
+        // The musical/gameplay event chooses the treatment. The sequence index
+        // intentionally does not rotate through a catalogue of visual effects.
+        // This keeps ordinary kills clean and makes rare treatments explainable.
+        List<MotivatedEffectDirective> planned = [];
+        if (finalHighlight)
+        {
+            planned.Add(Directive("HitStop", reason, freezeWindow, 0.72));
+        }
+        else if (match?.Peak.Type == MusicalPeakType.BassImpact &&
+                 match.Peak.Strength >= 0.85 &&
+                 section.Energy >= 0.75)
+        {
+            planned.Add(Directive(
+                "LensWarpPulse",
+                MotivatedEffectReason.BassImpact,
+                distortionWindow,
+                0.44));
+        }
+        else if (match?.Peak.Type == MusicalPeakType.DropStart &&
+                 match.Peak.Strength >= 0.72)
+        {
+            planned.Add(Directive(
+                "PunchZoom",
+                MotivatedEffectReason.MusicPeak,
+                impactWindow,
+                impactStrength));
+        }
+        else if (role == CinematicSequenceRole.PeakHighlight &&
+                 section.Energy >= 0.80 &&
+                 (match?.Peak.Strength ?? 0) >= 0.70)
+        {
+            planned.Add(Directive(
+                "RecoilShake",
+                reason,
+                motionWindow,
+                0.46));
+        }
         return planned
             .Where(value =>
                 value.EndSeconds - value.StartSeconds >= 0.04)
@@ -1171,11 +1464,11 @@ public sealed class SoundDesignPlanner : ISoundDesignPlanner
                     new SoundDesignSection(value.Id, -13, -3, true, false),
                 MusicSectionType.Drop or MusicSectionType.Chorus or
                     MusicSectionType.HighEnergy =>
-                    new SoundDesignSection(value.Id, -6, -3, false, true),
-                _ => new SoundDesignSection(value.Id, -15, -4, false, false)
+                    new SoundDesignSection(value.Id, -6, -3, false, false),
+                _ => new SoundDesignSection(value.Id, -15, -3, false, false)
             }).ToArray(),
             PreservePostKillTail: true,
-            Warnings: []);
+            Warnings: ["MUSIC_GAIN_STABLE_AROUND_KILLS"]);
 }
 
 public interface IColorNarrativePlanner

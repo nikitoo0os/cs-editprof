@@ -105,7 +105,7 @@ classifier derives sections and peaks, then selects one bounded contiguous
 excerpt. Primary kills may only be assigned to `Drop`, `Chorus` or
 `HighEnergy` sections.
 
-The demo-analysis `1.2` contract adds a sampled gameplay timeline with player
+The demo-analysis `1.3` contract adds a sampled gameplay timeline with player
 transform, velocity, freeze/alive state and action density. Safe movement
 windows outside selected highlights become B-roll candidates. The locked
 `cinematic-movie-plan.json` covers the entire output timeline, limits short
@@ -113,14 +113,11 @@ movies to 30 seconds, prevents B-roll from exceeding highlight duration, maps
 important highlights to strong peaks and preserves post-kill tails during
 bounded time warp.
 
-Director mode uses only effects motivated by the locked plan. Balanced and
-Strong intensity rotate seven distinct treatment families; most deliberately
-avoid zoom, while crash/offset/smooth zoom, recoil, echo, lens warp, hit-stop,
-spatial blur and temporal blur keep their own timing and texture. Content-aware
-transitions use gameplay tags, weapon, headshot and multikill metadata, with a
-deterministic hard/flash/fade/whip cycle for neutral shots. Hero moments receive a
-compensated local speed ramp without moving the primary kill away from its
-musical peak.
+Director mode uses only effects motivated by the locked plan. Ordinary shots
+remain clean; peak, final, bass and drop treatments pass through explicit rarity,
+duration and cooldown limits. Content-aware transitions use gameplay tags,
+weapon, headshot and multikill metadata. Hero moments receive a compensated
+local speed ramp without moving the primary kill away from its musical peak.
 
 The automatic story pass reserves a short non-combat intro when safe B-roll is
 available, orders selected moments toward the strongest climax and keeps kills
@@ -161,8 +158,10 @@ dotnet test .\tests\Cs2Highlight.Web.Tests -c Release `
   --filter "Category=Stage8Ffmpeg"
 ```
 
-See [Stage 8 real E2E](docs/STAGE8_E2E.md). The generated JSON plan and planned
-alignment report are not substitutes for viewing and probing the real MP4.
+See [Stage 8 real E2E](docs/STAGE8_E2E.md) and
+[Stage 10 cinematic re-direction](docs/STAGE10_CINEMATIC_REDIRECTION.md). The
+generated JSON plans and acceptance reports are not substitutes for viewing and
+probing the real MP4.
 
 ## Stage 7: deterministic dynamic effects
 

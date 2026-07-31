@@ -32,6 +32,34 @@ public sealed record MusicAnalysis(
 {
     public double FrameHopSeconds { get; init; } = 0.04;
     public IReadOnlyList<MusicFrame> Frames { get; init; } = [];
+    public MusicWaveformEnvelope? Waveform { get; init; }
+}
+
+public sealed record MusicWaveformPeak(
+    double TimeSeconds,
+    double Min,
+    double Max);
+
+public sealed record MusicWaveformEnvelope
+{
+    public string SchemaVersion { get; init; } = "1.0";
+    public string ChannelLayout { get; init; } = "mono";
+    public string Normalization { get; init; } = "global-absolute-peak";
+    public double SamplesPerSecond { get; init; }
+    public double SourceStartSeconds { get; init; }
+    public double SourceEndSeconds { get; init; }
+    public IReadOnlyList<MusicWaveformPeak> Peaks { get; init; } = [];
+}
+
+public sealed record RealWaveformEnvelopeArtifact
+{
+    public string SchemaVersion { get; init; } = "1.0";
+    public required bool Available { get; init; }
+    public required double ExcerptStartSeconds { get; init; }
+    public required double ExcerptEndSeconds { get; init; }
+    public required double SamplesPerSecond { get; init; }
+    public required IReadOnlyList<MusicWaveformPeak> Peaks { get; init; }
+    public required IReadOnlyList<string> Warnings { get; init; }
 }
 
 public sealed record MusicAnalyzerInfo(string Name, string Version, string Engine);

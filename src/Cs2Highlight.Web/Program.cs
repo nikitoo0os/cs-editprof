@@ -12,6 +12,8 @@ using Microsoft.EntityFrameworkCore;
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 builder.Configuration.AddJsonFile(
     "appsettings.local.json", optional: true, reloadOnChange: true);
+builder.Configuration.AddEnvironmentVariables();
+builder.Configuration.AddCommandLine(args);
 builder.Services.AddRazorPages(options =>
 {
     options.Conventions.ConfigureFilter(new Microsoft.AspNetCore.Mvc.AutoValidateAntiforgeryTokenAttribute());

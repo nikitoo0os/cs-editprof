@@ -51,7 +51,8 @@ public interface IDynamicEffectFilterGraphBuilder
         TimeWarpPlan? timeWarp,
         VideoOutputOptions output,
         string audioFilters,
-        IReadOnlyList<string>? postEffectVideoFilters = null);
+        IReadOnlyList<string>? postEffectVideoFilters = null,
+        double? targetDurationSeconds = null);
 }
 
 public sealed class DynamicEffectFilterGraphBuilder : IDynamicEffectFilterGraphBuilder
@@ -95,7 +96,8 @@ public sealed class DynamicEffectFilterGraphBuilder : IDynamicEffectFilterGraphB
         TimeWarpPlan? timeWarp,
         VideoOutputOptions output,
         string audioFilters,
-        IReadOnlyList<string>? postEffectVideoFilters = null)
+        IReadOnlyList<string>? postEffectVideoFilters = null,
+        double? targetDurationSeconds = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(videoInputLabel);
         ArgumentException.ThrowIfNullOrWhiteSpace(audioInputLabel);
@@ -106,9 +108,13 @@ public sealed class DynamicEffectFilterGraphBuilder : IDynamicEffectFilterGraphB
             [new TimeWarpSegment(0, sourceDurationSeconds, 1)],
             false,
             []);
-        double outputDuration = TimeWarpMath.OutputDuration(
-            timeWarp,
-            sourceDurationSeconds);
+        double outputDuration = targetDurationSeconds ??
+            TimeWarpMath.CoveredOutputDuration(
+                timeWarp,
+                sourceDurationSeconds);
+        ArgumentOutOfRangeException.ThrowIfLessThanOrEqual(
+            outputDuration,
+            0);
         EffectRenderContext context = new(
             output.Width,
             output.Height,
@@ -175,10 +181,21 @@ public sealed class DynamicEffectFilterGraphBuilder : IDynamicEffectFilterGraphB
             ',',
             (postEffectVideoFilters ?? [])
                 .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Append($"fps={output.Fps}")
+                .Append(
+                    "tpad=stop_mode=clone:stop_duration=" +
+                    Number(outputDuration))
+                .Append("trim=duration=" + Number(outputDuration))
+                .Append("setpts=PTS-STARTPTS")
                 .Append("format=yuv420p"));
         graph.Append('[').Append(current).Append(']')
             .Append(finalFilters)
-            .Append("[effect_video]");
+            .Append("[effect_video];")
+            .Append("[effect_warped_a]apad=whole_dur=")
+            .Append(Number(outputDuration))
+            .Append(",atrim=duration=")
+            .Append(Number(outputDuration))
+            .Append(",asetpts=PTS-STARTPTS[effect_audio]");
         return new DynamicFfmpegFilterGraph(
             graph.ToString(),
             "effect_video",
@@ -207,7 +224,7 @@ public sealed class DynamicEffectFilterGraphBuilder : IDynamicEffectFilterGraphB
             if (Math.Abs(speed - 1) > 0.000001)
                 graph.Append("atempo=").Append(Number(speed)).Append(',');
             graph.Append(audioFilters);
-            graph.Append("[effect_audio];");
+            graph.Append("[effect_warped_a];");
             return;
         }
 
@@ -242,7 +259,7 @@ public sealed class DynamicEffectFilterGraphBuilder : IDynamicEffectFilterGraphB
             graph.Append("[effect_warp_ao").Append(index).Append(']');
         graph.Append("concat=n=").Append(segments.Length)
             .Append(":v=0:a=1,").Append(audioFilters)
-            .Append("[effect_audio];");
+            .Append("[effect_warped_a];");
     }
 
     private static void BuildHitStop(
@@ -522,7 +539,7 @@ internal sealed class TransitionEffectRenderer(
         {
             VideoEffectType.HardCut => string.Empty,
             VideoEffectType.FadeTransition =>
-                $"fade=t=out:st={DynamicEffectFilterGraphBuilder.Number(cue.StartSeconds)}:d={DynamicEffectFilterGraphBuilder.Number(cue.EndSeconds - cue.StartSeconds)}",
+                $"eq=brightness='-0.08*max(0\\,min(1\\,(t-{DynamicEffectFilterGraphBuilder.Number(cue.StartSeconds)})/{DynamicEffectFilterGraphBuilder.Number(Math.Max(0.001, cue.EndSeconds - cue.StartSeconds))}))':eval=frame:enable='{DynamicEffectFilterGraphBuilder.Enable(cue)}'",
             VideoEffectType.FlashCut =>
                 $"eq=brightness='0.42*({DynamicEffectFilterGraphBuilder.Pulse(cue)})'",
             VideoEffectType.WhipPan =>

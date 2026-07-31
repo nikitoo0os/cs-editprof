@@ -1,4 +1,5 @@
 using Cs2Highlight.Web.Domain;
+using Cs2Highlight.Web.Data;
 using Microsoft.EntityFrameworkCore;
 
 namespace Cs2Highlight.Web.Services;
@@ -12,6 +13,8 @@ public sealed record TimelineConcurrencyRequest(
 
 public static class TimelineDirectorApi
 {
+    private static readonly System.Text.Json.JsonSerializerOptions Json =
+        new(System.Text.Json.JsonSerializerDefaults.Web);
     public static IEndpointRouteBuilder MapTimelineDirectorApi(
         this IEndpointRouteBuilder endpoints)
     {
@@ -111,11 +114,75 @@ public static class TimelineDirectorApi
                 request.ConcurrencyToken,
                 cancellationToken)));
 
+        group.MapGet("/regions/{regionId}/preview", (
+            string publicId,
+            string regionId,
+            IInteractiveTimelineDirector director,
+            CancellationToken cancellationToken) =>
+            RunAsync(() => director.GetRegionPreviewAsync(
+                publicId,
+                regionId,
+                cancellationToken)));
+
+        group.MapGet("/regions/{regionId}/camera-preview", async (
+            string publicId,
+            string regionId,
+            IDbContextFactory<GenerationDbContext> dbFactory,
+            GenerationStorage storage,
+            CancellationToken cancellationToken) =>
+        {
+            await using GenerationDbContext db =
+                await dbFactory.CreateDbContextAsync(cancellationToken);
+            Generation? generation = await db.Generations.AsNoTracking()
+                .SingleOrDefaultAsync(
+                    value => value.PublicId == publicId,
+                    cancellationToken);
+            if (generation is null)
+                return Results.NotFound();
+            GenerationTimelinePlan? timeline =
+                await db.GenerationTimelinePlans.AsNoTracking()
+                    .SingleOrDefaultAsync(
+                        value => value.GenerationId == generation.Id,
+                        cancellationToken);
+            if (timeline is null)
+                return Results.NotFound();
+            GenerationTimelineGap? gap =
+                await db.GenerationTimelineGaps.AsNoTracking()
+                    .SingleOrDefaultAsync(
+                        value =>
+                            value.TimelinePlanId == timeline.Id &&
+                            value.GapId == regionId,
+                        cancellationToken);
+            LocalTimelineRegionPlan? region = gap is null
+                ? null
+                : System.Text.Json.JsonSerializer.Deserialize<
+                    LocalTimelineRegionPlan>(
+                    gap.PlanJson,
+                    Json);
+            if (region is null || region.CameraShots.Count == 0)
+                return Results.NotFound();
+            string shotId = region.CameraShots[0].Id;
+            string? path = await db.GenerationCameraShots.AsNoTracking()
+                .Where(value =>
+                    value.GenerationId == generation.Id &&
+                    value.ShotId == shotId)
+                .Select(value => value.PreviewPath)
+                .SingleOrDefaultAsync(cancellationToken);
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+                return Results.NotFound();
+            string full = Path.GetFullPath(path);
+            storage.EnsureWithinRoot(full);
+            return Results.File(
+                full,
+                "video/mp4",
+                enableRangeProcessing: true);
+        });
+
         return endpoints;
     }
 
-    private static async Task<IResult> RunAsync(
-        Func<Task<InteractiveTimelineView>> action)
+    private static async Task<IResult> RunAsync<T>(
+        Func<Task<T>> action)
     {
         try
         {

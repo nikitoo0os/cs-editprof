@@ -141,7 +141,7 @@ public sealed class Stage5ServicesTests
     }
 
     [Fact]
-    public void AudioMixCreatesKillAccentAndMusicDuckingEnvelope()
+    public void AudioMixCreatesKillAccentWithoutMusicDuckingEnvelope()
     {
         GenerationMovieSettings settings = new()
         {
@@ -183,7 +183,8 @@ public sealed class Stage5ServicesTests
 
         Assert.Contains("between(t\\,4.95\\,5)", graph);
         Assert.Contains("1+(", graph);
-        Assert.Contains("1-(1-", graph);
+        Assert.DoesNotContain("1-(1-", graph);
+        Assert.DoesNotContain("MusicDuckOnKill", graph);
         Assert.Contains("eval=frame", graph);
     }
 

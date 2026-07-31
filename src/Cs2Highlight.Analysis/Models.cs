@@ -47,7 +47,18 @@ public sealed record GameplayTimelineFrame(
     bool Alive,
     bool InFreezeTime,
     bool NearKillEvent,
-    IReadOnlyList<GameplayEventReference> Events);
+    IReadOnlyList<GameplayEventReference> Events)
+{
+    public string? Team { get; init; }
+    public string? ActiveWeapon { get; init; }
+    public bool Firing { get; init; }
+    public bool Reloading { get; init; }
+    public bool UtilityActive { get; init; }
+    public bool Scoped { get; init; }
+    public bool Planting { get; init; }
+    public bool Defusing { get; init; }
+    public bool HasBomb { get; init; }
+}
 
 public sealed record PlayerTrajectory(
     IReadOnlyList<PlayerTransformSample> Samples);
@@ -99,6 +110,11 @@ public sealed record KillEvent(
     public int? KillerHealth { get; init; }
     public double? DistanceMeters { get; init; }
     public int? ShotsSinceLastKill { get; init; }
+    public GameplayVector3? ShooterPosition { get; init; }
+    public GameplayVector3? VictimPosition { get; init; }
+    public GameplayVector3? HitPosition { get; init; }
+    public string BulletTrajectoryStatus { get; init; } =
+        "UnavailableExactImpact";
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]

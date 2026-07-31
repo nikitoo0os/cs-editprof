@@ -163,6 +163,8 @@ public sealed class RenderEnvironmentOptions
     public double ClipStartSampleSeconds { get; set; } = 2;
     public double ClipStartBlackDurationSeconds { get; set; } = 0.75;
     public double ClipStartFreezeDurationSeconds { get; set; } = 1;
+    public bool EnableDemoUiDetection { get; set; } = true;
+    public double DemoUiDetectionSampleSeconds { get; set; } = 12;
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]

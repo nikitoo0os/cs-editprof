@@ -9,6 +9,7 @@
     "analyzer",
     "audio",
     "frameHopSeconds",
+    "waveform",
     "frames",
     "beats",
     "downbeats",
@@ -18,7 +19,7 @@
     "warnings"
   ],
   "properties": {
-    "schemaVersion": { "const": "2.0" },
+    "schemaVersion": { "const": "2.1" },
     "analyzer": {
       "type": "object",
       "additionalProperties": false,
@@ -60,6 +61,7 @@
       "minimum": 0.02,
       "maximum": 0.05
     },
+    "waveform": { "$ref": "#/$defs/waveform" },
     "frames": {
       "type": "array",
       "minItems": 1,
@@ -89,6 +91,41 @@
       "type": "number",
       "minimum": 0,
       "maximum": 1
+    },
+    "waveform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schemaVersion",
+        "channelLayout",
+        "normalization",
+        "samplesPerSecond",
+        "sourceStartSeconds",
+        "sourceEndSeconds",
+        "peaks"
+      ],
+      "properties": {
+        "schemaVersion": { "const": "1.0" },
+        "channelLayout": { "const": "mono" },
+        "normalization": { "const": "global-absolute-peak" },
+        "samplesPerSecond": { "type": "number", "minimum": 100, "maximum": 200 },
+        "sourceStartSeconds": { "type": "number", "minimum": 0 },
+        "sourceEndSeconds": { "type": "number", "exclusiveMinimum": 0 },
+        "peaks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["timeSeconds", "min", "max"],
+            "properties": {
+              "timeSeconds": { "type": "number", "minimum": 0 },
+              "min": { "$ref": "#/$defs/unit" },
+              "max": { "$ref": "#/$defs/unit" }
+            }
+          }
+        }
+      }
     },
     "musicFrame": {
       "type": "object",

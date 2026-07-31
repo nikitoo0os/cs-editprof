@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	SchemaVersion = "1.2"
+	SchemaVersion = "1.3"
 	ParserName    = "cs2-demo-parser"
-	ParserVersion = "0.3.0"
+	ParserVersion = "0.4.0"
 )
 
 type roundBuilder struct {
@@ -205,6 +205,8 @@ func Analyze(path string) (contract.Analysis, error) {
 		var distanceMeters *float64
 		var shots *int
 		var oneTap *bool
+		var shooterPosition *contract.GameplayVector3
+		var victimPosition *contract.GameplayVector3
 		if event.Killer != nil {
 			health := event.Killer.Health()
 			if health > 0 {
@@ -218,31 +220,45 @@ func Analyze(path string) (contract.Analysis, error) {
 				oneTap = &isOneTap
 			}
 			shotsSinceLastKill[mapped.PlayerID] = 0
+			position := event.Killer.Position()
+			shooterPosition = &contract.GameplayVector3{
+				X: position.X, Y: position.Y, Z: position.Z,
+			}
+		}
+		victimWorldPosition := event.Victim.Position()
+		victimPosition = &contract.GameplayVector3{
+			X: victimWorldPosition.X,
+			Y: victimWorldPosition.Y,
+			Z: victimWorldPosition.Z,
 		}
 		if event.Distance > 0 {
 			value := float64(event.Distance)
 			distanceMeters = &value
 		}
 		result.Kills = append(result.Kills, contract.Kill{
-			EventIndex:         len(result.Kills) + 1,
-			Tick:               currentTick(),
-			RoundNumber:        currentRound.number,
-			KillerPlayerID:     killerID,
-			KillerName:         killerName,
-			VictimPlayerID:     victim.PlayerID,
-			VictimName:         victim.Name,
-			AssisterPlayerID:   assisterID,
-			Weapon:             weapon,
-			Headshot:           event.IsHeadshot,
-			KillerTeam:         killerTeam,
-			VictimTeam:         teamName(event.Victim.Team),
-			Wallbang:           &wallbang,
-			OneTap:             oneTap,
-			NoScope:            &noScope,
-			ThroughSmoke:       &throughSmoke,
-			KillerHealth:       killerHealth,
-			DistanceMeters:     distanceMeters,
-			ShotsSinceLastKill: shots,
+			EventIndex:             len(result.Kills) + 1,
+			Tick:                   currentTick(),
+			RoundNumber:            currentRound.number,
+			KillerPlayerID:         killerID,
+			KillerName:             killerName,
+			VictimPlayerID:         victim.PlayerID,
+			VictimName:             victim.Name,
+			AssisterPlayerID:       assisterID,
+			Weapon:                 weapon,
+			Headshot:               event.IsHeadshot,
+			KillerTeam:             killerTeam,
+			VictimTeam:             teamName(event.Victim.Team),
+			Wallbang:               &wallbang,
+			OneTap:                 oneTap,
+			NoScope:                &noScope,
+			ThroughSmoke:           &throughSmoke,
+			KillerHealth:           killerHealth,
+			DistanceMeters:         distanceMeters,
+			ShotsSinceLastKill:     shots,
+			ShooterPosition:        shooterPosition,
+			VictimPosition:         victimPosition,
+			HitPosition:            nil,
+			BulletTrajectoryStatus: "UnavailableExactImpact",
 		})
 		recordAction(event.Killer, "Kill", &weapon)
 	})
@@ -298,6 +314,27 @@ func Analyze(path string) (contract.Analysis, error) {
 				frameEvents = []contract.GameplayEventReference{}
 			}
 			actionDensity := math.Min(1, float64(len(frameEvents))/4)
+			var activeWeapon *string
+			utilityActive := false
+			hasBomb := false
+			if weapon := player.ActiveWeapon(); weapon != nil {
+				code := canonicalWeapon(weapon.String())
+				activeWeapon = &code
+				utilityActive = weapon.Class() == common.EqClassGrenade
+			}
+			for _, weapon := range player.Weapons() {
+				if weapon != nil && weapon.Type == common.EqBomb {
+					hasBomb = true
+					break
+				}
+			}
+			firing := false
+			for _, action := range frameEvents {
+				if action.Type == "WeaponFire" {
+					firing = true
+					break
+				}
+			}
 			result.Timeline = append(
 				result.Timeline,
 				contract.GameplayTimelineFrame{
@@ -318,6 +355,15 @@ func Analyze(path string) (contract.Analysis, error) {
 					InFreezeTime:  inFreezeTime,
 					NearKillEvent: false,
 					Events:        frameEvents,
+					Team:          teamName(player.Team),
+					ActiveWeapon:  activeWeapon,
+					Firing:        firing,
+					Reloading:     player.IsReloading,
+					UtilityActive: utilityActive,
+					Scoped:        player.IsScoped(),
+					Planting:      player.IsPlanting,
+					Defusing:      player.IsDefusing,
+					HasBomb:       hasBomb,
 				})
 			delete(pendingEvents, mapped.PlayerID)
 		}
@@ -369,7 +415,10 @@ func Analyze(path string) (contract.Analysis, error) {
 	}
 	result.Warnings = append(
 		result.Warnings,
-		"lastEnemyKill is unavailable in parser v0.3.0 and remains null.")
+		"lastEnemyKill is unavailable in parser v0.4.0 and remains null.")
+	result.Warnings = append(
+		result.Warnings,
+		"Exact bullet impact positions are unavailable; Bullet Path camera candidates must remain disabled.")
 	if len(result.Timeline) == 0 {
 		result.Warnings = append(
 			result.Warnings,

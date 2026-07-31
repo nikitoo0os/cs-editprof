@@ -108,8 +108,33 @@ public sealed class BrowserFlowTests
             await page.Locator("[data-timeline-suggest]").ClickAsync();
             ILocator markers = page.Locator("[data-anchor-id]");
             await Assertions.Expect(markers).ToHaveCountAsync(3);
+            ILocator regions = page.Locator("[data-region-id]");
+            await Assertions.Expect(regions).ToHaveCountAsync(4);
+            await regions.Last.EvaluateAsync(
+                "element => { element.dataset.unchangedSentinel = 'preserved'; }");
+            string anchorUpdatePattern =
+                "**/api/generations/*/timeline/anchors/*";
+            await page.RouteAsync(anchorUpdatePattern, async route =>
+            {
+                await Task.Delay(350);
+                await route.ContinueAsync();
+            });
             await markers.Nth(1).ClickAsync();
             await page.Keyboard.PressAsync("ArrowRight");
+            await Assertions.Expect(
+                    page.Locator("[data-region-id].is-replanning"))
+                .ToHaveCountAsync(2);
+            await Assertions.Expect(
+                    page.Locator("[data-timeline-validation]"))
+                .ToContainTextAsync("Replanning region");
+            await Assertions.Expect(
+                    page.Locator(
+                        "[data-region-id][data-unchanged-sentinel=preserved]"))
+                .ToHaveCountAsync(1);
+            await Assertions.Expect(
+                    page.Locator("[data-region-id].is-replanning"))
+                .ToHaveCountAsync(0, new() { Timeout = 10_000 });
+            await page.UnrouteAsync(anchorUpdatePattern);
             await markers.Last.ClickAsync();
             await page.Locator("[data-inspector-lock]").ClickAsync();
             await Assertions.Expect(markers.Last)

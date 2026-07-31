@@ -16,8 +16,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 NAME = "cs2-music-analyzer"
-VERSION = "0.2.0"
-SCHEMA = "2.0"
+VERSION = "0.3.0"
+SCHEMA = "2.1"
+WAVEFORM_SAMPLES_PER_SECOND = 160
 SUPPORTED = {".mp3", ".wav", ".flac", ".m4a", ".aac"}
 
 
@@ -91,6 +92,53 @@ def normalize(values: Iterable[float]) -> list[float]:
     if maximum <= 0:
         return [0.0 for _ in result]
     return [max(0.0, min(1.0, value / maximum)) for value in result]
+
+
+def build_waveform_envelope(
+    samples: Any,
+    sample_rate: int,
+    samples_per_second: int = WAVEFORM_SAMPLES_PER_SECOND,
+    numeric: Any | None = None,
+) -> dict[str, Any]:
+    """Build deterministic mono negative/positive peak magnitudes in 0..1."""
+    values = (
+        numeric.asarray(samples, dtype=float).reshape(-1)
+        if numeric is not None
+        else [float(value) for value in samples]
+    )
+    if sample_rate <= 0 or samples_per_second <= 0:
+        raise ValueError("waveform sample rates must be positive")
+    value_count = int(values.size) if numeric is not None else len(values)
+    if value_count == 0:
+        raise ValueError("decoded waveform is empty")
+    maximum = (
+        float(numeric.max(numeric.abs(values)))
+        if numeric is not None
+        else max((abs(value) for value in values), default=0.0)
+    )
+    samples_per_bucket = max(1, int(round(sample_rate / samples_per_second)))
+    peaks: list[dict[str, float]] = []
+    for start in range(0, value_count, samples_per_bucket):
+        bucket = values[start:min(value_count, start + samples_per_bucket)]
+        minimum = float(numeric.min(bucket) if numeric is not None else min(bucket))
+        maximum_value = float(numeric.max(bucket) if numeric is not None else max(bucket))
+        negative = abs(min(0.0, minimum)) / maximum if maximum > 0 else 0.0
+        positive = max(0.0, maximum_value) / maximum if maximum > 0 else 0.0
+        peaks.append({
+            "timeSeconds": round(start / sample_rate, 6),
+            "min": _round(negative),
+            "max": _round(positive),
+        })
+    actual_rate = sample_rate / samples_per_bucket
+    return {
+        "schemaVersion": "1.0",
+        "channelLayout": "mono",
+        "normalization": "global-absolute-peak",
+        "samplesPerSecond": round(actual_rate, 6),
+        "sourceStartSeconds": 0.0,
+        "sourceEndSeconds": round(value_count / sample_rate, 6),
+        "peaks": peaks,
+    }
 
 
 def composite_drop_score(
@@ -433,6 +481,7 @@ def analyze(
         warnings.append("Tempo confidence is low; planner should prefer onset or natural timing fallback.")
     if not drop_items:
         warnings.append("No probable strong musical accents met the configured drop threshold.")
+    waveform = build_waveform_envelope(samples, sample_rate, numeric=np)
     return {
         "schemaVersion": SCHEMA,
         "analyzer": {"name": NAME, "version": VERSION, "engine": "librosa"},
@@ -446,6 +495,7 @@ def analyze(
             "integratedLoudnessLufs": None,
         },
         "frameHopSeconds": round(hop / sample_rate, 6),
+        "waveform": waveform,
         "frames": frame_items,
         "beats": [
             {

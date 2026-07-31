@@ -1,6 +1,7 @@
 import unittest
 
 from music_analyzer import (
+    build_waveform_envelope,
     classify_section,
     composite_drop_score,
     normalize,
@@ -10,6 +11,21 @@ from music_analyzer import (
 class AnalyzerMathTests(unittest.TestCase):
     def test_normalize_is_bounded_and_deterministic(self):
         self.assertEqual([0.0, 0.5, 1.0], normalize([0, 2, 4]))
+
+    def test_waveform_envelope_is_real_bounded_and_deterministic(self):
+        samples = [-1.0, -0.5, 0.25, 0.75, -0.25, 0.5, 0.0, 0.1]
+
+        first = build_waveform_envelope(samples, sample_rate=8, samples_per_second=2)
+        second = build_waveform_envelope(samples, sample_rate=8, samples_per_second=2)
+
+        self.assertEqual(first, second)
+        self.assertEqual(2, len(first["peaks"]))
+        self.assertEqual({"timeSeconds": 0.0, "min": 1.0, "max": 0.75}, first["peaks"][0])
+        self.assertTrue(all(
+            0.0 <= peak[key] <= 1.0
+            for peak in first["peaks"]
+            for key in ("min", "max")
+        ))
         self.assertEqual([0.0, 0.5, 1.0], normalize([0, 2, 4]))
 
     def test_structural_drop_scores_above_loud_unstructured_onset(self):

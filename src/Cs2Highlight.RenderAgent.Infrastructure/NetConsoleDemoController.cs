@@ -102,6 +102,11 @@ public sealed class NetConsoleDemoController(
             await Task.Delay(
                 TimeSpan.FromSeconds(options.DemoInitializationStabilizationSeconds),
                 cancellationToken);
+            // CS2 opens the demo playback panel when a demo is initially
+            // loaded. `demoui` is a toggle rather than a cvar, so close it
+            // exactly once for a new playback session and never while reusing
+            // that session for subsequent clips.
+            await connection.SendAsync("demoui", cancellationToken);
         }
         else
         {
@@ -115,6 +120,12 @@ public sealed class NetConsoleDemoController(
                 TimeSpan.FromSeconds(options.DemoLoadTimeoutSeconds),
                 cancellationToken);
         }
+
+        // Loading or reusing a demo can recreate Panorama/demo controls. Apply
+        // the clean presentation state again before any camera preview work.
+        await captureUi.ApplyAsync(
+            job.EffectivePresentationMode,
+            cancellationToken);
 
         HlaeCameraCommandReport cameraCommandReport =
             await ProbeCameraCommandsAsync(connection, cancellationToken);
@@ -692,7 +703,9 @@ public sealed class NetConsoleDemoController(
             "cl_showdemooverlay",
             "cl_drawhud",
             "spec_show_xray",
-            "r_drawviewmodel"
+            "r_drawviewmodel",
+            "r_show_build_info",
+            "cl_trueview_show_status"
         ];
         foreach (string name in names)
             await connection.SendAsync(name, cancellationToken);
@@ -729,8 +742,14 @@ public sealed class NetConsoleDemoController(
             values.TryGetValue("cl_drawhud", out bool hud) && hud == pov;
         bool weaponValid =
             values.TryGetValue("r_drawviewmodel", out bool weapon) && weapon == pov;
+        bool debugUiHidden =
+            values.TryGetValue("r_show_build_info", out bool buildInfo) &&
+            !buildInfo &&
+            values.TryGetValue("cl_trueview_show_status", out bool trueViewStatus) &&
+            !trueViewStatus;
         bool commandStateVerified =
-            timelineHidden && spectatorHidden && hudValid && weaponValid;
+            timelineHidden && spectatorHidden && hudValid && weaponValid &&
+            debugUiHidden;
 
         List<string> issues = [];
         if (!commandStateVerified)
@@ -742,7 +761,7 @@ public sealed class NetConsoleDemoController(
                 timelineHidden,
                 DemoControlsHidden: false,
                 spectatorHidden,
-                DebugUiHidden: false,
+                debugUiHidden,
                 MouseCursorHidden: false,
                 weaponValid),
             commandStateVerified,

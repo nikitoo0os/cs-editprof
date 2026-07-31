@@ -447,7 +447,9 @@ public sealed class DynamicEffectsTests
         Assert.True(
             graph.FilterComplex.IndexOf("tpad=stop_mode=clone", StringComparison.Ordinal) <
             graph.FilterComplex.IndexOf("rgbashift=", StringComparison.Ordinal));
-        Assert.EndsWith("eq=contrast=1.05,format=yuv420p[effect_video]", graph.FilterComplex);
+        Assert.Contains("eq=contrast=1.05,fps=60,tpad=stop_mode=clone", graph.FilterComplex);
+        Assert.Contains("trim=duration=4.5,setpts=PTS-STARTPTS", graph.FilterComplex);
+        Assert.EndsWith("[effect_audio]", graph.FilterComplex);
         Assert.Equal("effect_audio", graph.AudioOutputLabel);
     }
 
@@ -548,11 +550,42 @@ public sealed class DynamicEffectsTests
             "settb=AVTB,setpts=PTS-STARTPTS[effect_base_v]",
             graph.FilterComplex);
         Assert.Contains(
-            "[0:a:0]asetpts=PTS-STARTPTS,aresample=48000[effect_audio]",
+            "[0:a:0]asetpts=PTS-STARTPTS,aresample=48000[effect_warped_a]",
             graph.FilterComplex);
+        Assert.Contains("apad=whole_dur=3,atrim=duration=3", graph.FilterComplex);
         Assert.Contains("0.15*(", graph.FilterComplex);
         Assert.Contains("rgbashift=rh=8:bh=-8", graph.FilterComplex);
         Assert.Contains("0.034907*(", graph.FilterComplex);
+    }
+
+    [Fact]
+    public void FadeTransitionUsesARestrainedDipWithoutBlackFrames()
+    {
+        DynamicEffectPlan plan = Plan(
+        [
+            Cue(
+                VideoEffectType.FadeTransition,
+                EffectRole.Transition,
+                "transition",
+                0.38,
+                1.8,
+                2)
+        ]);
+
+        DynamicFfmpegFilterGraph graph =
+            new DynamicEffectFilterGraphBuilder().Build(
+                "0:v:0",
+                "0:a:0",
+                2.05,
+                plan,
+                null,
+                new VideoOutputOptions(1920, 1080, 60),
+                "aresample=48000",
+                targetDurationSeconds: 2);
+
+        Assert.DoesNotContain("fade=t=out", graph.FilterComplex);
+        Assert.Contains("eq=brightness='-0.08*", graph.FilterComplex);
+        Assert.Contains("trim=duration=2", graph.FilterComplex);
     }
 
     private static EffectCue Cue(

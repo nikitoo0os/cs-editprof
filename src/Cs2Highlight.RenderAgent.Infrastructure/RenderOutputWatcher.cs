@@ -69,7 +69,46 @@ public sealed class RenderOutputWatcher(RenderEnvironmentOptions options, TimePr
                             Path.Combine(
                                 job.OutputDirectory,
                                 "clip-artifact-quality.json"),
-                            overwrite: false);
+                            overwrite: true);
+                    }
+                    if (options.EnableDemoUiDetection)
+                    {
+                        DemoUiDetectionReport ui =
+                            await DemoUiDetector.AnalyzeAsync(
+                                options.FfmpegExecutablePath ?? string.Empty,
+                                candidate,
+                                options.DemoUiDetectionSampleSeconds,
+                                cancellationToken);
+                        string reportPath = Path.Combine(
+                            workspace.Logs,
+                            "demo-ui-detection-report.json");
+                        await DemoUiDetector.WriteAsync(
+                            reportPath,
+                            ui,
+                            cancellationToken);
+                        Directory.CreateDirectory(job.OutputDirectory);
+                        File.Copy(
+                            reportPath,
+                            Path.Combine(
+                                job.OutputDirectory,
+                                "demo-ui-detection-report.json"),
+                            overwrite: true);
+                        if (!ui.Analyzed)
+                        {
+                            return (
+                                false,
+                                candidate,
+                                size,
+                                $"DEMO_UI_DETECTION_FAILED: {ui.Error}");
+                        }
+                        if (ui.DemoPlaybackStripDetected)
+                        {
+                            return (
+                                false,
+                                candidate,
+                                size,
+                                "DEMO_PLAYBACK_STRIP_DETECTED");
+                        }
                     }
 
                     Directory.CreateDirectory(job.OutputDirectory);
