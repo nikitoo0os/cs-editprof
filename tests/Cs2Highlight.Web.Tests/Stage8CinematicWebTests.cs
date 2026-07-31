@@ -96,10 +96,11 @@ public sealed class Stage8CinematicWebTests
         Assert.Contains("between(t\\,3.95\\,4)", graph);
         Assert.Contains("eval=frame", graph);
         Assert.Contains("alimiter", graph);
+        Assert.Contains("LRA=7", graph);
     }
 
     [Fact]
-    public void AdapterEmitsOnlyTheMotivatedPlanEffect()
+    public void AdapterPreservesTheCompleteMotivatedEffectStack()
     {
         CinematicMoviePlan cinematic = Plan(
             effects:
@@ -130,12 +131,16 @@ public sealed class Stage8CinematicWebTests
                 cinematic,
                 EffectIntensity.Balanced);
 
-        EffectCue effect = Assert.Single(result.Effects);
-        Assert.Equal(VideoEffectType.SmoothZoom, effect.Type);
+        Assert.Equal(2, result.Effects.Count);
+        EffectCue effect = Assert.Single(result.Effects.Where(value =>
+            value.Type == VideoEffectType.SmoothZoom));
         Assert.Equal(
             MotivatedEffectReason.MusicPeak.ToString(),
             effect.Reason);
         Assert.Equal("peak", effect.SourceMusicalAnchorId);
+        Assert.Contains(
+            result.Effects,
+            value => value.Type == VideoEffectType.HitStop);
     }
 
     [Fact]
@@ -167,10 +172,145 @@ public sealed class Stage8CinematicWebTests
                 EffectIntensity.Strong);
 
         Assert.Equal(2, result.Effects.Count);
-        Assert.Equal(VideoEffectType.PunchZoom, result.Effects[0].Type);
-        Assert.Equal(VideoEffectType.MicroShake, result.Effects[1].Type);
-        Assert.Equal(EffectRole.Primary, result.Effects[0].Role);
-        Assert.Equal(EffectRole.Accent, result.Effects[1].Role);
+        Assert.Contains(
+            result.Effects,
+            value =>
+                value.Type == VideoEffectType.PunchZoom &&
+                value.Role == EffectRole.Primary);
+        Assert.Contains(
+            result.Effects,
+            value =>
+                value.Type == VideoEffectType.MicroShake &&
+                value.Role == EffectRole.Accent);
+    }
+
+    [Fact]
+    public void CinematicAdapterUsesAContentAwareTransitionIntoFollowingShot()
+    {
+        CinematicMoviePlan original = Plan(
+            effects:
+            [
+                new MotivatedEffectDirective(
+                    "PunchZoom",
+                    MotivatedEffectReason.MusicPeak,
+                    3.8,
+                    4.15,
+                    0.5)
+            ],
+            sound: []);
+        CinematicSequenceSegment highlightSegment =
+            original.Segments[0] with
+            {
+                Role = CinematicSequenceRole.Highlight,
+                OutputStartSeconds = 0,
+                OutputEndSeconds = 8
+            };
+        CinematicSequenceSegment outro = original.Segments[0] with
+        {
+            Id = "outro",
+            Role = CinematicSequenceRole.Outro,
+            OutputStartSeconds = 8,
+            OutputEndSeconds = 10,
+            HighlightId = null,
+            BrollCandidateId = "broll",
+            Effects = []
+        };
+        CinematicMoviePlan cinematic = original with
+        {
+            TargetDurationSeconds = 10,
+            Segments = [highlightSegment, outro]
+        };
+        GenerationHighlight highlight = new()
+        {
+            HighlightId = "h1",
+            WeaponSequenceJson = "[\"awp\"]",
+            HeadshotCount = 1
+        };
+
+        DynamicEffectPlan result = new CinematicDynamicEffectAdapter(
+            new Sha256EffectSeedProvider()).Create(
+                "generation",
+                highlight,
+                cinematic,
+                EffectIntensity.Strong);
+
+        EffectCue transition = Assert.Single(result.Effects.Where(value =>
+            value.Role == EffectRole.Transition));
+        Assert.Equal(VideoEffectType.FlashCut, transition.Type);
+        Assert.Equal(8, transition.EndSeconds, 6);
+    }
+
+    [Theory]
+    [InlineData("[\"flashbang\"]", VideoEffectType.FlashCut)]
+    [InlineData("[\"smoke\"]", VideoEffectType.FadeTransition)]
+    [InlineData("[\"fast_movement\"]", VideoEffectType.WhipPan)]
+    public void CinematicAdapterUsesGameplayTagsForTransitions(
+        string tagsJson,
+        VideoEffectType expected)
+    {
+        CinematicMoviePlan original = Plan(
+            effects:
+            [
+                new MotivatedEffectDirective(
+                    "SmoothZoom",
+                    MotivatedEffectReason.MusicPeak,
+                    3.8,
+                    4.15,
+                    0.5)
+            ],
+            sound: []);
+        CinematicSequenceSegment highlightSegment =
+            original.Segments[0] with
+            {
+                Role = CinematicSequenceRole.Highlight,
+                OutputStartSeconds = 0,
+                OutputEndSeconds = 8
+            };
+        CinematicMoviePlan cinematic = original with
+        {
+            TargetDurationSeconds = 10,
+            Segments =
+            [
+                highlightSegment,
+                original.Segments[0] with
+                {
+                    Id = "outro",
+                    Role = CinematicSequenceRole.Outro,
+                    OutputStartSeconds = 8,
+                    OutputEndSeconds = 10,
+                    HighlightId = null,
+                    BrollCandidateId = "broll",
+                    Effects = []
+                }
+            ]
+        };
+
+        DynamicEffectPlan result = new CinematicDynamicEffectAdapter(
+            new Sha256EffectSeedProvider()).Create(
+                "generation",
+                new GenerationHighlight
+                {
+                    HighlightId = "h1",
+                    TagsJson = tagsJson
+                },
+                cinematic,
+                EffectIntensity.Strong);
+
+        EffectCue transition = Assert.Single(result.Effects.Where(value =>
+            value.Role == EffectRole.Transition));
+        Assert.Equal(expected, transition.Type);
+    }
+
+    [Fact]
+    public void CinematicFinishPreservesTheFullFrame()
+    {
+        string finish = FfmpegMovieFilterBuilder.CinematicFinish();
+
+        Assert.Equal(
+            "eq=contrast=1.04:saturation=1.08:gamma=1.015",
+            finish);
+        Assert.DoesNotContain("crop=", finish);
+        Assert.DoesNotContain("pad=", finish);
     }
 
     [Fact]
@@ -208,8 +348,10 @@ public sealed class Stage8CinematicWebTests
                 5);
 
         Assert.Contains("fade=t=out", outgoingVideo);
+        Assert.Contains("color=white", outgoingVideo);
         Assert.Contains("afade=t=out", outgoingAudio);
         Assert.Contains("fade=t=in", incomingVideo);
+        Assert.Contains("color=white", incomingVideo);
         Assert.Contains("afade=t=in", incomingAudio);
     }
 
@@ -281,11 +423,41 @@ public sealed class Stage8CinematicWebTests
                     4.2,
                     0.25),
                 new MotivatedEffectDirective(
-                    "MicroShake",
+                    "RecoilShake",
                     MotivatedEffectReason.TimeRamp,
                     3.4,
                     3.65,
-                    0.3)
+                    0.3),
+                new MotivatedEffectDirective(
+                    "DirectionalMotionBlur",
+                    MotivatedEffectReason.TimeRamp,
+                    3.92,
+                    4.10,
+                    0.34),
+                new MotivatedEffectDirective(
+                    "FlashAccent",
+                    MotivatedEffectReason.BassImpact,
+                    3.98,
+                    4.07,
+                    0.22),
+                new MotivatedEffectDirective(
+                    "RgbSplit",
+                    MotivatedEffectReason.CameraTransition,
+                    3.98,
+                    4.12,
+                    0.20),
+                new MotivatedEffectDirective(
+                    "ZoomBlur",
+                    MotivatedEffectReason.TimeRamp,
+                    4.18,
+                    4.38,
+                    0.32),
+                new MotivatedEffectDirective(
+                    "VignettePulse",
+                    MotivatedEffectReason.CameraTransition,
+                    4.18,
+                    4.42,
+                    0.20)
             ],
             sound:
             [

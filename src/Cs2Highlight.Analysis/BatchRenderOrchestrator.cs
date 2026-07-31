@@ -62,7 +62,8 @@ public sealed class BatchRenderOrchestrator(
 
         try
         {
-            if (renderAgent is ISessionRenderAgentClient sessionRenderAgent)
+            if (plan.Options.UseSharedCs2Session &&
+                renderAgent is ISessionRenderAgentClient sessionRenderAgent)
             {
                 BatchRenderItem[] sessionItems = plan.Items
                     .Where(item =>

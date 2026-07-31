@@ -93,7 +93,7 @@ public sealed partial class FfmpegHighlightCompilationService(
     ILogger<FfmpegHighlightCompilationService> logger)
     : IHighlightCompilationService
 {
-    private const string NormalizationPipelineVersion = "3";
+    private const string NormalizationPipelineVersion = "4";
     private static readonly Encoding Utf8WithoutBom = new UTF8Encoding(false);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -266,6 +266,16 @@ public sealed partial class FfmpegHighlightCompilationService(
                         videoFilters += "," + lut;
                     else
                         postEffectVideoFilters.Add(lut);
+                }
+                if (request.MovieSettings.MovieStyle ==
+                    MovieStyle.CinematicDirector)
+                {
+                    string framing =
+                        FfmpegMovieFilterBuilder.CinematicFinish();
+                    if (dynamicEffectPlan is null)
+                        videoFilters += "," + framing;
+                    else
+                        postEffectVideoFilters.Add(framing);
                 }
             }
             string lutFingerprint = selectedLutPath is null
@@ -556,10 +566,14 @@ public sealed partial class FfmpegHighlightCompilationService(
                 MusicDuckOnKillDb =
                     request.MovieSettings.SyncIntensity switch
                     {
-                        MusicSyncIntensity.Soft => -1.5,
-                        MusicSyncIntensity.Aggressive => -4.5,
-                        _ => -3
-                    }
+                        MusicSyncIntensity.Soft => -2.5,
+                        MusicSyncIntensity.Aggressive => -6,
+                        _ => -4.5
+                    },
+                KillAccentAttackMilliseconds = 120,
+                KillAccentHoldMilliseconds = 110,
+                KillAccentReleaseMilliseconds = 280,
+                OutputTruePeakDb = -0.8
             };
             string mix = FfmpegMovieFilterBuilder.AudioMix(
                 request.MovieSettings,
@@ -1012,6 +1026,9 @@ public static class FfmpegMovieFilterBuilder
         return $"lut3d=file='{path}'";
     }
 
+    public static string CinematicFinish() =>
+        "eq=contrast=1.04:saturation=1.08:gamma=1.015";
+
     public static string AudioMix(
         GenerationMovieSettings settings,
         MusicEditPlan? plan = null,
@@ -1065,7 +1082,7 @@ public static class FfmpegMovieFilterBuilder
             .Append("[music][game]amix=inputs=2:duration=shortest:normalize=0,")
             .Append("loudnorm=I=-14:TP=")
             .Append(Number(options.OutputTruePeakDb))
-            .Append(":LRA=11");
+            .Append(":LRA=7");
         if (options.EnableLimiter)
             graph.Append(",alimiter=limit=")
                 .Append(Number(Linear(options.OutputTruePeakDb)))
@@ -1166,12 +1183,12 @@ public static class FfmpegMovieFilterBuilder
             .First();
         if (firstHighlight <= 0)
             return (string.Empty, string.Empty);
-        const double duration = 0.28;
+        const double duration = 0.14;
         if (clipIndex == firstHighlight)
         {
             return (
                 FormattableString.Invariant(
-                    $",fade=t=in:st=0:d={duration:0.##}:color=black"),
+                    $",fade=t=in:st=0:d={duration:0.##}:color=white"),
                 FormattableString.Invariant(
                     $",afade=t=in:st=0:d={duration:0.##}"));
         }
@@ -1180,7 +1197,7 @@ public static class FfmpegMovieFilterBuilder
             double start = Math.Max(0, sourceDuration - duration);
             return (
                 FormattableString.Invariant(
-                    $",fade=t=out:st={start:0.######}:d={duration:0.##}:color=black"),
+                    $",fade=t=out:st={start:0.######}:d={duration:0.##}:color=white"),
                 FormattableString.Invariant(
                     $",afade=t=out:st={start:0.######}:d={duration:0.##}"));
         }

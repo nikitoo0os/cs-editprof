@@ -113,14 +113,26 @@ movies to 30 seconds, prevents B-roll from exceeding highlight duration, maps
 important highlights to strong peaks and preserves post-kill tails during
 bounded time warp.
 
-Director mode uses only effects motivated by the locked plan. Strong effect
-intensity can combine two compatible accents per highlight, while a
-deterministic variety pass alternates zoom, motion, temporal, RGB and lens
-accents. Dynamic edits use a compensated local slow-motion ramp without moving
-the primary kill away from its musical peak. Audio gain and restrained color
-adjustments follow the section narrative. B-roll and highlights from one demo
-are included in a single batch plan, so the Render Agent keeps one CS2 session
-per demo.
+Director mode uses only effects motivated by the locked plan. Balanced and
+Strong intensity rotate seven distinct treatment families; most deliberately
+avoid zoom, while crash/offset/smooth zoom, recoil, echo, lens warp, hit-stop,
+spatial blur and temporal blur keep their own timing and texture. Content-aware
+transitions use gameplay tags, weapon, headshot and multikill metadata, with a
+deterministic hard/flash/fade/whip cycle for neutral shots. Hero moments receive a
+compensated local speed ramp without moving the primary kill away from its
+musical peak.
+
+The automatic story pass reserves a short non-combat intro when safe B-roll is
+available, orders selected moments toward the strongest climax and keeps kills
+out of calm music sections. B-roll is capped at 25% of selected combat and
+never pads the movie after its final frag. The final composition preserves the
+full 16:9 gameplay frame, adds section-aware color progression, punchier
+high-energy gameplay audio and `-14 LUFS` normalization with controlled
+true-peak. B-roll and highlights from one demo remain in a single batch plan.
+Each clip uses a fresh CS2 process by default because repeated Source 2 demo
+seeks can corrupt the entity baseline and raise `CopyNewEntity: invalid class
+index`. Shared-session rendering remains an explicit opt-in. See
+[professional editing pass](docs/STAGE9_PROFESSIONAL_EDITING.md).
 
 Automatic non-POV cameras remain fail-closed except for the verified
 `de_dust2` upper-tunnel profile. HLAE 2.191.1 command discovery, a repeated

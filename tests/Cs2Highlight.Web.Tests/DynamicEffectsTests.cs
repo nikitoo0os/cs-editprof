@@ -452,6 +452,55 @@ public sealed class DynamicEffectsTests
     }
 
     [Fact]
+    public void ZoomBlurAndVignetteHaveDistinctPulsedTextures()
+    {
+        DynamicEffectPlan plan = Plan(
+            [
+                Cue(
+                    VideoEffectType.DirectionalMotionBlur,
+                    EffectRole.Accent,
+                    "1",
+                    0.4,
+                    0.5,
+                    0.7),
+                Cue(
+                    VideoEffectType.ZoomBlur,
+                    EffectRole.Accent,
+                    "2",
+                    0.5,
+                    1,
+                    1.2) with
+                    {
+                        Parameters = new Dictionary<string, double>
+                        {
+                            ["sigma"] = 8
+                        }
+                    },
+                Cue(
+                    VideoEffectType.VignettePulse,
+                    EffectRole.Accent,
+                    "3",
+                    0.3,
+                    1.5,
+                    1.75)
+            ]);
+
+        DynamicFfmpegFilterGraph graph =
+            new DynamicEffectFilterGraphBuilder().Build(
+                "0:v:0",
+                "0:a:0",
+                3,
+                plan,
+                null,
+                new VideoOutputOptions(1920, 1080, 60),
+                "aresample=48000");
+
+        Assert.Contains("tmix=frames=3", graph.FilterComplex);
+        Assert.Contains("gblur=sigma=8:steps=2", graph.FilterComplex);
+        Assert.Contains("vignette=angle='PI/2-(PI/2-PI/8)*(", graph.FilterComplex);
+    }
+
+    [Fact]
     public void RendererClampsZoomRgbShakeAndRollParameters()
     {
         DynamicEffectPlan plan = Plan(

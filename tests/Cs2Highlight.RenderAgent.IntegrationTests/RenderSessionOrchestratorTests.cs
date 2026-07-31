@@ -20,10 +20,11 @@ public sealed class RenderSessionOrchestratorTests : IDisposable
             ProcessShutdownTimeoutSeconds = 2
         };
         FakeSessionRuntime runtime = new();
+        FakeWorkspaceManager workspaceManager = new(environment);
         RenderSessionOrchestrator orchestrator = new(
             environment,
             new SuccessfulEnvironmentVerifier(),
-            new FakeWorkspaceManager(environment),
+            workspaceManager,
             new PassThroughRepairer(),
             new FakeScriptGenerator(),
             runtime,
@@ -49,6 +50,7 @@ public sealed class RenderSessionOrchestratorTests : IDisposable
             [DemoLoadMode.Start, DemoLoadMode.ReuseCurrent, DemoLoadMode.ReuseCurrent],
             runtime.LoadModes);
         Assert.Equal(1, runtime.QuitCount);
+        Assert.Equal(3, workspaceManager.DeletedCount);
         Assert.All(
             outcomes,
             outcome =>
@@ -93,6 +95,8 @@ public sealed class RenderSessionOrchestratorTests : IDisposable
     private sealed class FakeWorkspaceManager(
         RenderEnvironmentOptions environment) : IWorkspaceManager
     {
+        public int DeletedCount { get; private set; }
+
         public Task<RenderWorkspace> PrepareAsync(
             RenderJob job,
             CancellationToken cancellationToken)
@@ -115,6 +119,16 @@ public sealed class RenderSessionOrchestratorTests : IDisposable
                 logs,
                 state,
                 demo));
+        }
+
+        public Task<bool> DeleteCompletedAsync(
+            RenderWorkspace workspace,
+            CancellationToken cancellationToken)
+        {
+            if (Directory.Exists(workspace.Root))
+                Directory.Delete(workspace.Root, recursive: true);
+            DeletedCount++;
+            return Task.FromResult(true);
         }
 
         private static string Create(string root, string name)

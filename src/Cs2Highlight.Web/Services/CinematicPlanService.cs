@@ -166,7 +166,11 @@ public sealed partial class CinematicPlanService(
 
         MovieDurationOptions durationOptions = new()
         {
-            Selection = settings.CinematicDuration
+            Selection = settings.CinematicDuration,
+            MaximumBrollToHighlightRatio = 0.25,
+            MaximumIntroSeconds = 4,
+            MaximumOutroSeconds = 0.75,
+            MaximumMovieDurationSeconds = 210
         };
         MovieDurationBudget budget = durationPolicy.Calculate(
             highlights,
@@ -604,8 +608,10 @@ public sealed partial class CinematicPlanService(
                 intensity == CinematicEditIntensity.Calm
                     ? 0
                     : effectIntensity == EffectIntensity.Strong
-                        ? 2
-                        : 1,
+                        ? 5
+                        : effectIntensity == EffectIntensity.Balanced
+                            ? 4
+                            : 2,
             PreferCameraMotionOverFilterEffects = true
         };
 

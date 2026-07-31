@@ -107,7 +107,18 @@ public sealed class BatchRenderOrchestratorTests : IDisposable
     public async Task SessionCapableClientReceivesAllPendingItemsAtOnce()
     {
         Directory.CreateDirectory(root);
-        BatchRenderPlan plan = Plan(3, continueOnError: true, maxRetries: 0);
+        BatchRenderPlan plan = Plan(
+            3,
+            continueOnError: true,
+            maxRetries: 0) with
+        {
+            Options = new BatchRenderOptions
+            {
+                ContinueOnError = true,
+                MaxRetries = 0,
+                UseSharedCs2Session = true
+            }
+        };
         FakeSessionRenderAgent client = new();
         BatchRenderOrchestrator orchestrator = new(
             client,
@@ -123,6 +134,29 @@ public sealed class BatchRenderOrchestratorTests : IDisposable
         Assert.Equal(0, result.ExitCode);
         Assert.Equal(1, client.BatchCalls);
         Assert.Equal(0, client.SingleCalls);
+        Assert.Equal(3, result.Report.Summary.Succeeded);
+    }
+
+    [Fact]
+    public async Task SessionReuseIsOptInBecauseRepeatedDemoSeekCanCrashCs2()
+    {
+        Directory.CreateDirectory(root);
+        BatchRenderPlan plan = Plan(3, continueOnError: true, maxRetries: 0);
+        FakeSessionRenderAgent client = new();
+        BatchRenderOrchestrator orchestrator = new(
+            client,
+            new JsonBatchStateStore(),
+            TimeProvider.System);
+
+        BatchExecutionResult result = await orchestrator.RunAsync(
+            plan,
+            root,
+            null,
+            CancellationToken.None);
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal(0, client.BatchCalls);
+        Assert.Equal(3, client.SingleCalls);
         Assert.Equal(3, result.Report.Summary.Succeeded);
     }
 
@@ -217,7 +251,10 @@ public sealed class BatchRenderOrchestratorTests : IDisposable
             CancellationToken cancellationToken)
         {
             SingleCalls++;
-            throw new InvalidOperationException("Single render was not expected.");
+            string directory = Path.GetFileName(
+                Path.GetDirectoryName(renderJobPath))!;
+            string item = directory.Split('-')[1];
+            return Task.FromResult(Success($"job-{item}"));
         }
 
         public Task<IReadOnlyList<RenderInvocationResult>> RenderBatchAsync(

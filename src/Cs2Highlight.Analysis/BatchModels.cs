@@ -28,6 +28,7 @@ public sealed record BatchRenderOptions
     public BatchSortOrder SortOrder { get; init; } = BatchSortOrder.Ascending;
     public bool ContinueOnError { get; init; } = true;
     public int MaxRetries { get; init; } = 1;
+    public bool UseSharedCs2Session { get; init; }
     public OverlapResolutionPolicy OverlapPolicy { get; init; } =
         OverlapResolutionPolicy.KeepHighestScore;
     public double OverlapThreshold { get; init; } = 0.70;

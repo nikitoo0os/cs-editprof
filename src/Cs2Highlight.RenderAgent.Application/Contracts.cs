@@ -8,6 +8,9 @@ public interface IEnvironmentVerifier
 public interface IWorkspaceManager
 {
     Task<RenderWorkspace> PrepareAsync(RenderJob job, CancellationToken cancellationToken);
+    Task<bool> DeleteCompletedAsync(
+        RenderWorkspace workspace,
+        CancellationToken cancellationToken);
 }
 
 public interface IDemoCompatibilityRepairer

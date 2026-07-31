@@ -337,6 +337,25 @@ public sealed class RenderSessionOrchestrator(
                 rendererCancellation.Cancel();
                 await ObserveRendererTaskAsync(rendererTask);
             }
+            foreach (PreparedRender item in prepared)
+            {
+                if (outcomes[item.Index]?.Result.Success != true)
+                    continue;
+                try
+                {
+                    await workspaceManager.DeleteCompletedAsync(
+                        item.Workspace,
+                        CancellationToken.None);
+                }
+                catch (Exception exception) when (
+                    exception is IOException or
+                    UnauthorizedAccessException or
+                    JsonException or
+                    InvalidOperationException)
+                {
+                    // Preserve successful outputs when workspace cleanup fails.
+                }
+            }
         }
 
         return Complete(outcomes);

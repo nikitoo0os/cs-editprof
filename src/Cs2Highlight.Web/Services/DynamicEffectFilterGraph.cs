@@ -373,6 +373,18 @@ internal sealed class TemporalEffectRenderer(
 
     public FfmpegFilterFragment Build(EffectCue cue, EffectRenderContext context)
     {
+        if (effectType == VideoEffectType.ZoomBlur)
+        {
+            double sigma = Math.Clamp(
+                cue.Parameters.GetValueOrDefault("sigma", 6),
+                1,
+                12);
+            return new FfmpegFilterFragment(
+                cue.Id,
+                effectType,
+                EffectRenderStage.Temporal,
+                $"gblur=sigma={DynamicEffectFilterGraphBuilder.Number(sigma)}:steps=2:enable='{DynamicEffectFilterGraphBuilder.Enable(cue)}'");
+        }
         int frames = Math.Clamp(
             (int)Math.Round(cue.Parameters.GetValueOrDefault("frames", 3)),
             2,
@@ -487,7 +499,7 @@ internal sealed class AccentEffectRenderer(
             VideoEffectType.FlashAccent =>
                 $"eq=brightness='{DynamicEffectFilterGraphBuilder.Number(Math.Clamp(cue.Parameters.GetValueOrDefault("opacity", cue.Intensity), 0, 0.35))}*({DynamicEffectFilterGraphBuilder.Pulse(cue)})':eval=frame",
             _ =>
-                $"vignette=PI/8:eval=frame:enable='{DynamicEffectFilterGraphBuilder.Enable(cue)}'"
+                $"vignette=angle='PI/2-(PI/2-PI/8)*({DynamicEffectFilterGraphBuilder.Pulse(cue)})':eval=frame"
         };
         return new FfmpegFilterFragment(
             cue.Id,
@@ -512,7 +524,7 @@ internal sealed class TransitionEffectRenderer(
             VideoEffectType.FadeTransition =>
                 $"fade=t=out:st={DynamicEffectFilterGraphBuilder.Number(cue.StartSeconds)}:d={DynamicEffectFilterGraphBuilder.Number(cue.EndSeconds - cue.StartSeconds)}",
             VideoEffectType.FlashCut =>
-                $"eq=brightness='0.28*({DynamicEffectFilterGraphBuilder.Pulse(cue)})'",
+                $"eq=brightness='0.42*({DynamicEffectFilterGraphBuilder.Pulse(cue)})'",
             VideoEffectType.WhipPan =>
                 $"gblur=sigma=12:steps=2:enable='{DynamicEffectFilterGraphBuilder.Enable(cue)}'",
             VideoEffectType.WhipZoom =>
