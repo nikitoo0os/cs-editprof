@@ -9,8 +9,8 @@ namespace Cs2Highlight.Web.Services;
 
 public sealed class RecommendedSelectionOptions
 {
-    public int MaximumHighlights { get; set; } = 5;
-    public int MaximumSoloKills { get; set; } = 2;
+    public int MaximumHighlights { get; set; } = 12;
+    public int MaximumSoloKills { get; set; } = 6;
     public double MinimumSoloBeautyScore { get; set; } = 35;
     public double MinimumMultikillScore { get; set; } = 20;
     public bool PreferCategoryDiversity { get; set; } = true;

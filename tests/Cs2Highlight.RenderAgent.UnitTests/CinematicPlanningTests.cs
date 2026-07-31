@@ -567,24 +567,50 @@ public sealed class CinematicPlanningTests
                 MaximumVisibleFilterEffectsPerHighlight = 0
             },
             finalHighlight: false);
-        IReadOnlyList<MotivatedEffectDirective> strong = planner.Plan(
-            CinematicSequenceRole.Highlight,
-            section,
-            match,
-            CameraPathPlanner.Pov(Broll(), []),
-            4,
-            new CinematicEffectPolicy
-            {
-                MaximumVisibleFilterEffectsPerHighlight = 2
-            },
-            finalHighlight: false);
+        IReadOnlyList<IReadOnlyList<MotivatedEffectDirective>> treatments =
+            Enumerable.Range(0, 7)
+                .Select(index => planner.Plan(
+                    CinematicSequenceRole.Highlight,
+                    section,
+                    match,
+                    CameraPathPlanner.Pov(Broll(), []),
+                    4,
+                    new CinematicEffectPolicy
+                    {
+                        MaximumVisibleFilterEffectsPerHighlight = 5
+                    },
+                    finalHighlight: false,
+                    sequenceIndex: index))
+                .ToArray();
 
         Assert.Single(pov);
         Assert.Equal(MotivatedEffectReason.FinalKill, pov[0].Reason);
         Assert.Empty(camera);
         Assert.Empty(calm);
-        Assert.Equal(2, strong.Count);
-        Assert.Equal(2, strong.Select(value => value.EffectType).Distinct().Count());
+        Assert.Equal(
+            7,
+            treatments
+                .Select(value => string.Join(
+                    "+",
+                    value.Select(effect => effect.EffectType)))
+                .Distinct(StringComparer.Ordinal)
+                .Count());
+        Assert.All(treatments, value => Assert.InRange(value.Count, 3, 5));
+        Assert.True(treatments.Count(value => value.All(effect =>
+            !effect.EffectType.Contains(
+                "Zoom",
+                StringComparison.Ordinal))) >= 4);
+        string[] allTypes = treatments
+            .SelectMany(value => value)
+            .Select(value => value.EffectType)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Contains("CrashZoom", allTypes);
+        Assert.Contains("SmoothZoom", allTypes);
+        Assert.Contains("FrameEcho", allTypes);
+        Assert.Contains("LensWarpPulse", allTypes);
+        Assert.Contains("HitStop", allTypes);
+        Assert.Contains("ZoomBlur", allTypes);
     }
 
     [Fact]
@@ -621,6 +647,31 @@ public sealed class CinematicPlanningTests
         Assert.True(plan.Segments
             .Where(value => value.BrollCandidateId is not null)
             .Sum(value => value.OutputEndSeconds - value.OutputStartSeconds) <= 8);
+        CinematicSequenceSegment firstHighlight = plan.Segments
+            .Where(value => value.HighlightId is not null)
+            .OrderBy(value => value.OutputStartSeconds)
+            .First();
+        CinematicSequenceSegment lastHighlight = plan.Segments
+            .Where(value => value.HighlightId is not null)
+            .OrderBy(value => value.OutputStartSeconds)
+            .Last();
+        Assert.True(firstHighlight.OutputStartSeconds > 0);
+        Assert.Equal("h2", lastHighlight.HighlightId);
+        Assert.Equal(
+            lastHighlight.OutputEndSeconds,
+            plan.TargetDurationSeconds,
+            6);
+        Assert.DoesNotContain(
+            plan.Segments,
+            value =>
+                value.BrollCandidateId is not null &&
+                value.OutputStartSeconds >=
+                    lastHighlight.OutputEndSeconds - 0.000001);
+        Assert.All(
+            plan.Segments.Where(value =>
+                value.OutputEndSeconds <=
+                    firstHighlight.OutputStartSeconds + 0.000001),
+            value => Assert.Null(value.HighlightId));
     }
 
     [Fact]
@@ -707,6 +758,112 @@ public sealed class CinematicPlanningTests
             plan.Warnings,
             value => value.StartsWith(
                 "CINEMATIC_TIMELINE_GAP:",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void MicroGapSnappingDoesNotDiscardTimelineSafeHighlight()
+    {
+        MusicSection verse = DetailedSection(
+            "verse",
+            MusicSectionType.Verse,
+            0,
+            56,
+            0.7);
+        double[] peakTimes =
+        [
+            0,
+            7.36,
+            10.48,
+            13.64,
+            15.76,
+            17.92,
+            21.28,
+            24.72,
+            30.48,
+            41.36,
+            52.64
+        ];
+        MusicalPeak[] peaks = peakTimes
+            .Select((time, index) => new MusicalPeak
+            {
+                Id = $"peak-{index:D2}",
+                Type = MusicalPeakType.StrongBeat,
+                TimeSeconds = time,
+                Strength = 0.8,
+                Confidence = 0.9,
+                SectionId = verse.Id
+            })
+            .ToArray();
+        MusicNarrative narrative = new()
+        {
+            DurationSeconds = 56,
+            Sections = [verse],
+            Peaks = peaks,
+            Frames = [],
+            Warnings = []
+        };
+        MusicExcerptPlan excerpt = new()
+        {
+            StartSeconds = 0,
+            EndSeconds = 55.469,
+            SectionIds = [verse.Id],
+            Peaks = peaks,
+            RequiredPeakCount = 11,
+            UsablePeakCount = peaks.Length,
+            Score = 1,
+            IsValid = true,
+            ScoreBreakdown = new Dictionary<string, double>(),
+            Warnings = [MusicExcerptSelector.RelaxedEnergyFallbackWarning]
+        };
+        (HighlightType Type, double Duration, double KillOffset)[] timing =
+        [
+            (HighlightType.SoloKill, 2, 1),
+            (HighlightType.SoloKill, 2, 1),
+            (HighlightType.SoloKill, 2, 1),
+            (HighlightType.SoloKill, 2, 1),
+            (HighlightType.SoloKill, 2, 1),
+            (HighlightType.SoloKill, 2, 1),
+            (HighlightType.DoubleKill, 3.140625, 2.140625),
+            (HighlightType.DoubleKill, 3.171875, 2.171875),
+            (HighlightType.DoubleKill, 5.265625, 4.265625),
+            (HighlightType.TripleKill, 10.84375, 9.84375),
+            (HighlightType.QuadKill, 11.046875, 10.046875)
+        ];
+        SelectedHighlight[] highlights = timing
+            .Select((value, index) =>
+                Highlight(
+                    $"h{index:D2}",
+                    value.Type,
+                    value.Duration,
+                    100 - index) with
+                {
+                    Bounds = new SafeClipBounds(
+                        0,
+                        0,
+                        value.KillOffset,
+                        value.KillOffset,
+                        value.Duration,
+                        value.Duration),
+                    SelectionOrder = index + 1
+                })
+            .ToArray();
+
+        CinematicMoviePlan plan = Director().Create(
+            narrative,
+            excerpt,
+            highlights,
+            [],
+            DirectorOptions());
+
+        Assert.Equal(highlights.Length, plan.HighlightMatches.Count);
+        Assert.Equal(
+            highlights.Length,
+            plan.Segments.Count(value => value.HighlightId is not null));
+        Assert.DoesNotContain(
+            plan.Warnings,
+            value => value.StartsWith(
+                "HIGHLIGHT_PEAK_SPACING_INSUFFICIENT:",
                 StringComparison.Ordinal));
     }
 

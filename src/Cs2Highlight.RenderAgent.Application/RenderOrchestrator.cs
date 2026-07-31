@@ -27,6 +27,7 @@ public sealed class RenderOrchestrator(
         List<string> warnings = [];
         CancellationTokenSource? rendererCancellation = null;
         Task<ProcessExecutionResult>? rendererTask = null;
+        bool completedSuccessfully = false;
 
         try
         {
@@ -223,6 +224,7 @@ public sealed class RenderOrchestrator(
                 stopwatch.ElapsedMilliseconds, startedAt, timeProvider.GetUtcNow(), processes, warnings, null);
             await stateJournal.WriteAsync(workspace, RenderState.Completed, "Render completed.", cancellationToken);
             await PersistResultAsync(workspace, job.OutputDirectory, success, cancellationToken);
+            completedSuccessfully = true;
             return (success, ExitCodes.Success);
         }
         catch (OperationCanceledException)
@@ -253,6 +255,23 @@ public sealed class RenderOrchestrator(
                 await ObserveRendererTaskAsync(rendererTask);
             }
             rendererCancellation?.Dispose();
+            if (completedSuccessfully && workspace is not null)
+            {
+                try
+                {
+                    await workspaceManager.DeleteCompletedAsync(
+                        workspace,
+                        CancellationToken.None);
+                }
+                catch (Exception exception) when (
+                    exception is IOException or
+                    UnauthorizedAccessException or
+                    JsonException or
+                    InvalidOperationException)
+                {
+                    // A cleanup failure must not replace a valid render result.
+                }
+            }
         }
     }
 

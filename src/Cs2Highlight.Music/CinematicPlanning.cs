@@ -792,8 +792,12 @@ public sealed class CinematicTimeWarpPolicy(
     {
         bool dynamicRange = options.MinimumLocalSpeed <= 0.75 &&
             options.MaximumLocalSpeed >= 1.20;
-        bool heroMoment = highlight.Highlight.KillCount > 1 ||
-            highlight.SelectionOrder % 2 == 0;
+        int treatment = Math.Abs(highlight.SelectionOrder) % 4;
+        bool multikill = highlight.Highlight.KillCount > 1;
+        bool heroMoment = multikill ||
+            treatment == 1 ||
+            treatment == 3 &&
+            highlight.Highlight.BeautyScore >= 60;
         double duration = Math.Max(
             0,
             highlight.Bounds.SafeEndSeconds -
@@ -809,14 +813,16 @@ public sealed class CinematicTimeWarpPolicy(
             return null;
         }
 
-        double slowDuration = Math.Clamp(
-            killOffset * 0.22,
-            0.18,
-            0.34);
-        double slowSpeed = Math.Clamp(
-            options.MinimumLocalSpeed + 0.03,
-            0.60,
-            0.74);
+        double slowDuration = multikill
+            ? Math.Clamp(killOffset * 0.28, 0.30, 0.46)
+            : treatment == 1
+                ? Math.Clamp(killOffset * 0.18, 0.20, 0.30)
+                : Math.Clamp(killOffset * 0.23, 0.25, 0.38);
+        double slowSpeed = multikill
+            ? Math.Clamp(options.MinimumLocalSpeed, 0.58, 0.68)
+            : treatment == 1
+                ? 0.78
+                : 0.69;
         double delay = slowDuration / slowSpeed - slowDuration;
         double availableAcceleration = killOffset - slowDuration;
         double minimumAcceleration = delay *
@@ -946,7 +952,8 @@ public interface IMotivatedEffectPlanner
         CameraShotPlan camera,
         double segmentDuration,
         CinematicEffectPolicy policy,
-        bool finalHighlight);
+        bool finalHighlight,
+        int sequenceIndex = 0);
 }
 
 public sealed class MotivatedEffectPlanner : IMotivatedEffectPlanner
@@ -958,7 +965,8 @@ public sealed class MotivatedEffectPlanner : IMotivatedEffectPlanner
         CameraShotPlan camera,
         double segmentDuration,
         CinematicEffectPolicy policy,
-        bool finalHighlight)
+        bool finalHighlight,
+        int sequenceIndex = 0)
     {
         if (role is not (
                 CinematicSequenceRole.Highlight or
@@ -978,47 +986,128 @@ public sealed class MotivatedEffectPlanner : IMotivatedEffectPlanner
             match?.PlannedKillSeconds ?? segmentDuration / 2,
             0,
             segmentDuration);
-        int pattern = StablePattern(match?.HighlightId);
-        string primaryType = finalHighlight
-            ? "HitStop"
-            : (pattern % 8) switch
+        bool climax = finalHighlight ||
+            role == CinematicSequenceRole.PeakHighlight;
+        double impactStrength = Math.Clamp(
+            0.42 +
+            0.16 * (match?.Peak.Strength ?? section.Energy) +
+            (climax ? 0.12 : 0),
+            0.42,
+            0.76);
+        (double Start, double End) impactWindow = Window(
+            center, 0.08, 0.13, segmentDuration);
+        (double Start, double End) freezeWindow = Window(
+            center, 0.025, 0.075, segmentDuration);
+        (double Start, double End) motionWindow = Window(
+            center, 0.025, 0.18, segmentDuration);
+        (double Start, double End) blurWindow = Window(
+            center, 0.075, 0.12, segmentDuration);
+        (double Start, double End) flashWindow = Window(
+            center,
+            0.012,
+            0.075,
+            segmentDuration);
+        (double Start, double End) echoWindow = Window(
+            center, 0.035, 0.22, segmentDuration);
+        (double Start, double End) distortionWindow = Window(
+            center, 0.13, 0.18, segmentDuration);
+        (double Start, double End) driftWindow = Window(
+            center, 0.62, 0.10, segmentDuration);
+        (double Start, double End) accentWindow = Window(
+            center, 0.025, 0.16, segmentDuration);
+
+        List<MotivatedEffectDirective> planned = climax
+            ?
+            [
+                Directive("HitStop", reason, freezeWindow, 0.72),
+                Directive(
+                    "PunchZoom",
+                    MotivatedEffectReason.TimeRamp,
+                    impactWindow,
+                    0.62),
+                Directive(
+                    "DirectionalMotionBlur",
+                    MotivatedEffectReason.TimeRamp,
+                    blurWindow,
+                    0.48),
+                Directive(
+                    "RollBurst",
+                    MotivatedEffectReason.CameraTransition,
+                    accentWindow,
+                    0.34),
+                Directive("FlashAccent", reason, flashWindow, 0.30)
+            ]
+            : (Math.Abs(sequenceIndex) % 7) switch
             {
-                0 => "PunchZoom",
-                1 => "SmoothZoom",
-                2 => "OffsetZoom",
-                3 => "DirectionalMotionBlur",
-                4 => "RgbSplit",
-                5 => "FrameEcho",
-                6 => "MicroShake",
-                _ => "LensWarpPulse"
+                0 =>
+                [
+                    Directive("RecoilShake", reason, motionWindow, 0.52),
+                    Directive("FlashAccent", reason, flashWindow, 0.24),
+                    Directive(
+                        "VignettePulse",
+                        MotivatedEffectReason.CameraTransition,
+                        accentWindow,
+                        0.20)
+                ],
+                1 =>
+                [
+                    Directive("CrashZoom", reason, impactWindow, impactStrength),
+                    Directive(
+                        "ZoomBlur",
+                        MotivatedEffectReason.TimeRamp,
+                        blurWindow,
+                        0.40),
+                    Directive("RecoilShake", reason, motionWindow, 0.38)
+                ],
+                2 =>
+                [
+                    Directive("FrameEcho", reason, echoWindow, 0.48),
+                    Directive("RgbSplit", reason, accentWindow, 0.34),
+                    Directive("FlashAccent", reason, flashWindow, 0.18)
+                ],
+                3 =>
+                [
+                    Directive("OffsetZoom", reason, impactWindow, 0.52),
+                    Directive(
+                        "DirectionalMotionBlur",
+                        MotivatedEffectReason.TimeRamp,
+                        blurWindow,
+                        0.38),
+                    Directive(
+                        "RollBurst",
+                        MotivatedEffectReason.CameraTransition,
+                        motionWindow,
+                        0.28)
+                ],
+                4 =>
+                [
+                    Directive("LensWarpPulse", reason, distortionWindow, 0.46),
+                    Directive("RecoilShake", reason, motionWindow, 0.44),
+                    Directive(
+                        "VignettePulse",
+                        MotivatedEffectReason.CameraTransition,
+                        accentWindow,
+                        0.24),
+                    Directive("FlashAccent", reason, flashWindow, 0.16)
+                ],
+                5 =>
+                [
+                    Directive("SmoothZoom", reason, driftWindow, 0.38),
+                    Directive("FrameEcho", reason, echoWindow, 0.26),
+                    Directive(
+                        "VignettePulse",
+                        MotivatedEffectReason.CameraTransition,
+                        accentWindow,
+                        0.18)
+                ],
+                _ =>
+                [
+                    Directive("HitStop", reason, freezeWindow, 0.48),
+                    Directive("RecoilShake", reason, motionWindow, 0.48),
+                    Directive("RgbSplit", reason, accentWindow, 0.28),
+                    Directive("FlashAccent", reason, flashWindow, 0.20)
+                ]
             };
-        string secondaryType = primaryType switch
-        {
-            "HitStop" => "SmoothZoom",
-            "PunchZoom" or "SmoothZoom" or "OffsetZoom" => pattern % 2 == 0
-                ? "MicroShake"
-                : "RgbSplit",
-            "DirectionalMotionBlur" => "OffsetZoom",
-            "RgbSplit" => "SmoothZoom",
-            "FrameEcho" => "PunchZoom",
-            "MicroShake" => "SmoothZoom",
-            _ => "MicroShake"
-        };
-        MotivatedEffectDirective[] planned =
-        [
-            new MotivatedEffectDirective(
-                primaryType,
-                reason,
-                Math.Max(0, center - 0.10),
-                Math.Min(segmentDuration, center + 0.12),
-                finalHighlight ? 0.68 : 0.50),
-            new MotivatedEffectDirective(
-                secondaryType,
-                MotivatedEffectReason.TimeRamp,
-                Math.Max(0, center - 0.42),
-                Math.Max(0, center - 0.16),
-                finalHighlight ? 0.38 : 0.34)
-        ];
         return planned
             .Where(value =>
                 value.EndSeconds - value.StartSeconds >= 0.04)
@@ -1026,15 +1115,42 @@ public sealed class MotivatedEffectPlanner : IMotivatedEffectPlanner
             .ToArray();
     }
 
-    private static int StablePattern(string? value)
+    private static MotivatedEffectDirective Directive(
+        string effectType,
+        MotivatedEffectReason reason,
+        (double Start, double End) window,
+        double intensity) =>
+        new(
+            effectType,
+            reason,
+            window.Start,
+            window.End,
+            intensity);
+
+    private static (double Start, double End) Window(
+        double center,
+        double pre,
+        double post,
+        double duration)
     {
-        if (string.IsNullOrEmpty(value))
-            return 0;
-        int hash = 17;
-        foreach (char character in value)
-            hash = unchecked(hash * 31 + character);
-        return hash & int.MaxValue;
+        double width = pre + post;
+        if (duration <= width)
+            return (0, Math.Max(0, duration));
+        double start = center - pre;
+        double end = center + post;
+        if (start < 0)
+        {
+            end -= start;
+            start = 0;
+        }
+        if (end > duration)
+        {
+            start -= end - duration;
+            end = duration;
+        }
+        return (Math.Max(0, start), Math.Min(duration, end));
     }
+
 }
 
 public interface ISoundDesignPlanner
@@ -1050,13 +1166,13 @@ public sealed class SoundDesignPlanner : ISoundDesignPlanner
             {
                 MusicSectionType.Intro or MusicSectionType.Calm or
                     MusicSectionType.Verse =>
-                    new SoundDesignSection(value.Id, -20, -2, true, false),
+                    new SoundDesignSection(value.Id, -18, -3, true, false),
                 MusicSectionType.BuildUp or MusicSectionType.PreDrop =>
-                    new SoundDesignSection(value.Id, -14, -3, true, false),
+                    new SoundDesignSection(value.Id, -13, -3, true, false),
                 MusicSectionType.Drop or MusicSectionType.Chorus or
                     MusicSectionType.HighEnergy =>
-                    new SoundDesignSection(value.Id, -8, -3, false, true),
-                _ => new SoundDesignSection(value.Id, -16, -4, false, false)
+                    new SoundDesignSection(value.Id, -6, -3, false, true),
+                _ => new SoundDesignSection(value.Id, -15, -4, false, false)
             }).ToArray(),
             PreservePostKillTail: true,
             Warnings: []);
@@ -1079,15 +1195,15 @@ public sealed class ColorNarrativePlanner : IColorNarrativePlanner
             sections.Select(value => value.Type switch
             {
                 MusicSectionType.Intro or MusicSectionType.Calm =>
-                    new ColorNarrativeSection(value.Id, 0.96, -0.02),
+                    new ColorNarrativeSection(value.Id, 0.94, -0.035),
                 MusicSectionType.BuildUp or MusicSectionType.PreDrop =>
-                    new ColorNarrativeSection(value.Id, 0.99, 0),
+                    new ColorNarrativeSection(value.Id, 1.01, 0),
                 MusicSectionType.Drop or MusicSectionType.Chorus or
                     MusicSectionType.HighEnergy =>
-                    new ColorNarrativeSection(value.Id, 1, 0),
+                    new ColorNarrativeSection(value.Id, 1.06, 0.012),
                 MusicSectionType.Outro =>
-                    new ColorNarrativeSection(value.Id, 0.96, -0.06),
-                _ => new ColorNarrativeSection(value.Id, 0.98, -0.01)
+                    new ColorNarrativeSection(value.Id, 0.93, -0.065),
+                _ => new ColorNarrativeSection(value.Id, 0.98, -0.012)
             }).ToArray(),
             []);
 }

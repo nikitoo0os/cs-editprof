@@ -51,7 +51,7 @@ if (root) {
   root.querySelectorAll("[data-select]").forEach(button =>
     button.addEventListener("click", () => {
       const mode = button.dataset.select;
-      if (mode === "recommended" || mode === "none" || mode?.startsWith("top")) {
+      if (mode === "recommended" || mode === "none") {
         boxes.forEach(box => { box.checked = false; });
       }
       if (mode === "recommended") {
@@ -68,12 +68,6 @@ if (root) {
           .forEach(card => { card.querySelector("input").checked = false; });
       }
       if (mode === "none") boxes.forEach(box => { box.checked = false; });
-      if (mode?.startsWith("top")) {
-        const count = Number(mode.slice(3));
-        [...cards].sort((a, b) => Number(b.dataset.score) - Number(a.dataset.score))
-          .slice(0, count)
-          .forEach(card => { card.querySelector("input").checked = true; });
-      }
       update();
     }));
 

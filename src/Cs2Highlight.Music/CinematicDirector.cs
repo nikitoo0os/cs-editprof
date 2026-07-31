@@ -22,7 +22,7 @@ public sealed class CinematicDirector(
     ICinematicDurationPolicy durationPolicy) : ICinematicDirector
 {
     public const string SchemaVersion = "1.0";
-    public const string PlannerVersion = "8.3";
+    public const string PlannerVersion = "10.0";
 
     public CinematicMoviePlan Create(
         MusicNarrative music,
@@ -67,20 +67,69 @@ public sealed class CinematicDirector(
                     relaxedEnergy))
             .OrderBy(value => value.PlannedPeakSeconds)
             .ToArray();
-        if (relaxedEnergy)
+        double detectedIntro = IntroReservationSeconds(
+            sections,
+            excerpt,
+            options.Duration.MaximumIntroSeconds);
+        double boundedDetectedIntro = broll.Count == 0
+            ? 0
+            : Math.Min(
+                detectedIntro,
+                duration.MaximumBrollSeconds);
+        double desiredIntro = broll.Count == 0
+            ? 0
+            : Math.Clamp(
+                Math.Max(
+                    boundedDetectedIntro,
+                    Math.Min(3.2, excerpt.DurationSeconds * 0.10)),
+                0,
+                Math.Min(
+                    duration.MaximumBrollSeconds,
+                    Math.Min(
+                        options.Duration.MaximumIntroSeconds,
+                        excerpt.DurationSeconds)));
+        double[] introReservations =
+        [
+            desiredIntro,
+            Math.Min(desiredIntro, 2.4),
+            boundedDetectedIntro,
+            0
+        ];
+        bool narrativeReflowApplied = false;
+        foreach (double reservation in introReservations
+                     .Distinct()
+                     .OrderByDescending(value => value))
         {
             HighlightPeakMatch[] timelineSafe = CreateTimelineSafeMatches(
                 highlights,
                 excerpt,
                 sectionById,
                 matching,
-                options);
+                options,
+                reservation,
+                relaxedEnergy);
             if (timelineSafe.Length == highlights.Count)
             {
                 matches = timelineSafe;
-                warnings.Add("HIGHLIGHT_PEAK_TIMELINE_FALLBACK");
+                narrativeReflowApplied = true;
+                warnings.Add(relaxedEnergy
+                    ? "HIGHLIGHT_PEAK_TIMELINE_FALLBACK"
+                    : "HIGHLIGHT_NARRATIVE_REFLOW");
+                if (reservation > 0.001)
+                {
+                    warnings.Add(
+                        $"CINEMATIC_INTRO_RESERVED:{reservation:F2}");
+                }
+                if (reservation + 0.001 < desiredIntro)
+                {
+                    warnings.Add(
+                        $"CINEMATIC_INTRO_SHORTENED:{desiredIntro:F2}->{reservation:F2}");
+                }
+                break;
             }
         }
+        if (!narrativeReflowApplied && desiredIntro > 0.001)
+            warnings.Add("CINEMATIC_INTRO_RESERVATION_UNAVAILABLE");
         List<HighlightPeakMatch> effectiveMatches = [];
         double highlightCursor = 0;
         for (int index = 0; index < matches.Length; index++)
@@ -100,6 +149,36 @@ public sealed class CinematicDirector(
             double outputStart = Math.Max(
                 0,
                 match.PlannedPeakSeconds - killOffset);
+            double gap = outputStart - highlightCursor;
+            if (highlightCursor > 0 &&
+                gap > 0.001 &&
+                gap < 0.75)
+            {
+                TimeWarpPlan snappedWarp = timeWarp.Create(
+                    highlight,
+                    match,
+                    highlightCursor,
+                    options.TimeWarp);
+                double snappedEnd = highlightCursor +
+                    TimeWarpMath.OutputDuration(snappedWarp, sourceDuration);
+                double nextNaturalStart = index + 1 < matches.Length
+                    ? NaturalOutputStart(
+                        matches[index + 1],
+                        highlightById[matches[index + 1].HighlightId])
+                    : double.PositiveInfinity;
+                if (snappedEnd <= excerpt.DurationSeconds + 0.001 &&
+                    snappedEnd <= nextNaturalStart + 0.001)
+                {
+                    outputStart = highlightCursor;
+                    warnings.Add(
+                        $"HIGHLIGHT_MICRO_GAP_SNAPPED:{highlight.Id}:{gap:F3}");
+                }
+                else
+                {
+                    warnings.Add(
+                        $"HIGHLIGHT_MICRO_GAP_PRESERVED:{highlight.Id}:{gap:F3}");
+                }
+            }
             if (outputStart < highlightCursor - 0.001)
             {
                 warnings.Add(
@@ -168,7 +247,8 @@ public sealed class CinematicDirector(
                     camera,
                     outputEnd - outputStart,
                     options.Effects,
-                    final)
+                    final,
+                    index)
             });
             highlightCursor = outputEnd;
         }
@@ -208,13 +288,11 @@ public sealed class CinematicDirector(
                     finalHighlight: true)
             };
         }
-        double targetDuration = Math.Max(
-            segments
-                .Where(value => value.HighlightId is not null)
-                .Select(value => value.OutputEndSeconds)
-                .DefaultIfEmpty(0)
-                .Max(),
-            Math.Min(excerpt.DurationSeconds, duration.TargetSeconds));
+        double targetDuration = segments
+            .Where(value => value.HighlightId is not null)
+            .Select(value => value.OutputEndSeconds)
+            .DefaultIfEmpty(0)
+            .Max();
         AddBrollSegments(
             segments,
             sections,
@@ -297,7 +375,9 @@ public sealed class CinematicDirector(
         MusicExcerptPlan excerpt,
         Dictionary<string, MusicSection> sections,
         HighlightPeakMatchPlan original,
-        CinematicDirectorOptions options)
+        CinematicDirectorOptions options,
+        double introReservationSeconds,
+        bool relaxedEnergy)
     {
         double minimumPeakStrength = excerpt.Warnings.Contains(
             MusicExcerptSelector.RelaxedEnergyFallbackWarning,
@@ -313,7 +393,7 @@ public sealed class CinematicDirector(
                     out MusicSection? section) &&
                 MusicalPeakDetector.IsAllowedPrimaryKillSection(
                     section.Type,
-                    relaxedEnergy: true))
+                    relaxedEnergy))
             .OrderBy(value => value.TimeSeconds)
             .ThenByDescending(value => value.Strength * value.Confidence)
             .ThenBy(value => value.Id, StringComparer.Ordinal)
@@ -324,10 +404,12 @@ public sealed class CinematicDirector(
                 StringComparer.Ordinal);
         List<HighlightPeakMatch> result = [];
         int peakIndex = 0;
-        double cursor = IntroReservationSeconds(
-            sections.Values,
-            excerpt,
-            options.Duration.MaximumIntroSeconds);
+        double cursor = Math.Clamp(
+            introReservationSeconds,
+            0,
+            Math.Min(
+                options.Duration.MaximumIntroSeconds,
+                excerpt.DurationSeconds));
         foreach (SelectedHighlight highlight in StoryOrder(highlights))
         {
             double sourceDuration = Math.Max(
@@ -387,6 +469,22 @@ public sealed class CinematicDirector(
             .ToArray();
     }
 
+    private static double NaturalOutputStart(
+        HighlightPeakMatch match,
+        SelectedHighlight highlight)
+    {
+        double sourceDuration = Math.Max(
+            0.001,
+            highlight.Bounds.SafeEndSeconds -
+            highlight.Bounds.SafeStartSeconds);
+        double killOffset = Math.Clamp(
+            highlight.Bounds.PrimaryKillSeconds -
+            highlight.Bounds.SafeStartSeconds,
+            0,
+            sourceDuration);
+        return Math.Max(0, match.PlannedPeakSeconds - killOffset);
+    }
+
     private static IEnumerable<SelectedHighlight> StoryOrder(
         IReadOnlyList<SelectedHighlight> highlights) =>
         highlights
@@ -397,6 +495,8 @@ public sealed class CinematicDirector(
                     ? value.Bounds.PrimaryKillSeconds -
                         value.Bounds.SafeStartSeconds
                     : 0)
+            .ThenBy(value => value.Highlight.BeautyScore)
+            .ThenBy(value => value.Highlight.TotalScore)
             .ThenBy(value => value.SelectionOrder)
             .ThenBy(value => value.Id, StringComparer.Ordinal);
 
@@ -428,12 +528,7 @@ public sealed class CinematicDirector(
         List<string> warnings)
     {
         double used = 0;
-        bool continuityFallback = excerpt.Warnings.Contains(
-            MusicExcerptSelector.RelaxedEnergyFallbackWarning,
-            StringComparer.Ordinal);
-        double brollLimit = continuityFallback
-            ? targetDuration
-            : duration.MaximumBrollSeconds;
+        double brollLimit = duration.MaximumBrollSeconds;
         HashSet<string> selected = new(StringComparer.Ordinal);
         int index = 0;
         CinematicSequenceSegment[] highlights = segments
