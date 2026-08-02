@@ -152,15 +152,29 @@ public sealed class MusicModel(
             !music.RightsConfirmed ||
             music.AnalysisArtifactId is null)
             return StatusCode(StatusCodes.Status409Conflict);
-        long safeDuration = await db.GenerationHighlights
+        GenerationHighlight[] selectedForCapacity =
+            await db.GenerationHighlights.AsNoTracking()
             .Where(value => value.GenerationId == generation.Id && value.SelectedByUser)
-            .SumAsync(value => value.EstimatedDurationMilliseconds, cancellationToken);
-        if (safeDuration / 1.3 > music.DurationMilliseconds)
+            .ToArrayAsync(cancellationToken);
+        MusicSelectionCapacity selectionCapacity =
+            MusicSelectionCapacityPolicy.Calculate(
+                selectedForCapacity.Select(value =>
+                    value.EstimatedDurationMilliseconds),
+                selectedForCapacity.Select(value =>
+                    value.EstimatedDurationMilliseconds),
+                music.DurationMilliseconds,
+                generation.TransitionDurationMilliseconds);
+        if (selectionCapacity.RequiredRemovalCount > 0)
         {
             EnableHighlightSelectionReturn("MUSIC_TOO_SHORT_FOR_SELECTION");
+            string capacityMessage = UiText.HighlightRemovalRequired(
+                selectedForCapacity.Length,
+                selectionCapacity.RequiredRemovalCount);
+            HighlightSelectionReturnDescription =
+                capacityMessage + " Музыка и её анализ сохранятся.";
             ModelState.AddModelError(
                 string.Empty,
-                UiText.Error("MUSIC_TOO_SHORT_FOR_SELECTION"));
+                capacityMessage);
             return await LoadAsync(publicId, cancellationToken);
         }
         await using var transaction =
@@ -249,9 +263,21 @@ public sealed class MusicModel(
             resetGeneration.UpdatedAt = now;
             await db.SaveChangesAsync(cancellationToken);
             EnableHighlightSelectionReturn(exception.Message);
+            string errorMessage = UiText.Error(exception.Message);
+            if (exception.Message == "MUSIC_TOO_SHORT_FOR_SELECTION")
+            {
+                int removals = Math.Max(
+                    1,
+                    selectionCapacity.RequiredRemovalCount);
+                errorMessage = UiText.HighlightRemovalRequired(
+                    selectedForCapacity.Length,
+                    removals);
+                HighlightSelectionReturnDescription =
+                    errorMessage + " Музыка и её анализ сохранятся.";
+            }
             ModelState.AddModelError(
                 string.Empty,
-                UiText.Error(exception.Message));
+                errorMessage);
             return await LoadAsync(publicId, cancellationToken);
         }
         return MovieStyle == MovieStyle.CinematicDirector

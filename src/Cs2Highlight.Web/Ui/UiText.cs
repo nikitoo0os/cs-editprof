@@ -5,6 +5,15 @@ namespace Cs2Highlight.Web.Ui;
 
 public static class UiText
 {
+    public static string HighlightRemovalRequired(
+        int selectedCount,
+        int requiredRemovalCount)
+    {
+        int remove = Math.Max(1, requiredRemovalCount);
+        int remaining = Math.Max(0, selectedCount - remove);
+        return $"Чтобы монтаж поместился в трек, оставьте не больше {remaining} из {selectedCount} выбранных моментов — уберите минимум {remove}.";
+    }
+
     public static string Error(string? code)
     {
         if (string.IsNullOrWhiteSpace(code))

@@ -55,6 +55,8 @@ public sealed class HighlightsModel(
 
     public Generation Generation { get; private set; } = null!;
     public IReadOnlyList<HighlightCard> Cards { get; private set; } = [];
+    public int? MaximumSelectableHighlights { get; private set; }
+    public long? MaximumSelectionDurationMilliseconds { get; private set; }
     [BindProperty] public List<string> HighlightIds { get; set; } = [];
     [BindProperty] public EffectPreset EffectPreset { get; set; } = EffectPreset.Dynamic;
 
@@ -74,6 +76,15 @@ public sealed class HighlightsModel(
             await selections.SaveSelectionAsync(
                 publicId, HighlightIds, EffectPreset, cancellationToken);
             return RedirectToPage("/Music", new { publicId });
+        }
+        catch (MusicSelectionCapacityException exception)
+        {
+            ModelState.AddModelError(
+                string.Empty,
+                UiText.HighlightRemovalRequired(
+                    HighlightIds.Distinct(StringComparer.Ordinal).Count(),
+                    exception.Capacity.RequiredRemovalCount));
+            return await LoadAsync(publicId, cancellationToken);
         }
         catch (InvalidOperationException exception)
         {
@@ -150,8 +161,28 @@ public sealed class HighlightsModel(
                     {
                         CombatScore = value.CombatScore,
                         BeautyScore = value.BeautyScore
-                    }));
+                }));
         }).ToArray();
+        GenerationMusic? music = await db.GenerationMusic.AsNoTracking()
+            .SingleOrDefaultAsync(
+                value => value.GenerationId == generation.Id,
+                cancellationToken);
+        if (music is
+            {
+                RightsConfirmed: true,
+                AnalysisArtifactId: not null
+            })
+        {
+            MusicSelectionCapacity capacity =
+                MusicSelectionCapacityPolicy.Calculate(
+                    Cards.Select(value => value.DurationMilliseconds),
+                    [],
+                    music.DurationMilliseconds,
+                    generation.TransitionDurationMilliseconds);
+            MaximumSelectableHighlights = capacity.MaximumCount;
+            MaximumSelectionDurationMilliseconds =
+                capacity.MaximumTimelineMilliseconds;
+        }
         return Page();
     }
 

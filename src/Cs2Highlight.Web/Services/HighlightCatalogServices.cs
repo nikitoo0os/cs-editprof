@@ -115,6 +115,30 @@ public sealed class HighlightSelectionService(
             .ToArray();
         if (selected.Length != ids.Length)
             throw new InvalidOperationException("INVALID_HIGHLIGHT_SELECTION");
+        GenerationMusic? existingMusic =
+            await db.GenerationMusic.AsNoTracking().SingleOrDefaultAsync(
+                value => value.GenerationId == generation.Id,
+                cancellationToken);
+        if (existingMusic is
+            {
+                RightsConfirmed: true,
+                AnalysisArtifactId: not null
+            })
+        {
+            MusicSelectionCapacity capacity =
+                MusicSelectionCapacityPolicy.Calculate(
+                    generation.Highlights
+                        .Where(value =>
+                            value.SteamId == generation.SelectedSteamId)
+                        .Select(value =>
+                            value.EstimatedDurationMilliseconds),
+                    selected.Select(value =>
+                        value.EstimatedDurationMilliseconds),
+                    existingMusic.DurationMilliseconds,
+                    generation.TransitionDurationMilliseconds);
+            if (capacity.RequiredRemovalCount > 0)
+                throw new MusicSelectionCapacityException(capacity);
+        }
         Dictionary<string, int> order = ids
             .Select((id, index) => (id, index: index + 1))
             .ToDictionary(value => value.id, value => value.index, StringComparer.Ordinal);
@@ -158,11 +182,11 @@ public sealed class HighlightSelectionService(
                 CreatedAt = timeProvider.GetUtcNow()
             });
         }
-        bool reusableMusic = await db.GenerationMusic.AnyAsync(
-            value => value.GenerationId == generation.Id &&
-                value.RightsConfirmed &&
-                value.AnalysisArtifactId != null,
-            cancellationToken);
+        bool reusableMusic = existingMusic is
+        {
+            RightsConfirmed: true,
+            AnalysisArtifactId: not null
+        };
         GenerationStateMachine.Transition(
             generation,
             reusableMusic

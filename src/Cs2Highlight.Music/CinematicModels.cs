@@ -553,5 +553,6 @@ public sealed record CinematicDirectorOptions
     public CinematicTimeWarpOptions TimeWarp { get; init; } = new();
     public CinematicEffectPolicy Effects { get; init; } = new();
     public CinematicCaptureOptions Capture { get; init; } = new();
+    public bool CompactTimelineWhenMaterialIsInsufficient { get; init; }
     public ColorGradePreset ColorGrade { get; init; } = ColorGradePreset.CinematicCool;
 }

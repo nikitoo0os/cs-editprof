@@ -22,7 +22,7 @@ public sealed class CinematicDirector(
     ICinematicDurationPolicy durationPolicy) : ICinematicDirector
 {
     public const string SchemaVersion = "2.0";
-    public const string PlannerVersion = "10.1";
+    public const string PlannerVersion = "10.2";
 
     public CinematicMoviePlan Create(
         MusicNarrative music,
@@ -307,6 +307,25 @@ public sealed class CinematicDirector(
             .ThenBy(value => value.Role)
             .ThenBy(value => value.Id, StringComparer.Ordinal)
             .ToArray();
+        if (options.CompactTimelineWhenMaterialIsInsufficient &&
+            warnings.Any(value => value.StartsWith(
+                "CINEMATIC_TIMELINE_GAP:",
+                StringComparison.Ordinal)))
+        {
+            CompactTimelineResult compacted = CompactTimeline(
+                ordered,
+                effectiveMatches,
+                highlightById);
+            ordered = compacted.Segments;
+            effectiveMatches = compacted.Matches.ToList();
+            targetDuration = compacted.TargetDurationSeconds;
+            warnings.RemoveAll(value => value.StartsWith(
+                "CINEMATIC_TIMELINE_GAP:",
+                StringComparison.Ordinal));
+            warnings.Add(
+                "CINEMATIC_TIMELINE_COMPACTED_FOR_AVAILABLE_MATERIAL");
+            warnings.Add("MUSIC_TRIMMED_TO_COMPACT_TIMELINE");
+        }
         ordered = EffectRarityPolicy.Apply(
                 ordered,
                 out EffectRarityReport effectRarity)
@@ -696,6 +715,76 @@ public sealed class CinematicDirector(
 
     private static string SourceInterval(BrollCandidate candidate) =>
         $"{candidate.DemoId}:{candidate.StartTick}-{candidate.EndTick}";
+
+    private static CompactTimelineResult CompactTimeline(
+        IReadOnlyList<CinematicSequenceSegment> segments,
+        IReadOnlyList<HighlightPeakMatch> matches,
+        Dictionary<string, SelectedHighlight> highlights)
+    {
+        Dictionary<string, HighlightPeakMatch> matchesByHighlight =
+            matches.ToDictionary(value => value.HighlightId, StringComparer.Ordinal);
+        List<CinematicSequenceSegment> compacted = [];
+        List<HighlightPeakMatch> compactedMatches = [];
+        double cursor = 0;
+        foreach (CinematicSequenceSegment segment in segments
+                     .OrderBy(value => value.OutputStartSeconds)
+                     .ThenBy(value => value.Id, StringComparer.Ordinal))
+        {
+            double duration = Math.Max(
+                0.001,
+                segment.OutputEndSeconds - segment.OutputStartSeconds);
+            CinematicSequenceSegment shifted = segment with
+            {
+                OutputStartSeconds = cursor,
+                OutputEndSeconds = cursor + duration
+            };
+            compacted.Add(shifted);
+            if (shifted.HighlightId is not null &&
+                highlights.TryGetValue(
+                    shifted.HighlightId,
+                    out SelectedHighlight? highlight) &&
+                matchesByHighlight.TryGetValue(
+                    shifted.HighlightId,
+                    out HighlightPeakMatch? match))
+            {
+                double killOffset = Math.Clamp(
+                    highlight.Bounds.PrimaryKillSeconds -
+                    highlight.Bounds.SafeStartSeconds,
+                    0,
+                    Math.Max(
+                        0.001,
+                        highlight.Bounds.SafeEndSeconds -
+                        highlight.Bounds.SafeStartSeconds));
+                double actualKill = cursor + TimeWarpMath.MapSourceTime(
+                    shifted.TimeWarp,
+                    killOffset);
+                compactedMatches.Add(match with
+                {
+                    PlannedPeakSeconds = actualKill,
+                    PlannedKillSeconds = actualKill,
+                    AlignmentErrorMilliseconds = Math.Abs(
+                        actualKill - match.PlannedPeakSeconds) * 1000,
+                    Warnings = match.Warnings
+                        .Append(
+                            "MUSIC_PEAK_ALIGNMENT_RELAXED_FOR_COMPACT_TIMELINE")
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray()
+                });
+            }
+            cursor += duration;
+        }
+        return new CompactTimelineResult(
+            compacted.ToArray(),
+            compactedMatches
+                .OrderBy(value => value.PlannedKillSeconds)
+                .ToArray(),
+            cursor);
+    }
+
+    private sealed record CompactTimelineResult(
+        CinematicSequenceSegment[] Segments,
+        HighlightPeakMatch[] Matches,
+        double TargetDurationSeconds);
 
     private static CinematicSequenceRole Role(MusicSectionType section) =>
         section switch

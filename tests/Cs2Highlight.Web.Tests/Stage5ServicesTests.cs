@@ -194,6 +194,13 @@ public sealed class Stage5ServicesTests
             settings,
             plan with { MusicDurationSeconds = 8 });
         Assert.DoesNotContain("afade=t=out", exactLengthGraph);
+
+        string excerptGraph = FfmpegMovieFilterBuilder.AudioMix(
+            settings,
+            plan with { MusicStartSeconds = 10 });
+        Assert.Contains(
+            "atrim=duration=8,afade=t=out:st=7.25:d=0.75",
+            excerptGraph);
     }
 
     [Fact]
@@ -359,6 +366,7 @@ public sealed class Stage5ServicesTests
                 OriginalFileName = "track.mp3",
                 StoredPath = "track.mp3",
                 Sha256 = new string('a', 64),
+                DurationMilliseconds = 30_000,
                 RightsConfirmed = true,
                 CreatedAt = DateTimeOffset.UtcNow
             };

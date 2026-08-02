@@ -1161,6 +1161,44 @@ public sealed class CinematicPlanningTests
     }
 
     [Fact]
+    public void DirectorCompactsTimelineWhenWebFlowAllowsMusicTrim()
+    {
+        CinematicMoviePlan plan = Director().Create(
+            ExcerptNarrative(),
+            ValidExcerpt(),
+            [
+                Highlight("h1", HighlightType.DoubleKill, 4, 30),
+                Highlight("h2", HighlightType.Ace, 4, 80)
+            ],
+            [Broll()],
+            DirectorOptions() with
+            {
+                CompactTimelineWhenMaterialIsInsufficient = true
+            });
+
+        CinematicSequenceSegment[] ordered = plan.Segments
+            .OrderBy(value => value.OutputStartSeconds)
+            .ToArray();
+        Assert.Equal(0, ordered[0].OutputStartSeconds, 6);
+        Assert.All(
+            ordered.Zip(ordered.Skip(1)),
+            pair => Assert.Equal(
+                pair.First.OutputEndSeconds,
+                pair.Second.OutputStartSeconds,
+                6));
+        Assert.Equal(ordered[^1].OutputEndSeconds, plan.TargetDurationSeconds, 6);
+        Assert.Contains(
+            "CINEMATIC_TIMELINE_COMPACTED_FOR_AVAILABLE_MATERIAL",
+            plan.Warnings);
+        Assert.Contains("MUSIC_TRIMMED_TO_COMPACT_TIMELINE", plan.Warnings);
+        Assert.DoesNotContain(
+            plan.Warnings,
+            value => value.StartsWith(
+                "CINEMATIC_TIMELINE_GAP:",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void DirectorRejectsHighlightThatWouldOverrunExcerpt()
     {
         MusicExcerptPlan shortExcerpt = ValidExcerpt() with

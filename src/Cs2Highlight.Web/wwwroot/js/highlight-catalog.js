@@ -6,6 +6,9 @@ if (root) {
   const boxes = cards.map(card => card.querySelector("input[type=checkbox]"));
   const grid = root.querySelector(".highlight-grid");
   const submit = root.querySelector("[data-selection-submit]");
+  const maximumCount = Number(root.dataset.maxSelectionCount || 0);
+  const maximumDuration = Number(root.dataset.maxSelectionDuration || 0);
+  const transitionDuration = Number(root.dataset.transitionDuration || 0);
   let category = "All";
   let demo = "All";
   let query = "";
@@ -23,13 +26,19 @@ if (root) {
     });
   };
 
+  const timelineDuration = selectedCards => Math.max(
+    0,
+    selectedCards.reduce(
+      (sum, card) => sum + Number(card.dataset.duration), 0) -
+      Math.max(0, selectedCards.length - 1) * transitionDuration
+  );
+
   const update = () => {
     const selected = cards.filter(card => card.querySelector("input").checked);
     root.querySelectorAll("[data-selected-count]").forEach(
       element => { element.textContent = selected.length; }
     );
-    const milliseconds = selected.reduce(
-      (sum, card) => sum + Number(card.dataset.duration), 0);
+    const milliseconds = timelineDuration(selected);
     const seconds = Math.round(milliseconds / 1000);
     const duration = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
     root.querySelectorAll("[data-selected-duration]").forEach(
@@ -37,7 +46,36 @@ if (root) {
     );
     cards.forEach(card =>
       card.classList.toggle("selected", card.querySelector("input").checked));
+    boxes.forEach(box => {
+      if (box.checked) {
+        box.disabled = false;
+        return;
+      }
+      const card = box.closest(".highlight-card");
+      const candidateDuration = card
+        ? timelineDuration([...selected, card])
+        : milliseconds;
+      box.disabled = (maximumCount > 0 && selected.length >= maximumCount) ||
+        (maximumDuration > 0 && candidateDuration > maximumDuration);
+    });
     submit.disabled = selected.length === 0;
+  };
+
+  const canSelect = (card, selectedCards) => {
+    if (maximumCount > 0 && selectedCards.length >= maximumCount) return false;
+    const duration = timelineDuration([...selectedCards, card]);
+    return maximumDuration <= 0 ||
+      duration <= maximumDuration;
+  };
+
+  const selectWithinMusicLimit = candidates => {
+    const selected = [];
+    candidates.forEach(card => {
+      if (!canSelect(card, selected)) return;
+      card.querySelector("input").checked = true;
+      selected.push(card);
+    });
+    return selected.length;
   };
 
   root.querySelectorAll("[data-filter]").forEach(button =>
@@ -55,13 +93,13 @@ if (root) {
         boxes.forEach(box => { box.checked = false; });
       }
       if (mode === "recommended") {
-        cards.filter(card => card.dataset.recommended === "true")
-          .forEach(card => { card.querySelector("input").checked = true; });
+        selectWithinMusicLimit(
+          cards.filter(card => card.dataset.recommended === "true"));
         showToast("Рекомендованные моменты выбраны", "success");
       }
       if (mode === "visible") {
-        cards.filter(card => !card.hidden)
-          .forEach(card => { card.querySelector("input").checked = true; });
+        boxes.forEach(box => { box.checked = false; });
+        selectWithinMusicLimit(cards.filter(card => !card.hidden));
       }
       if (mode === "clear-visible") {
         cards.filter(card => !card.hidden)
@@ -72,6 +110,19 @@ if (root) {
     }));
 
   boxes.forEach(box => box.addEventListener("change", () => {
+    if (box.checked) {
+      const selected = cards.filter(card =>
+        card.querySelector("input").checked &&
+        card.querySelector("input") !== box);
+      const card = box.closest(".highlight-card");
+      if (!card || !canSelect(card, selected)) {
+        box.checked = false;
+        const suffix = maximumCount > 0
+          ? `: не больше ${maximumCount} моментов`
+          : "";
+        showToast(`Лимит текущего трека${suffix}`, "warning");
+      }
+    }
     update();
   }));
 

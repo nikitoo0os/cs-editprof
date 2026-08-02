@@ -11,7 +11,10 @@
     "Выбрать игрока",
     $"/generations/{Model.Generation.PublicId}/player");
 }
-<section data-highlight-catalog>
+<section data-highlight-catalog
+         data-max-selection-count="@Model.MaximumSelectableHighlights"
+         data-max-selection-duration="@Model.MaximumSelectionDurationMilliseconds"
+         data-transition-duration="@Model.Generation.TransitionDurationMilliseconds">
   <header class="page-header">
     <div>
       <p class="page-eyebrow">Шаг 3 · Моменты</p>
@@ -20,6 +23,14 @@
         Мы нашли @Model.Cards.Count моментов для @Model.Generation.SelectedPlayerName.
         Выбрано <strong data-selected-count>0</strong> · примерно <strong data-selected-duration>0:00</strong>
       </p>
+      @if (Model.MaximumSelectableHighlights.HasValue)
+      {
+        <p class="muted" data-selection-limit>
+          Текущий трек вмещает до <strong>@Model.MaximumSelectableHighlights</strong> моментов
+          общей длительностью до
+          <strong>@TimeSpan.FromMilliseconds(Model.MaximumSelectionDurationMilliseconds!.Value).ToString(@"m\:ss")</strong>.
+        </p>
+      }
     </div>
     <button type="button" class="btn btn-secondary" data-select="recommended">
       <img class="ui-icon ui-icon--brand" src="/assets/icons/sparkles.svg" alt="" />

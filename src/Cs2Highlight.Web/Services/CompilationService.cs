@@ -1337,7 +1337,7 @@ public static class FfmpegMovieFilterBuilder
             PlanDurationSeconds(plan);
         double availableMusicDuration = plan is null
             ? 0
-            : Math.Max(0, plan.MusicDurationSeconds - plan.MusicStartSeconds);
+            : Math.Max(0, plan.MusicDurationSeconds);
         string musicTail = MusicTailFade(
             availableMusicDuration,
             outputDuration);

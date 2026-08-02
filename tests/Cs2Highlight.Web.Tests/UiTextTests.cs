@@ -34,4 +34,13 @@ public sealed class UiTextTests
         Assert.DoesNotContain("decoder diagnostics", message, StringComparison.Ordinal);
         Assert.Contains("трек", message, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void HighlightCapacityMessageIncludesExactRemovalCount()
+    {
+        string message = UiText.HighlightRemovalRequired(7, 3);
+
+        Assert.Contains("оставьте не больше 4 из 7", message);
+        Assert.Contains("уберите минимум 3", message);
+    }
 }

@@ -342,7 +342,8 @@ public sealed partial class CinematicPlanService(
                 Effects = EffectsFor(
                     settings.CinematicEditIntensity,
                     settings.EffectIntensity),
-                ColorGrade = settings.ColorGradePreset
+                ColorGrade = settings.ColorGradePreset,
+                CompactTimelineWhenMaterialIsInsufficient = true
             });
         if (plan.HighlightMatches.Count != highlights.Count)
         {
