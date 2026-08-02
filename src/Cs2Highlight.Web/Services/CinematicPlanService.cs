@@ -381,7 +381,11 @@ public sealed partial class CinematicPlanService(
             CinematicAlignmentReportBuilder.FromPlan(
                 plan,
                 narrative.Sections);
-        if (alignment.KillsOutsideHighEnergySections != 0)
+        bool compactedForAvailableMaterial = plan.Warnings.Contains(
+            "CINEMATIC_TIMELINE_COMPACTED_FOR_AVAILABLE_MATERIAL",
+            StringComparer.Ordinal);
+        if (alignment.KillsOutsideHighEnergySections != 0 &&
+            !compactedForAvailableMaterial)
             throw new InvalidOperationException(
                 "PRIMARY_KILL_OUTSIDE_HIGH_ENERGY_SECTION");
         if (plan.TargetDurationSeconds > budget.MaximumTotalSeconds + 0.001)

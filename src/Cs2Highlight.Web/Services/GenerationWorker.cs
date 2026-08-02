@@ -557,13 +557,32 @@ public sealed partial class GenerationWorker(
                 JsonOptions) ??
                 throw new InvalidOperationException(
                     "CINEMATIC_LOCKED_PLAN_INVALID");
-            GenerationBrollCandidate[] brollRows =
+            string[] lockedBrollIds = cinematicPlan.Segments
+                .Where(value => value.BrollCandidateId is not null)
+                .Select(value => value.BrollCandidateId!)
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+            GenerationBrollCandidate[] availableBrollRows =
                 await cinematicDb.GenerationBrollCandidates.AsNoTracking()
-                    .Where(value =>
-                        value.GenerationId == snapshot.Id &&
-                        value.Selected)
-                    .OrderBy(value => value.CandidateId)
+                    .Where(value => value.GenerationId == snapshot.Id)
                     .ToArrayAsync(cancellationToken);
+            HashSet<string> lockedBrollIdSet = lockedBrollIds
+                .ToHashSet(StringComparer.Ordinal);
+            GenerationBrollCandidate[] brollRows = availableBrollRows
+                .Where(value => lockedBrollIdSet.Contains(value.CandidateId))
+                .OrderBy(value => value.CandidateId, StringComparer.Ordinal)
+                .ToArray();
+            if (brollRows.Length != lockedBrollIds.Length)
+            {
+                string[] found = brollRows
+                    .Select(value => value.CandidateId)
+                    .ToArray();
+                string[] missing = lockedBrollIds
+                    .Except(found, StringComparer.Ordinal)
+                    .ToArray();
+                throw new InvalidOperationException(
+                    $"CINEMATIC_LOCKED_BROLL_MISSING:{string.Join(',', missing)}");
+            }
             renderSelection =
             [
                 .. selected,
@@ -626,6 +645,7 @@ public sealed partial class GenerationWorker(
                     new BatchRenderOptions
                     {
                         ContinueOnError = true,
+                        UseSharedCs2Session = true,
                         MaximumClips = null,
                         Width = snapshot.Width,
                         Height = snapshot.Height,

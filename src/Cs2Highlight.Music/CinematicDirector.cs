@@ -22,7 +22,7 @@ public sealed class CinematicDirector(
     ICinematicDurationPolicy durationPolicy) : ICinematicDirector
 {
     public const string SchemaVersion = "2.0";
-    public const string PlannerVersion = "10.2";
+    public const string PlannerVersion = "10.3";
 
     public CinematicMoviePlan Create(
         MusicNarrative music,
@@ -307,10 +307,11 @@ public sealed class CinematicDirector(
             .ThenBy(value => value.Role)
             .ThenBy(value => value.Id, StringComparer.Ordinal)
             .ToArray();
+        bool hasReportedGap = warnings.Any(value => value.StartsWith(
+            "CINEMATIC_TIMELINE_GAP:",
+            StringComparison.Ordinal));
         if (options.CompactTimelineWhenMaterialIsInsufficient &&
-            warnings.Any(value => value.StartsWith(
-                "CINEMATIC_TIMELINE_GAP:",
-                StringComparison.Ordinal)))
+            (hasReportedGap || TimelineIsDiscontinuous(ordered)))
         {
             CompactTimelineResult compacted = CompactTimeline(
                 ordered,
@@ -712,6 +713,20 @@ public sealed class CinematicDirector(
 
     private const double MeaningfulShotMinimumSeconds = 0.4;
     private const double MinimumFreeCameraShotSeconds = 0.75;
+
+    private static bool TimelineIsDiscontinuous(
+        CinematicSequenceSegment[] segments)
+    {
+        if (segments.Length == 0 ||
+            segments[0].OutputStartSeconds > 0.05)
+        {
+            return true;
+        }
+        return segments.Zip(segments.Skip(1)).Any(pair =>
+            Math.Abs(
+                pair.First.OutputEndSeconds -
+                pair.Second.OutputStartSeconds) > 0.05);
+    }
 
     private static string SourceInterval(BrollCandidate candidate) =>
         $"{candidate.DemoId}:{candidate.StartTick}-{candidate.EndTick}";

@@ -994,6 +994,20 @@ public sealed class InteractiveTimelineDirector(
         stored.MusicExcerptJson = JsonSerializer.Serialize(excerpt, Json);
         stored.PlannerVersion = "10.1-local.1";
 
+        HashSet<string> selectedBrollIds = segments
+            .Where(value => value.BrollCandidateId is not null)
+            .Select(value => value.BrollCandidateId!)
+            .ToHashSet(StringComparer.Ordinal);
+        GenerationBrollCandidate[] brollCandidates =
+            await db.GenerationBrollCandidates
+                .Where(value => value.GenerationId == timeline.GenerationId)
+                .ToArrayAsync(cancellationToken);
+        foreach (GenerationBrollCandidate candidate in brollCandidates)
+        {
+            candidate.Selected = selectedBrollIds.Contains(
+                candidate.CandidateId);
+        }
+
         Dictionary<string, GenerationHighlight> highlights =
             await db.GenerationHighlights
                 .Where(value => value.GenerationId == timeline.GenerationId)
