@@ -159,6 +159,25 @@ public sealed class DynamicEffectsTests
     }
 
     [Fact]
+    public void CapabilitiesJsonRoundTripsFilterSet()
+    {
+        FfmpegCapabilities original = new(
+            "1.0",
+            true,
+            "ffmpeg",
+            "fixture",
+            new HashSet<string>(["scale", "eq"], StringComparer.Ordinal),
+            DateTimeOffset.UnixEpoch,
+            []);
+
+        FfmpegCapabilities? restored = JsonSerializer.Deserialize<
+            FfmpegCapabilities>(JsonSerializer.Serialize(original));
+
+        Assert.NotNull(restored);
+        Assert.True(original.Filters.SetEquals(restored!.Filters));
+    }
+
+    [Fact]
     public void PlannerIsDeterministicAndGenerationChangesVariation()
     {
         DynamicEffectPlanner planner = Planner();

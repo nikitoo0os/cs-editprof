@@ -468,7 +468,7 @@ public sealed record FfmpegCapabilities(
     bool Available,
     string Executable,
     string? Version,
-    IReadOnlySet<string> Filters,
+    HashSet<string> Filters,
     DateTimeOffset ScannedAt,
     IReadOnlyList<string> Warnings)
 {

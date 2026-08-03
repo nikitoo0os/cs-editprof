@@ -1098,6 +1098,18 @@ public sealed partial class GenerationWorker(
                 : [];
         FfmpegCapabilities? capabilities = null;
         IReadOnlyList<DynamicEffectPlan>? dynamicEffectPlans = null;
+        GlobalHighlightCandidate[] dynamicSelection = renderedSelection;
+        if (cinematicPlan is not null)
+        {
+            HashSet<string> cinematicHighlightIds = cinematicPlan.Segments
+                .Where(value => value.HighlightId is not null)
+                .Select(value => value.HighlightId!)
+                .ToHashSet(StringComparer.Ordinal);
+            dynamicSelection = renderedSelection
+                .Where(value => cinematicHighlightIds.Contains(
+                    value.Highlight.Id))
+                .ToArray();
+        }
         if (musicContext is not null && snapshot.EffectPreset != EffectPreset.None)
         {
             capabilities = await GetOrCreateCapabilitiesAsync(
@@ -1105,7 +1117,7 @@ public sealed partial class GenerationWorker(
                 cancellationToken);
             dynamicEffectPlans = await GetOrCreateDynamicEffectPlansAsync(
                 publicId,
-                renderedSelection,
+                dynamicSelection,
                 musicContext,
                 capabilities,
                 cancellationToken);
@@ -1165,7 +1177,7 @@ public sealed partial class GenerationWorker(
                 dynamicEffectPlans is null
                     ? new Dictionary<string, DynamicEffectPlan>(
                         StringComparer.Ordinal)
-                    : renderedSelection
+                    : dynamicSelection
                         .Zip(dynamicEffectPlans)
                         .ToDictionary(
                             value => value.First.Highlight.Id,
