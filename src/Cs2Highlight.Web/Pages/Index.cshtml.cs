@@ -14,11 +14,13 @@ public sealed class IndexModel(
     DemoUploadService uploads,
     GenerationWakeSignal queue,
     UploadOptions options,
+    PaymentOptions paymentOptions,
     TimeProvider timeProvider) : PageModel
 {
     [BindProperty] public List<IFormFile> DemoFiles { get; set; } = [];
     public int MaximumFiles => options.MaximumFilesPerGeneration;
     public long MaximumFileSizeBytes => options.MaximumFileSizeBytes;
+    public string DisplayPrice => paymentOptions.DisplayPrice;
     public string? Error { get; private set; }
 
     public void OnGet() { }
@@ -31,8 +33,8 @@ public sealed class IndexModel(
             PublicId = Guid.NewGuid().ToString("N"),
             CreatedAt = now,
             UpdatedAt = now,
-            PriceAmountMinor = 100,
-            PriceCurrency = "USD"
+            PriceAmountMinor = paymentOptions.PriceAmountMinor,
+            PriceCurrency = paymentOptions.Currency.ToUpperInvariant()
         };
         try
         {

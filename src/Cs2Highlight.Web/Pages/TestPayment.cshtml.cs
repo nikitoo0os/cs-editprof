@@ -13,7 +13,7 @@ public sealed class TestPaymentModel(PaymentService payments) : PageModel
         string decision,
         CancellationToken cancellationToken)
     {
-        await payments.ConfirmAsync(publicId, decision == "success", cancellationToken);
+        await payments.ConfirmTestAsync(publicId, decision == "success", cancellationToken);
         return decision == "success"
             ? RedirectToPage("/Generation", new { publicId })
             : RedirectToPage("/Checkout", new { publicId });

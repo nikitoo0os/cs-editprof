@@ -73,7 +73,7 @@ public sealed class Generation
     public EffectPreset EffectPreset { get; set; } = EffectPreset.Dynamic;
     public long EstimatedDurationMilliseconds { get; set; }
     public long PriceAmountMinor { get; set; } = 100;
-    [MaxLength(3)] public string PriceCurrency { get; set; } = "USD";
+    [MaxLength(3)] public string PriceCurrency { get; set; } = "RUB";
     public PaymentStatus PaymentStatus { get; set; }
     [MaxLength(128)] public string? PaymentId { get; set; }
     [MaxLength(128)] public string? PaymentIdempotencyKey { get; set; }
@@ -361,10 +361,11 @@ public sealed class Payment
     public Generation Generation { get; set; } = null!;
     [MaxLength(32)] public string Provider { get; set; } = "Test";
     [MaxLength(128)] public string ProviderPaymentId { get; set; } = string.Empty;
+    [MaxLength(2048)] public string? ConfirmationUrl { get; set; }
     [MaxLength(128)] public string IdempotencyKey { get; set; } = string.Empty;
     public PaymentStatus Status { get; set; }
     public long AmountMinor { get; set; }
-    [MaxLength(3)] public string Currency { get; set; } = "USD";
+    [MaxLength(3)] public string Currency { get; set; } = "RUB";
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset? SucceededAt { get; set; }

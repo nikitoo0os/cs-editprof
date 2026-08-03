@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Globalization;
 using Cs2Highlight.Music;
 using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
@@ -11,7 +12,8 @@ namespace Cs2Highlight.Web.Pages;
 
 public sealed class CheckoutModel(
     IDbContextFactory<GenerationDbContext> dbFactory,
-    PaymentService payments) : PageModel
+    PaymentService payments,
+    PaymentOptions paymentOptions) : PageModel
 {
     private static readonly JsonSerializerOptions WebJson =
         new(JsonSerializerDefaults.Web);
@@ -23,8 +25,18 @@ public sealed class CheckoutModel(
     public GenerationMovieSettings? MovieSettings { get; private set; }
     public CinematicMoviePlan? CinematicPlan { get; private set; }
     public IReadOnlyList<CinematicTimelineItem> CinematicTimeline { get; private set; } = [];
+    public string DisplayPrice =>
+        $"{(Generation.PriceAmountMinor / 100m).ToString("0.00", CultureInfo.GetCultureInfo("ru-RU"))} ₽";
+    public bool IsTestPayment => !paymentOptions.UsesYooKassa;
 
-    public async Task<IActionResult> OnGetAsync(string publicId, CancellationToken cancellationToken)
+    public Task<IActionResult> OnGetAsync(
+        string publicId,
+        CancellationToken cancellationToken) =>
+        LoadAsync(publicId, cancellationToken);
+
+    private async Task<IActionResult> LoadAsync(
+        string publicId,
+        CancellationToken cancellationToken)
     {
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation? generation = await db.Generations.AsNoTracking()
@@ -114,10 +126,40 @@ public sealed class CheckoutModel(
         }.Where(value => value.DurationSeconds > 0.01).ToArray();
     }
 
-    public async Task<IActionResult> OnPostAsync(string publicId, CancellationToken cancellationToken)
+    public async Task<IActionResult> OnPostAsync(
+        string publicId,
+        bool acceptTerms,
+        CancellationToken cancellationToken)
     {
-        await payments.CreateAsync(publicId, cancellationToken);
-        return RedirectToPage("/TestPayment", new { publicId });
+        if (!acceptTerms)
+        {
+            ModelState.AddModelError(
+                nameof(acceptTerms),
+                "Подтвердите согласие с офертой и условиями получения цифрового товара.");
+            IActionResult loadResult = await LoadAsync(publicId, cancellationToken);
+            return loadResult is PageResult ? Page() : loadResult;
+        }
+
+        string returnUrl = BuildReturnUrl(publicId);
+        PaymentLaunch launch = await payments.CreateAsync(
+            publicId, returnUrl, cancellationToken);
+        return Redirect(launch.ConfirmationUrl);
+    }
+
+    private string BuildReturnUrl(string publicId)
+    {
+        if (!string.IsNullOrWhiteSpace(paymentOptions.ReturnUrlBase))
+        {
+            return $"{paymentOptions.ReturnUrlBase.TrimEnd('/')}/generations/" +
+                $"{Uri.EscapeDataString(publicId)}/payment-return";
+        }
+
+        return Url.Page(
+            "/PaymentReturn",
+            pageHandler: null,
+            values: new { publicId },
+            protocol: Request.Scheme) ??
+            throw new InvalidOperationException("PAYMENT_RETURN_URL_FAILED");
     }
 }
 

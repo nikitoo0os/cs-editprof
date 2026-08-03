@@ -26,10 +26,17 @@ public sealed class WebIntegrationTests : IDisposable
             new WebApplicationFactoryClientOptions { AllowAutoRedirect = true });
 
         string home = await client.GetStringAsync("/");
+        string delivery = await client.GetStringAsync("/delivery");
+        string offer = await client.GetStringAsync("/offer");
+        string contacts = await client.GetStringAsync("/contacts");
         HttpResponseMessage health = await client.GetAsync("/health/live");
 
         Assert.Contains("Загрузить и найти моменты", home);
         Assert.Contains("cshighlighter", home);
+        Assert.Contains("<title>CSHighlighter - Создай КС2 мувик</title>", home);
+        Assert.Contains("Доставка и получение товара", delivery);
+        Assert.Contains("Публичная оферта", offer);
+        Assert.Contains("Контакты и реквизиты", contacts);
         Assert.Equal(HttpStatusCode.OK, health.StatusCode);
     }
 
