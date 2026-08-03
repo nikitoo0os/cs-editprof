@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#090a0c" data-theme-color />
     <meta name="description" content="cshighlighter — автоматический монтаж лучших моментов из CS2-демок." />
-    <title>@ViewData["Title"] — cshighlighter</title>
+    <title>CSHighlighter - Создай КС2 мувик</title>
     <script src="~/js/theme-bootstrap.js" asp-append-version="true"></script>
     <link rel="stylesheet" href="~/css/app.generated.css" asp-append-version="true" />
 </head>
@@ -21,8 +21,15 @@
   </main>
   <footer id="app-help" class="app-footer">
     <div class="app-container app-footer__inner">
-      <span>cshighlighter · Ваши демки, ваш мувик</span>
-      <span>Файлы автоматически удаляются по правилам хранения</span>
+      <div class="app-footer__summary">
+        <span>CSHighlighter · Ваши демки, ваш мувик</span>
+        <span>Цифровой товар доступен для скачивания после обработки</span>
+      </div>
+      <nav class="app-footer__links" aria-label="Правовая информация">
+        <a asp-page="/Delivery">Доставка и получение</a>
+        <a asp-page="/Offer">Публичная оферта</a>
+        <a asp-page="/Contacts">Контакты и реквизиты</a>
+      </nav>
     </div>
   </footer>
 </div>

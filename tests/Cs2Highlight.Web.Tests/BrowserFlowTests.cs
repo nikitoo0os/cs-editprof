@@ -142,13 +142,14 @@ public sealed class BrowserFlowTests
                     new System.Text.RegularExpressions.Regex("is-locked"));
             await page.Locator("[data-timeline-confirm]").ClickAsync();
         }
-        await Assertions.Expect(page.GetByText("$1.00")).ToHaveCountAsync(1);
+        await Assertions.Expect(page.GetByText("1,00 ₽")).ToHaveCountAsync(1);
         await Assertions.Expect(page.Locator("[data-effect-summary]"))
             .ToContainTextAsync("Сбалансированная");
         await page.ReloadAsync();
         await Assertions.Expect(page.Locator("[data-effect-summary]"))
             .ToContainTextAsync("Сбалансированная");
-        await page.GetByRole(AriaRole.Button, new() { Name = "Оплатить $1" }).ClickAsync();
+        await page.GetByRole(AriaRole.Checkbox).CheckAsync();
+        await page.GetByRole(AriaRole.Button, new() { Name = "Оплатить 1,00 ₽" }).ClickAsync();
         await page.GetByRole(AriaRole.Button, new() { Name = "Подтвердить оплату" }).ClickAsync();
 
         await page.Locator("#video-result:not([hidden])").WaitForAsync(

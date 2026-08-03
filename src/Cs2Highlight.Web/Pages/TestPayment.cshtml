@@ -1,5 +1,7 @@
 @page "/generations/{publicId}/test-payment"
 @model TestPaymentModel
+@using Cs2Highlight.Web.Services
+@inject PaymentOptions PaymentOptions
 @{
   ViewData["Title"] = "Тестовая оплата";
   ViewData["CurrentStep"] = 5;
@@ -11,7 +13,7 @@
   <span class="badge badge-warning">Тестовый режим</span>
   <h1 class="page-title" style="margin:18px auto 10px">Подтвердите тестовую оплату</h1>
   <p class="page-lead" style="margin-inline:auto">Реального списания не будет. После подтверждения начнётся генерация мувика.</p>
-  <p class="checkout-total" style="margin:26px 0">$1.00 <span class="muted" style="font-size:14px">USD</span></p>
+  <p class="checkout-total" style="margin:26px 0">@PaymentOptions.DisplayPrice <span class="muted" style="font-size:14px">RUB</span></p>
   <form method="post" asp-antiforgery="true" style="display:flex;justify-content:center;gap:10px;flex-wrap:wrap">
     <button class="btn btn-primary btn-lg" name="decision" value="success">
       <img class="ui-icon" src="/assets/icons/check-circle-2.svg" alt="" />

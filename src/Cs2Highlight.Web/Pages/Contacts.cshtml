@@ -1,0 +1,29 @@
+@page "/contacts"
+@using Cs2Highlight.Web.Services
+@inject CommerceOptions Commerce
+@{
+  ViewData["Title"] = "Контакты и реквизиты";
+}
+<article class="surface surface--elevated surface-pad legal-document">
+  <p class="page-eyebrow">Продавец и поддержка</p>
+  <h1 class="page-title">Контакты и реквизиты</h1>
+  @if (Commerce.IsDraft)
+  {
+    <div class="legal-draft-notice" role="note">
+      Черновик: перед публикацией заполните раздел Commerce в конфигурации приложения.
+    </div>
+  }
+
+  <dl class="legal-details">
+    <div><dt>Продавец</dt><dd>@Commerce.SellerName</dd></div>
+    <div><dt>Юридический адрес</dt><dd>@Commerce.LegalAddress</dd></div>
+    <div><dt>ИНН</dt><dd>@Commerce.Inn</dd></div>
+    <div><dt>ОГРН / ОГРНИП</dt><dd>@Commerce.Ogrn</dd></div>
+    <div><dt>Расчётный счёт</dt><dd>@Commerce.SettlementAccount</dd></div>
+    <div><dt>Банк</dt><dd>@Commerce.BankName</dd></div>
+    <div><dt>БИК</dt><dd>@Commerce.Bic</dd></div>
+    <div><dt>Корреспондентский счёт</dt><dd>@Commerce.CorrespondentAccount</dd></div>
+    <div><dt>Email поддержки</dt><dd>@Commerce.SupportEmail</dd></div>
+    <div><dt>Телефон</dt><dd>@Commerce.SupportPhone</dd></div>
+  </dl>
+</article>

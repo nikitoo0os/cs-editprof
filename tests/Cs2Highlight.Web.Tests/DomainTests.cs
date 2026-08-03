@@ -7,12 +7,12 @@ namespace Cs2Highlight.Web.Tests;
 public sealed class DomainTests
 {
     [Fact]
-    public void PriceUsesMinorUnitsAndUsd()
+    public void PriceUsesMinorUnitsAndRubles()
     {
         Generation generation = new();
         Assert.Equal(100, generation.PriceAmountMinor);
         Assert.IsType<long>(generation.PriceAmountMinor);
-        Assert.Equal("USD", generation.PriceCurrency);
+        Assert.Equal("RUB", generation.PriceCurrency);
     }
 
     [Fact]

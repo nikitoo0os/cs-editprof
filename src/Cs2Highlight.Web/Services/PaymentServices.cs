@@ -1,57 +1,286 @@
+using System.Globalization;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
 using Microsoft.EntityFrameworkCore;
 
 namespace Cs2Highlight.Web.Services;
 
+public sealed class PaymentOptions
+{
+    public string Provider { get; set; } = "Test";
+    public long PriceAmountMinor { get; set; } = 100;
+    public string Currency { get; set; } = "RUB";
+    public string ShopId { get; set; } = string.Empty;
+    public string SecretKey { get; set; } = string.Empty;
+    public string ReturnUrlBase { get; set; } = string.Empty;
+    public string ApiBaseUrl { get; set; } = "https://api.yookassa.ru/v3/";
+
+    public bool UsesYooKassa =>
+        Provider.Equals("YooKassa", StringComparison.OrdinalIgnoreCase);
+
+    public string DisplayPrice =>
+        $"{(PriceAmountMinor / 100m).ToString("0.00", CultureInfo.GetCultureInfo("ru-RU"))} ₽";
+}
+
 public sealed record PaymentRequest(
     string GenerationPublicId,
     long AmountMinor,
     string Currency,
-    string IdempotencyKey);
-public sealed record PaymentSessionResult(bool Success, string ProviderPaymentId, string? ErrorCode);
-public sealed record PaymentConfirmationResult(bool Success, string ProviderPaymentId, string? ErrorCode);
+    string IdempotencyKey,
+    string ReturnUrl,
+    string Description);
+
+public enum ProviderPaymentStatus { Pending, Succeeded, Canceled }
+
+public sealed record PaymentSessionResult(
+    bool Success,
+    string ProviderPaymentId,
+    string? ConfirmationUrl,
+    string? ErrorCode);
+
+public sealed record PaymentStatusResult(
+    bool Success,
+    string ProviderPaymentId,
+    ProviderPaymentStatus Status,
+    string? ErrorCode);
+
+public sealed record PaymentLaunch(Payment Payment, string ConfirmationUrl);
 
 public interface IPaymentProvider
 {
-    Task<PaymentSessionResult> CreateSessionAsync(PaymentRequest request, CancellationToken cancellationToken);
-    Task<PaymentConfirmationResult> ConfirmAsync(string providerPaymentId, CancellationToken cancellationToken);
+    string Name { get; }
+    Task<PaymentSessionResult> CreateSessionAsync(
+        PaymentRequest request,
+        CancellationToken cancellationToken);
+    Task<PaymentStatusResult> GetStatusAsync(
+        string providerPaymentId,
+        CancellationToken cancellationToken);
 }
 
 public sealed class TestPaymentProvider : IPaymentProvider
 {
-    private readonly Dictionary<string, bool> sessions = new(StringComparer.Ordinal);
-    private readonly object gate = new();
+    public string Name => "Test";
 
     public Task<PaymentSessionResult> CreateSessionAsync(
         PaymentRequest request,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (request.AmountMinor != 100 || request.Currency != "USD")
+        if (request.AmountMinor <= 0 || request.Currency.Length != 3)
         {
-            return Task.FromResult(new PaymentSessionResult(false, string.Empty, "INVALID_PRICE"));
+            return Task.FromResult(new PaymentSessionResult(
+                false, string.Empty, null, "INVALID_PRICE"));
         }
+
         string id = $"test_{request.IdempotencyKey}";
-        lock (gate) sessions.TryAdd(id, false);
-        return Task.FromResult(new PaymentSessionResult(true, id, null));
+        string confirmationUrl =
+            $"/generations/{Uri.EscapeDataString(request.GenerationPublicId)}/test-payment";
+        return Task.FromResult(new PaymentSessionResult(
+            true, id, confirmationUrl, null));
     }
 
-    public Task<PaymentConfirmationResult> ConfirmAsync(
+    public Task<PaymentStatusResult> GetStatusAsync(
         string providerPaymentId,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        lock (gate)
-        {
-            if (!sessions.ContainsKey(providerPaymentId) &&
-                !providerPaymentId.StartsWith("test_generation-", StringComparison.Ordinal))
-                return Task.FromResult(new PaymentConfirmationResult(false, providerPaymentId, "PAYMENT_NOT_FOUND"));
-            sessions[providerPaymentId] = true;
-        }
-        return Task.FromResult(new PaymentConfirmationResult(true, providerPaymentId, null));
+        bool exists = providerPaymentId.StartsWith("test_", StringComparison.Ordinal);
+        return Task.FromResult(new PaymentStatusResult(
+            exists,
+            providerPaymentId,
+            exists ? ProviderPaymentStatus.Succeeded : ProviderPaymentStatus.Pending,
+            exists ? null : "PAYMENT_NOT_FOUND"));
     }
 }
+
+public sealed partial class YooKassaPaymentProvider(
+    HttpClient client,
+    PaymentOptions options,
+    ILogger<YooKassaPaymentProvider> logger) : IPaymentProvider
+{
+    private static readonly JsonSerializerOptions JsonOptions =
+        new(JsonSerializerDefaults.Web);
+
+    public string Name => "YooKassa";
+
+    public async Task<PaymentSessionResult> CreateSessionAsync(
+        PaymentRequest request,
+        CancellationToken cancellationToken)
+    {
+        string? configurationError = ValidateConfiguration();
+        if (configurationError is not null)
+            return new(false, string.Empty, null, configurationError);
+        if (request.AmountMinor <= 0 || request.Currency.Length != 3)
+            return new(false, string.Empty, null, "YOOKASSA_AMOUNT_INVALID");
+        if (string.IsNullOrWhiteSpace(request.IdempotencyKey) || request.IdempotencyKey.Length > 64)
+            return new(false, string.Empty, null, "YOOKASSA_IDEMPOTENCY_KEY_INVALID");
+        if (!Uri.TryCreate(request.ReturnUrl, UriKind.Absolute, out Uri? returnUrl) ||
+            (returnUrl.Scheme != Uri.UriSchemeHttps && returnUrl.Scheme != Uri.UriSchemeHttp))
+        {
+            return new(false, string.Empty, null, "YOOKASSA_RETURN_URL_INVALID");
+        }
+
+        var body = new
+        {
+            amount = new
+            {
+                value = (request.AmountMinor / 100m).ToString("0.00", CultureInfo.InvariantCulture),
+                currency = request.Currency.ToUpperInvariant()
+            },
+            capture = true,
+            confirmation = new
+            {
+                type = "redirect",
+                return_url = request.ReturnUrl
+            },
+            description = request.Description[..Math.Min(request.Description.Length, 128)],
+            metadata = new { generation_id = request.GenerationPublicId }
+        };
+
+        using HttpRequestMessage message = new(HttpMethod.Post, "payments");
+        AddAuthentication(message);
+        message.Headers.Add("Idempotence-Key", request.IdempotencyKey);
+        message.Content = JsonContent.Create(body, options: JsonOptions);
+
+        try
+        {
+            using HttpResponseMessage response =
+                await client.SendAsync(message, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+                return new(false, string.Empty, null, await ReadErrorCodeAsync(response, cancellationToken));
+
+            YooKassaPaymentResponse? payment = await response.Content.ReadFromJsonAsync<YooKassaPaymentResponse>(
+                JsonOptions, cancellationToken);
+            string? paymentId = payment?.Id;
+            string? confirmationUrl = payment?.Confirmation?.ConfirmationUrl;
+            if (string.IsNullOrWhiteSpace(paymentId) ||
+                string.IsNullOrWhiteSpace(confirmationUrl) ||
+                !Uri.TryCreate(confirmationUrl, UriKind.Absolute, out Uri? confirmationUri) ||
+                confirmationUri.Scheme != Uri.UriSchemeHttps)
+            {
+                return new(false, string.Empty, null, "YOOKASSA_INVALID_RESPONSE");
+            }
+
+            return new(true, paymentId, confirmationUrl, null);
+        }
+        catch (Exception exception) when (
+            exception is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            LogPaymentCreationFailed(logger, exception);
+            return new(false, string.Empty, null, "YOOKASSA_UNAVAILABLE");
+        }
+    }
+
+    public async Task<PaymentStatusResult> GetStatusAsync(
+        string providerPaymentId,
+        CancellationToken cancellationToken)
+    {
+        string? configurationError = ValidateConfiguration();
+        if (configurationError is not null)
+            return new(false, providerPaymentId, ProviderPaymentStatus.Pending, configurationError);
+        if (string.IsNullOrWhiteSpace(providerPaymentId) || providerPaymentId.Length > 128)
+            return new(false, providerPaymentId, ProviderPaymentStatus.Pending, "PAYMENT_ID_INVALID");
+
+        using HttpRequestMessage message = new(
+            HttpMethod.Get,
+            $"payments/{Uri.EscapeDataString(providerPaymentId)}");
+        AddAuthentication(message);
+
+        try
+        {
+            using HttpResponseMessage response =
+                await client.SendAsync(message, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                return new(
+                    false,
+                    providerPaymentId,
+                    ProviderPaymentStatus.Pending,
+                    await ReadErrorCodeAsync(response, cancellationToken));
+            }
+
+            YooKassaPaymentResponse? payment = await response.Content.ReadFromJsonAsync<YooKassaPaymentResponse>(
+                JsonOptions, cancellationToken);
+            string? paymentId = payment?.Id;
+            if (string.IsNullOrWhiteSpace(paymentId) || payment is null)
+                return new(false, providerPaymentId, ProviderPaymentStatus.Pending, "YOOKASSA_INVALID_RESPONSE");
+
+            ProviderPaymentStatus status = payment.Status switch
+            {
+                "succeeded" => ProviderPaymentStatus.Succeeded,
+                "canceled" => ProviderPaymentStatus.Canceled,
+                _ => ProviderPaymentStatus.Pending
+            };
+            return new(true, paymentId, status, null);
+        }
+        catch (Exception exception) when (
+            exception is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            LogPaymentStatusRequestFailed(logger, exception);
+            return new(false, providerPaymentId, ProviderPaymentStatus.Pending, "YOOKASSA_UNAVAILABLE");
+        }
+    }
+
+    private string? ValidateConfiguration()
+    {
+        if (string.IsNullOrWhiteSpace(options.ShopId)) return "YOOKASSA_SHOP_ID_REQUIRED";
+        if (string.IsNullOrWhiteSpace(options.SecretKey)) return "YOOKASSA_SECRET_KEY_REQUIRED";
+        return null;
+    }
+
+    private void AddAuthentication(HttpRequestMessage message)
+    {
+        string credentials = Convert.ToBase64String(
+            Encoding.UTF8.GetBytes($"{options.ShopId}:{options.SecretKey}"));
+        message.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
+    }
+
+    private static async Task<string> ReadErrorCodeAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            YooKassaErrorResponse? error = await response.Content.ReadFromJsonAsync<YooKassaErrorResponse>(
+                JsonOptions, cancellationToken);
+            string? errorCode = error?.Code;
+            if (!string.IsNullOrWhiteSpace(errorCode))
+                return $"YOOKASSA_{errorCode.ToUpperInvariant()}";
+        }
+        catch (JsonException)
+        {
+            // Return a stable error without exposing the provider response.
+        }
+
+        return $"YOOKASSA_HTTP_{(int)response.StatusCode}";
+    }
+
+    [LoggerMessage(EventId = 4101, Level = LogLevel.Warning, Message = "YooKassa payment creation failed.")]
+    private static partial void LogPaymentCreationFailed(ILogger logger, Exception exception);
+
+    [LoggerMessage(EventId = 4102, Level = LogLevel.Warning, Message = "YooKassa payment status request failed.")]
+    private static partial void LogPaymentStatusRequestFailed(ILogger logger, Exception exception);
+
+    private sealed record YooKassaPaymentResponse(
+        string Id,
+        string Status,
+        YooKassaConfirmation? Confirmation);
+
+    private sealed record YooKassaConfirmation(
+        [property: JsonPropertyName("confirmation_url")] string? ConfirmationUrl);
+
+    private sealed record YooKassaErrorResponse(string? Code);
+}
+
+public sealed record YooKassaNotificationPayload(string? Id);
+public sealed record YooKassaNotification(
+    string? Event,
+    [property: JsonPropertyName("object")] YooKassaNotificationPayload? Payload);
 
 public sealed class PaymentService(
     IDbContextFactory<GenerationDbContext> dbFactory,
@@ -60,14 +289,24 @@ public sealed class PaymentService(
     GenerationWakeSignal queue,
     IInteractiveTimelineDirector? timelineDirector = null)
 {
-    public async Task<Payment> CreateAsync(string publicId, CancellationToken cancellationToken)
+    public async Task<PaymentLaunch> CreateAsync(
+        string publicId,
+        string returnUrl,
+        CancellationToken cancellationToken)
     {
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        Generation generation = await db.Generations.SingleAsync(value => value.PublicId == publicId, cancellationToken);
-        string key = generation.PaymentIdempotencyKey ?? $"generation-{generation.PublicId}";
+        Generation generation = await db.Generations.SingleAsync(
+            value => value.PublicId == publicId, cancellationToken);
         Payment? existing = await db.Payments.SingleOrDefaultAsync(
-            value => value.IdempotencyKey == key, cancellationToken);
-        if (existing is not null) return existing;
+            value => value.GenerationId == generation.Id, cancellationToken);
+        if (existing is not null &&
+            existing.Status is PaymentStatus.Pending or PaymentStatus.Succeeded)
+        {
+            string? existingConfirmationUrl = existing.ConfirmationUrl;
+            if (string.IsNullOrWhiteSpace(existingConfirmationUrl))
+                throw new InvalidOperationException("PAYMENT_CONFIRMATION_URL_MISSING");
+            return new(existing, existingConfirmationUrl);
+        }
         if (generation.Status != GenerationStatus.AwaitingPayment)
             throw new InvalidOperationException("Generation is not awaiting payment.");
         GenerationMusic? music = await db.GenerationMusic.SingleOrDefaultAsync(
@@ -79,75 +318,158 @@ public sealed class PaymentService(
             throw new InvalidOperationException("MUSIC_NOT_READY");
         if (movieSettings is null)
             throw new InvalidOperationException("MOVIE_SETTINGS_REQUIRED");
+
+        string key = existing is null
+            ? generation.PaymentIdempotencyKey ?? $"generation-{generation.PublicId}"
+            : $"payment-{Guid.NewGuid():N}";
+
         PaymentSessionResult session = await provider.CreateSessionAsync(
-            new PaymentRequest(publicId, 100, "USD", key), cancellationToken);
-        if (!session.Success) throw new InvalidOperationException(session.ErrorCode);
+            new PaymentRequest(
+                publicId,
+                generation.PriceAmountMinor,
+                generation.PriceCurrency,
+                key,
+                returnUrl,
+                $"CSHighlighter: создание CS2-мувика, заказ {publicId[..Math.Min(12, publicId.Length)]}"),
+            cancellationToken);
+        string? confirmationUrl = session.ConfirmationUrl;
+        if (!session.Success || string.IsNullOrWhiteSpace(confirmationUrl))
+            throw new InvalidOperationException(session.ErrorCode ?? "PAYMENT_CREATE_FAILED");
+
         DateTimeOffset now = timeProvider.GetUtcNow();
-        Payment payment = new()
+        Payment payment = existing ?? new Payment
         {
             GenerationId = generation.Id,
-            ProviderPaymentId = session.ProviderPaymentId,
-            IdempotencyKey = key,
-            Status = PaymentStatus.Pending,
-            AmountMinor = 100,
-            Currency = "USD",
-            CreatedAt = now,
-            UpdatedAt = now
+            CreatedAt = now
         };
+        payment.Provider = provider.Name;
+        payment.ProviderPaymentId = session.ProviderPaymentId;
+        payment.ConfirmationUrl = confirmationUrl;
+        payment.IdempotencyKey = key;
+        payment.Status = PaymentStatus.Pending;
+        payment.AmountMinor = generation.PriceAmountMinor;
+        payment.Currency = generation.PriceCurrency;
+        payment.UpdatedAt = now;
+        payment.SucceededAt = null;
+        payment.FailureCode = null;
         generation.PaymentId = session.ProviderPaymentId;
         generation.PaymentIdempotencyKey = key;
         generation.PaymentStatus = PaymentStatus.Pending;
         GenerationStateMachine.Transition(generation, GenerationStatus.PaymentProcessing, now);
-        db.Payments.Add(payment);
+        if (existing is null) db.Payments.Add(payment);
         await db.SaveChangesAsync(cancellationToken);
-        return payment;
+        return new(payment, confirmationUrl);
     }
 
-    public async Task ConfirmAsync(string publicId, bool approve, CancellationToken cancellationToken)
+    public async Task<PaymentStatus> RefreshAsync(
+        string publicId,
+        CancellationToken cancellationToken)
     {
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        Generation generation = await db.Generations.SingleAsync(value => value.PublicId == publicId, cancellationToken);
-        Payment payment = await db.Payments.SingleAsync(value => value.GenerationId == generation.Id, cancellationToken);
+        Generation generation = await db.Generations.SingleAsync(
+            value => value.PublicId == publicId, cancellationToken);
+        Payment payment = await db.Payments.SingleAsync(
+            value => value.GenerationId == generation.Id, cancellationToken);
+        return await RefreshAsync(db, generation, payment, cancellationToken);
+    }
+
+    public async Task<bool> RefreshByProviderPaymentIdAsync(
+        string providerPaymentId,
+        CancellationToken cancellationToken)
+    {
+        await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        Payment? payment = await db.Payments.Include(value => value.Generation)
+            .SingleOrDefaultAsync(
+                value => value.ProviderPaymentId == providerPaymentId,
+                cancellationToken);
+        if (payment is null) return false;
+        await RefreshAsync(db, payment.Generation, payment, cancellationToken);
+        return true;
+    }
+
+    public async Task ConfirmTestAsync(
+        string publicId,
+        bool approve,
+        CancellationToken cancellationToken)
+    {
+        if (!provider.Name.Equals("Test", StringComparison.Ordinal))
+            throw new InvalidOperationException("TEST_PAYMENT_DISABLED");
+
+        await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        Generation generation = await db.Generations.SingleAsync(
+            value => value.PublicId == publicId, cancellationToken);
+        Payment payment = await db.Payments.SingleAsync(
+            value => value.GenerationId == generation.Id, cancellationToken);
+        if (!approve)
+        {
+            DateTimeOffset now = timeProvider.GetUtcNow();
+            payment.Status = PaymentStatus.Failed;
+            payment.FailureCode = "TEST_PAYMENT_DECLINED";
+            payment.UpdatedAt = now;
+            generation.PaymentStatus = PaymentStatus.Failed;
+            GenerationStateMachine.Transition(generation, GenerationStatus.AwaitingPayment, now);
+            await db.SaveChangesAsync(cancellationToken);
+            return;
+        }
+
+        await RefreshAsync(db, generation, payment, cancellationToken);
+    }
+
+    private async Task<PaymentStatus> RefreshAsync(
+        GenerationDbContext db,
+        Generation generation,
+        Payment payment,
+        CancellationToken cancellationToken)
+    {
         if (payment.Status == PaymentStatus.Succeeded)
         {
             queue.Wake();
-            return;
+            return payment.Status;
         }
+
+        PaymentStatusResult status = await provider.GetStatusAsync(
+            payment.ProviderPaymentId, cancellationToken);
+        if (!status.Success)
+            throw new InvalidOperationException(status.ErrorCode ?? "PAYMENT_STATUS_FAILED");
+
         DateTimeOffset now = timeProvider.GetUtcNow();
-        if (!approve)
+        if (status.Status == ProviderPaymentStatus.Pending)
+            return payment.Status;
+        if (status.Status == ProviderPaymentStatus.Canceled)
         {
-            payment.Status = PaymentStatus.Failed;
-            payment.FailureCode = "TEST_PAYMENT_DECLINED";
-            generation.PaymentStatus = PaymentStatus.Failed;
-            GenerationStateMachine.Transition(generation, GenerationStatus.AwaitingPayment, now);
+            payment.Status = PaymentStatus.Cancelled;
+            payment.FailureCode = "PAYMENT_CANCELED";
+            payment.UpdatedAt = now;
+            generation.PaymentStatus = PaymentStatus.Cancelled;
+            if (generation.Status == GenerationStatus.PaymentProcessing)
+                GenerationStateMachine.Transition(generation, GenerationStatus.AwaitingPayment, now);
+            await db.SaveChangesAsync(cancellationToken);
+            return payment.Status;
         }
-        else
-        {
-            PaymentConfirmationResult confirmation = await provider.ConfirmAsync(
-                payment.ProviderPaymentId, cancellationToken);
-            if (!confirmation.Success) throw new InvalidOperationException(confirmation.ErrorCode);
-            payment.Status = PaymentStatus.Succeeded;
-            payment.SucceededAt = now;
-            generation.PaymentStatus = PaymentStatus.Succeeded;
-            generation.PaidAt = now;
-            GenerationMovieSettings settings =
-                await db.GenerationMovieSettings.SingleAsync(
-                    value => value.GenerationId == generation.Id,
-                    cancellationToken);
-            settings.LockedAt ??= now;
-            if (timelineDirector is not null)
-            {
-                await timelineDirector.LockAfterPaymentAsync(
-                    generation.Id,
-                    now,
-                    db,
-                    cancellationToken);
-            }
-            GenerationStateMachine.Transition(generation, GenerationStatus.Paid, now);
-            GenerationStateMachine.Transition(generation, GenerationStatus.QueuedForGeneration, now);
-        }
+
+        payment.Status = PaymentStatus.Succeeded;
+        payment.SucceededAt = now;
         payment.UpdatedAt = now;
+        payment.FailureCode = null;
+        generation.PaymentStatus = PaymentStatus.Succeeded;
+        generation.PaidAt = now;
+        GenerationMovieSettings settings = await db.GenerationMovieSettings.SingleAsync(
+            value => value.GenerationId == generation.Id,
+            cancellationToken);
+        settings.LockedAt ??= now;
+        if (timelineDirector is not null)
+        {
+            await timelineDirector.LockAfterPaymentAsync(
+                generation.Id, now, db, cancellationToken);
+        }
+        if (generation.Status == GenerationStatus.PaymentProcessing)
+        {
+            GenerationStateMachine.Transition(generation, GenerationStatus.Paid, now);
+            GenerationStateMachine.Transition(
+                generation, GenerationStatus.QueuedForGeneration, now);
+        }
         await db.SaveChangesAsync(cancellationToken);
-        if (approve) queue.Wake();
+        queue.Wake();
+        return payment.Status;
     }
 }

@@ -10,9 +10,16 @@
     <div>
       <p class="page-eyebrow">Шаг 5 · Проверка заказа</p>
       <h1 class="page-title">Всё готово к генерации</h1>
-      <p class="page-lead">Проверь параметры. После тестовой оплаты начнётся запись и финальный монтаж.</p>
+      <p class="page-lead">Проверь параметры. После оплаты начнётся запись и финальный монтаж.</p>
     </div>
-    <span class="badge badge-warning">Тестовая оплата</span>
+    @if (Model.IsTestPayment)
+    {
+      <span class="badge badge-warning">Тестовая оплата</span>
+    }
+    else
+    {
+      <span class="badge badge-success">Оплата через ЮKassa</span>
+    }
   </header>
 
   <div class="section-grid-sidebar">
@@ -75,7 +82,7 @@
         Без скрытых платежей
       </span>
       <h2 class="section-title" style="margin-top:16px">Одна генерация</h2>
-      <p class="checkout-total">$1.00</p>
+      <p class="checkout-total">@Model.DisplayPrice</p>
       <ul class="benefit-list" style="margin-top:18px">
         <li class="benefit">✓ Запись всех выбранных моментов</li>
         <li class="benefit">✓ Эффекты, цвет и музыка</li>
@@ -102,17 +109,34 @@
         </div>
       }
       <form method="post" asp-antiforgery="true" data-loading-form>
+        <label class="checkout-consent">
+          <input type="checkbox" name="acceptTerms" value="true" required />
+          <span>
+            Я принимаю условия <a asp-page="/Offer" target="_blank">публичной оферты</a>
+            и ознакомлен со <a asp-page="/Delivery" target="_blank">способом получения цифрового товара</a>.
+          </span>
+        </label>
+        <div asp-validation-summary="All" class="form-error" role="alert"></div>
         <button type="submit"
                 class="btn btn-primary btn-lg btn-block"
                 style="margin-top:24px"
                 data-loading-label="Открываем оплату…">
           <img class="ui-icon" src="/assets/icons/credit-card.svg" alt="" />
-          Оплатить $1
+          Оплатить @Model.DisplayPrice
         </button>
       </form>
-      <p class="muted" style="margin:14px 0 0;font-size:11px;line-height:1.5">
-        Денежные средства не списываются: в текущей сборке используется тестовый платёж.
-      </p>
+      @if (Model.IsTestPayment)
+      {
+        <p class="muted" style="margin:14px 0 0;font-size:11px;line-height:1.5">
+          Денежные средства не списываются: включён локальный тестовый провайдер.
+        </p>
+      }
+      else
+      {
+        <p class="muted" style="margin:14px 0 0;font-size:11px;line-height:1.5">
+          Вы будете перенаправлены на защищённую страницу ЮKassa. Данные карты не передаются CSHighlighter.
+        </p>
+      }
     </aside>
   </div>
 </section>

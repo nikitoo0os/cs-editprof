@@ -1,3 +1,5 @@
+@using Cs2Highlight.Web.Services
+@inject PaymentOptions PaymentOptions
 <header class="app-header">
   <div class="app-container app-header__inner">
     <a class="brand" asp-page="/Index" aria-label="cshighlighter — на главную">
@@ -27,9 +29,9 @@
         <img class="ui-icon" src="/assets/icons/gamepad-2.svg" alt="" />
         Главная
       </a>
-      <span class="price-pill" aria-label="Одна генерация стоит один доллар">
+      <span class="price-pill" aria-label="Стоимость одной генерации — @PaymentOptions.DisplayPrice">
         <img class="ui-icon ui-icon--brand" src="/assets/icons/badge-dollar-sign.svg" alt="" />
-        <span>$1 за генерацию</span>
+        <span>@PaymentOptions.DisplayPrice за генерацию</span>
       </span>
       <a class="app-nav__link app-nav__help" href="#app-help">
         <img class="ui-icon" src="/assets/icons/circle-help.svg" alt="" />

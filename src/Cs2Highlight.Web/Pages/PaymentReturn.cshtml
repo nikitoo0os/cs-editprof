@@ -1,0 +1,32 @@
+@page "/generations/{publicId}/payment-return"
+@model PaymentReturnModel
+@using Cs2Highlight.Web.Domain
+@{
+  ViewData["Title"] = "Статус оплаты";
+  ViewData["CurrentStep"] = 5;
+}
+<section class="surface surface--elevated surface-pad legal-narrow" style="text-align:center">
+  <span class="state-icon" aria-hidden="true">
+    <img class="ui-icon ui-icon--brand" src="/assets/icons/credit-card.svg" alt="" />
+  </span>
+  @if (Model.Status is PaymentStatus.Cancelled or PaymentStatus.Failed)
+  {
+    <span class="badge badge-warning">Оплата не завершена</span>
+    <h1 class="page-title legal-result-title">Платёж отменён</h1>
+    <p class="page-lead legal-result-lead">
+      Деньги не списаны. Вернитесь к заказу и попробуйте ещё раз.
+    </p>
+    <a class="btn btn-primary btn-lg" asp-page="/Checkout" asp-route-publicId="@Model.PublicId">
+      Вернуться к оплате
+    </a>
+  }
+  else
+  {
+    <span class="badge badge-brand">Проверяем платёж</span>
+    <h1 class="page-title legal-result-title">ЮKassa ещё обрабатывает оплату</h1>
+    <p class="page-lead legal-result-lead">
+      Обычно это занимает несколько секунд. Обновите статус — повторного списания не будет.
+    </p>
+    <a class="btn btn-primary btn-lg" href="?">Проверить ещё раз</a>
+  }
+</section>

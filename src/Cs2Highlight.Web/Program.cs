@@ -37,6 +37,10 @@ TrustedLutOptions trustedLutOptions =
     builder.Configuration.GetSection("TrustedLuts").Get<TrustedLutOptions>() ?? new();
 RecommendedSelectionOptions selectionOptions =
     builder.Configuration.GetSection("RecommendedSelection").Get<RecommendedSelectionOptions>() ?? new();
+PaymentOptions paymentOptions =
+    builder.Configuration.GetSection("Payments").Get<PaymentOptions>() ?? new();
+CommerceOptions commerceOptions =
+    builder.Configuration.GetSection("Commerce").Get<CommerceOptions>() ?? new();
 builder.Services.AddSingleton(uploadOptions);
 builder.Services.AddSingleton(storageOptions);
 builder.Services.AddSingleton(pipelineOptions);
@@ -45,6 +49,8 @@ builder.Services.AddSingleton(retentionOptions);
 builder.Services.AddSingleton(musicUploadOptions);
 builder.Services.AddSingleton(trustedLutOptions);
 builder.Services.AddSingleton(selectionOptions);
+builder.Services.AddSingleton(paymentOptions);
+builder.Services.AddSingleton(commerceOptions);
 builder.Services.Configure<FormOptions>(options =>
 {
     options.MultipartBodyLengthLimit = uploadOptions.MaximumTotalSizeBytes;
@@ -98,7 +104,16 @@ builder.Services.AddSingleton<ICinematicDynamicEffectAdapter, CinematicDynamicEf
 builder.Services.AddSingleton<IFfmpegCapabilityScanner, FfmpegCapabilityScanner>();
 builder.Services.AddSingleton<IDynamicEffectFilterGraphBuilder, DynamicEffectFilterGraphBuilder>();
 builder.Services.AddSingleton<IHighlightCompilationService, FfmpegHighlightCompilationService>();
-builder.Services.AddSingleton<IPaymentProvider, TestPaymentProvider>();
+builder.Services.AddSingleton<TestPaymentProvider>();
+builder.Services.AddHttpClient<YooKassaPaymentProvider>(client =>
+{
+    client.BaseAddress = new Uri(paymentOptions.ApiBaseUrl, UriKind.Absolute);
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.AddScoped<IPaymentProvider>(services =>
+    paymentOptions.UsesYooKassa
+        ? services.GetRequiredService<YooKassaPaymentProvider>()
+        : services.GetRequiredService<TestPaymentProvider>());
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddScoped<PaymentService>();
 builder.Services.AddHostedService<GenerationWorker>();
@@ -144,6 +159,24 @@ app.UseRateLimiter();
 app.MapRazorPages();
 app.MapHub<GenerationHub>("/hubs/generations");
 app.MapTimelineDirectorApi();
+app.MapPost("/api/payments/yookassa", async (
+    YooKassaNotification notification,
+    PaymentService payments,
+    CancellationToken cancellationToken) =>
+{
+    string? providerPaymentId = notification.Payload?.Id;
+    if (notification.Event is not ("payment.succeeded" or "payment.canceled") ||
+        string.IsNullOrWhiteSpace(providerPaymentId))
+    {
+        return Results.BadRequest();
+    }
+
+    // The notification body is never trusted as proof of payment. The service
+    // requests the current payment state directly from YooKassa before updating the order.
+    await payments.RefreshByProviderPaymentIdAsync(
+        providerPaymentId, cancellationToken);
+    return Results.Ok();
+});
 app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
 app.MapHealthChecks("/health/ready");
 app.MapGet("/api/generations/{publicId}", async (

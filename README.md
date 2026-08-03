@@ -245,7 +245,7 @@ remain subject to
 Stage 5 extends the persisted Web flow without replacing Stages 1–4:
 
 ```text
-multi-demo analysis -> player -> highlight catalog -> $1 test payment
+multi-demo analysis -> player -> highlight catalog -> ₽ checkout
 -> immutable selection -> clean Gameplay capture -> effects -> final MP4
 ```
 
@@ -283,7 +283,7 @@ that checklist passes on the Windows render machine with real demos.
 `Cs2Highlight.Web` adds a persisted Razor Pages workflow:
 
 ```text
-multi-file upload → analysis → SteamID selection → $1 test checkout
+multi-file upload → analysis → SteamID selection → ₽ checkout
 → global Top N → sequential Stage 3 render → FFmpeg → one final MP4
 ```
 
@@ -300,6 +300,32 @@ Copy-Item .\examples\appsettings.web.example.json `
   .\src\Cs2Highlight.Web\appsettings.local.json
 notepad .\src\Cs2Highlight.Web\appsettings.local.json
 ```
+
+### YooKassa
+
+The committed configuration keeps the local `Test` provider enabled. To use
+YooKassa, put secrets only in the git-ignored `appsettings.local.json` or in
+environment variables:
+
+```json
+{
+  "Payments": {
+    "Provider": "YooKassa",
+    "PriceAmountMinor": 100,
+    "Currency": "RUB",
+    "ShopId": "your-shop-id",
+    "SecretKey": "your-secret-key",
+    "ReturnUrlBase": "https://your-domain.example"
+  }
+}
+```
+
+The amount is stored in minor currency units (`100` = `1.00 RUB`). Configure
+the HTTP notification URL in the YooKassa dashboard as
+`https://your-domain.example/api/payments/yookassa` and subscribe to
+`payment.succeeded` and `payment.canceled`. The endpoint verifies the current
+payment status through the YooKassa API before queuing a render. Fill the
+`Commerce` section before publishing the offer and accepting real payments.
 
 Build the parser and solution, verify the render-agent environment, then start:
 

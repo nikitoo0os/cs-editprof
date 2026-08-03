@@ -1881,7 +1881,11 @@ public sealed partial class GenerationWorker(
                 schemaVersion = "1.1",
                 generationId = publicId,
                 paymentId = generation.PaymentId,
-                price = new { amountMinor = 100, currency = "USD" },
+                price = new
+                {
+                    amountMinor = generation.PriceAmountMinor,
+                    currency = generation.PriceCurrency
+                },
                 selectedSteamId = generation.SelectedSteamId,
                 selectedPlayerName = generation.SelectedPlayerName,
                 uploadedDemos = generation.Demos.Count,

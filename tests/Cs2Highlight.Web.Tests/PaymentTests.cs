@@ -33,10 +33,12 @@ public sealed class PaymentTests : IAsyncLifetime, IDisposable
         GenerationWakeSignal wake = new();
         PaymentService service = new(factory, new TestPaymentProvider(), TimeProvider.System, wake);
 
-        Payment first = await service.CreateAsync(publicId, CancellationToken.None);
-        Payment second = await service.CreateAsync(publicId, CancellationToken.None);
-        await service.ConfirmAsync(publicId, true, CancellationToken.None);
-        await service.ConfirmAsync(publicId, true, CancellationToken.None);
+        Payment first = (await service.CreateAsync(
+            publicId, "https://example.test/return", CancellationToken.None)).Payment;
+        Payment second = (await service.CreateAsync(
+            publicId, "https://example.test/return", CancellationToken.None)).Payment;
+        await service.ConfirmTestAsync(publicId, true, CancellationToken.None);
+        await service.ConfirmTestAsync(publicId, true, CancellationToken.None);
 
         await using GenerationDbContext verification = await factory.CreateDbContextAsync();
         Assert.Equal(first.Id, second.Id);
@@ -57,11 +59,11 @@ public sealed class PaymentTests : IAsyncLifetime, IDisposable
         }
         await new PaymentService(
             factory, new TestPaymentProvider(), TimeProvider.System, new GenerationWakeSignal())
-            .CreateAsync(publicId, CancellationToken.None);
+            .CreateAsync(publicId, "https://example.test/return", CancellationToken.None);
 
         PaymentService restarted = new(
             factory, new TestPaymentProvider(), TimeProvider.System, new GenerationWakeSignal());
-        await restarted.ConfirmAsync(publicId, true, CancellationToken.None);
+        await restarted.ConfirmTestAsync(publicId, true, CancellationToken.None);
 
         await using GenerationDbContext verification = await factory.CreateDbContextAsync();
         Assert.Equal(PaymentStatus.Succeeded, (await verification.Payments.SingleAsync()).Status);
