@@ -17,15 +17,128 @@ namespace Cs2Highlight.Web.Data.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "8.0.13");
 
+            modelBuilder.Entity("Cs2Highlight.Web.Domain.ApplicationUser", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("AccessFailedCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ConcurrencyStamp")
+                        .IsConcurrencyToken()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Email")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("EmailConfirmed")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("LockoutEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("LockoutEnd")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NormalizedEmail")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NormalizedUserName")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PasswordHash")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PhoneNumber")
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("PhoneNumberConfirmed")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ReferralCode")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("ReferralRewardedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReferrerUserId")
+                        .HasMaxLength(450)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("RegisteredAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SecurityStamp")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ThemePreference")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("redline");
+
+                    b.Property<int>("TokenBalance")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("TwoFactorEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("UserName")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedEmail")
+                        .HasDatabaseName("EmailIndex");
+
+                    b.HasIndex("NormalizedUserName")
+                        .IsUnique()
+                        .HasDatabaseName("UserNameIndex");
+
+                    b.HasIndex("ReferralCode")
+                        .IsUnique();
+
+                    b.ToTable("AspNetUsers", (string)null);
+                });
+
             modelBuilder.Entity("Cs2Highlight.Web.Domain.Generation", b =>
                 {
                     b.Property<long>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("ActiveStageKey")
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("AspectRatio")
                         .IsRequired()
                         .HasMaxLength(8)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("CleanupAttemptCount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("CleanupCompletedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CleanupError")
+                        .HasMaxLength(1024)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("CleanupStartedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("CleanupStatus")
+                        .IsRequired()
                         .HasColumnType("TEXT");
 
                     b.Property<DateTimeOffset>("CreatedAt")
@@ -36,8 +149,15 @@ namespace Cs2Highlight.Web.Data.Migrations
                         .HasMaxLength(128)
                         .HasColumnType("TEXT");
 
+                    b.Property<long>("DeletedTemporaryBytes")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("EffectPreset")
                         .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ErrorCategory")
+                        .HasMaxLength(64)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("ErrorCode")
@@ -50,6 +170,9 @@ namespace Cs2Highlight.Web.Data.Migrations
 
                     b.Property<long>("EstimatedDurationMilliseconds")
                         .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("ExpiresAtUtc")
+                        .HasColumnType("TEXT");
 
                     b.Property<long?>("FinalVideoArtifactId")
                         .HasColumnType("INTEGER");
@@ -71,6 +194,9 @@ namespace Cs2Highlight.Web.Data.Migrations
 
                     b.Property<double>("MinimumScore")
                         .HasColumnType("REAL");
+
+                    b.Property<DateTimeOffset?>("OutputDeletedAtUtc")
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("OutputOrder")
                         .IsRequired()
@@ -99,6 +225,9 @@ namespace Cs2Highlight.Web.Data.Migrations
                         .HasMaxLength(3)
                         .HasColumnType("TEXT");
 
+                    b.Property<long>("ProcessingDurationMilliseconds")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int>("ProgressPercent")
                         .HasColumnType("INTEGER");
 
@@ -106,6 +235,15 @@ namespace Cs2Highlight.Web.Data.Migrations
                         .IsRequired()
                         .HasMaxLength(64)
                         .HasColumnType("TEXT");
+
+                    b.Property<long>("QueueDurationMilliseconds")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("QueueEnteredAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("RetryCount")
+                        .HasColumnType("INTEGER");
 
                     b.Property<string>("SelectedPlayerName")
                         .HasMaxLength(128)
@@ -119,6 +257,12 @@ namespace Cs2Highlight.Web.Data.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<long>("TemporaryBytesPeak")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("TokenRefunded")
+                        .HasColumnType("INTEGER");
+
                     b.Property<int>("TransitionDurationMilliseconds")
                         .HasColumnType("INTEGER");
 
@@ -127,6 +271,10 @@ namespace Cs2Highlight.Web.Data.Migrations
                         .HasColumnType("TEXT");
 
                     b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UserId")
+                        .HasMaxLength(450)
                         .HasColumnType("TEXT");
 
                     b.Property<int>("Version")
@@ -140,6 +288,8 @@ namespace Cs2Highlight.Web.Data.Migrations
 
                     b.HasIndex("PublicId")
                         .IsUnique();
+
+                    b.HasIndex("UserId", "CreatedAt");
 
                     b.ToTable("Generations");
                 });
@@ -1157,11 +1307,11 @@ namespace Cs2Highlight.Web.Data.Migrations
                     b.Property<long>("AmountMinor")
                         .HasColumnType("INTEGER");
 
-                    b.Property<DateTimeOffset>("CreatedAt")
-                        .HasColumnType("TEXT");
-
                     b.Property<string>("ConfirmationUrl")
                         .HasMaxLength(2048)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Currency")
@@ -1212,6 +1362,389 @@ namespace Cs2Highlight.Web.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("Payments");
+                });
+
+            modelBuilder.Entity("Cs2Highlight.Web.Domain.Referral", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("ConfirmedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReferredUserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ReferrerUserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("RewardedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReferredUserId")
+                        .IsUnique();
+
+                    b.HasIndex("ReferrerUserId", "ReferredUserId")
+                        .IsUnique();
+
+                    b.ToTable("Referrals");
+                });
+
+            modelBuilder.Entity("Cs2Highlight.Web.Domain.TokenPackage", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("PriceAmountMinor")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("TokenAmount")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.ToTable("TokenPackages");
+                });
+
+            modelBuilder.Entity("Cs2Highlight.Web.Domain.TokenPurchase", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<long>("AmountMinor")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Currency")
+                        .IsRequired()
+                        .HasMaxLength(3)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FailureCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset?>("PaidAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Provider")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderPaymentId")
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("TokenPackageId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IdempotencyKey")
+                        .IsUnique();
+
+                    b.HasIndex("ProviderPaymentId")
+                        .IsUnique();
+
+                    b.HasIndex("TokenPackageId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("TokenPurchases");
+                });
+
+            modelBuilder.Entity("Cs2Highlight.Web.Domain.TokenTransaction", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("Amount")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("BalanceAfter")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset?>("CompletedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTimeOffset>("CreatedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("GenerationId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("IdempotencyKey")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("ReferralId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("TokenPurchaseId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("GenerationId");
+
+                    b.HasIndex("ReferralId");
+
+                    b.HasIndex("TokenPurchaseId");
+
+                    b.HasIndex("UserId", "IdempotencyKey")
+                        .IsUnique();
+
+                    b.ToTable("TokenTransactions");
+                });
+
+            modelBuilder.Entity("Cs2Highlight.Web.Domain.UserConsent", b =>
+                {
+                    b.Property<long>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTimeOffset>("AcceptedAtUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ConsentType")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("DocumentVersion")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("IpAddress")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UserAgent")
+                        .HasMaxLength(512)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasMaxLength(450)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId", "ConsentType", "DocumentVersion")
+                        .IsUnique();
+
+                    b.ToTable("UserConsents");
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRole", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ConcurrencyStamp")
+                        .IsConcurrencyToken()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("NormalizedName")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedName")
+                        .IsUnique()
+                        .HasDatabaseName("RoleNameIndex");
+
+                    b.ToTable("AspNetRoles", (string)null);
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ClaimType")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClaimValue")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RoleId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RoleId");
+
+                    b.ToTable("AspNetRoleClaims", (string)null);
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserClaim<string>", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ClaimType")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ClaimValue")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("AspNetUserClaims", (string)null);
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserLogin<string>", b =>
+                {
+                    b.Property<string>("LoginProvider")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderKey")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProviderDisplayName")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UserId")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("LoginProvider", "ProviderKey");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("AspNetUserLogins", (string)null);
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserRole<string>", b =>
+                {
+                    b.Property<string>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("RoleId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("UserId", "RoleId");
+
+                    b.HasIndex("RoleId");
+
+                    b.ToTable("AspNetUserRoles", (string)null);
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserToken<string>", b =>
+                {
+                    b.Property<string>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("LoginProvider")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Value")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("UserId", "LoginProvider", "Name");
+
+                    b.ToTable("AspNetUserTokens", (string)null);
+                });
+
+            modelBuilder.Entity("Cs2Highlight.Web.Domain.Generation", b =>
+                {
+                    b.HasOne("Cs2Highlight.Web.Domain.ApplicationUser", "User")
+                        .WithMany("Generations")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("User");
                 });
 
             modelBuilder.Entity("Cs2Highlight.Web.Domain.GenerationArtifact", b =>
@@ -1451,6 +1984,149 @@ namespace Cs2Highlight.Web.Data.Migrations
                         .IsRequired();
 
                     b.Navigation("Generation");
+                });
+
+            modelBuilder.Entity("Cs2Highlight.Web.Domain.Referral", b =>
+                {
+                    b.HasOne("Cs2Highlight.Web.Domain.ApplicationUser", "ReferredUser")
+                        .WithMany()
+                        .HasForeignKey("ReferredUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("Cs2Highlight.Web.Domain.ApplicationUser", "ReferrerUser")
+                        .WithMany()
+                        .HasForeignKey("ReferrerUserId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("ReferredUser");
+
+                    b.Navigation("ReferrerUser");
+                });
+
+            modelBuilder.Entity("Cs2Highlight.Web.Domain.TokenPurchase", b =>
+                {
+                    b.HasOne("Cs2Highlight.Web.Domain.TokenPackage", "TokenPackage")
+                        .WithMany()
+                        .HasForeignKey("TokenPackageId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Cs2Highlight.Web.Domain.ApplicationUser", "User")
+                        .WithMany("TokenPurchases")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("TokenPackage");
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Cs2Highlight.Web.Domain.TokenTransaction", b =>
+                {
+                    b.HasOne("Cs2Highlight.Web.Domain.Generation", "Generation")
+                        .WithMany()
+                        .HasForeignKey("GenerationId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Cs2Highlight.Web.Domain.Referral", "Referral")
+                        .WithMany()
+                        .HasForeignKey("ReferralId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Cs2Highlight.Web.Domain.TokenPurchase", "TokenPurchase")
+                        .WithMany()
+                        .HasForeignKey("TokenPurchaseId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("Cs2Highlight.Web.Domain.ApplicationUser", "User")
+                        .WithMany("TokenTransactions")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Generation");
+
+                    b.Navigation("Referral");
+
+                    b.Navigation("TokenPurchase");
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Cs2Highlight.Web.Domain.UserConsent", b =>
+                {
+                    b.HasOne("Cs2Highlight.Web.Domain.ApplicationUser", "User")
+                        .WithMany("Consents")
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("User");
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityRoleClaim<string>", b =>
+                {
+                    b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole", null)
+                        .WithMany()
+                        .HasForeignKey("RoleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserClaim<string>", b =>
+                {
+                    b.HasOne("Cs2Highlight.Web.Domain.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserLogin<string>", b =>
+                {
+                    b.HasOne("Cs2Highlight.Web.Domain.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserRole<string>", b =>
+                {
+                    b.HasOne("Microsoft.AspNetCore.Identity.IdentityRole", null)
+                        .WithMany()
+                        .HasForeignKey("RoleId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("Cs2Highlight.Web.Domain.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Microsoft.AspNetCore.Identity.IdentityUserToken<string>", b =>
+                {
+                    b.HasOne("Cs2Highlight.Web.Domain.ApplicationUser", null)
+                        .WithMany()
+                        .HasForeignKey("UserId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("Cs2Highlight.Web.Domain.ApplicationUser", b =>
+                {
+                    b.Navigation("Consents");
+
+                    b.Navigation("Generations");
+
+                    b.Navigation("TokenPurchases");
+
+                    b.Navigation("TokenTransactions");
                 });
 
             modelBuilder.Entity("Cs2Highlight.Web.Domain.Generation", b =>

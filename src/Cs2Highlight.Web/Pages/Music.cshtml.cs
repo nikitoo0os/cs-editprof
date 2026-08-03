@@ -21,7 +21,8 @@ public sealed class MusicModel(
     IEffectSeedProvider effectSeedProvider,
     TrustedLutCatalog trustedLuts,
     GenerationWakeSignal queue,
-    TimeProvider timeProvider) : PageModel
+    TimeProvider timeProvider,
+    IWebHostEnvironment environment) : PageModel
 {
     private static readonly JsonSerializerOptions WebJson =
         new(JsonSerializerDefaults.Web);
@@ -65,6 +66,7 @@ public sealed class MusicModel(
         string publicId,
         CancellationToken cancellationToken)
     {
+        if (!await CanReadAsync(publicId, cancellationToken)) return NotFound();
         if (MusicFile is null)
         {
             ModelState.AddModelError(
@@ -128,6 +130,7 @@ public sealed class MusicModel(
         string publicId,
         CancellationToken cancellationToken)
     {
+        if (!await CanReadAsync(publicId, cancellationToken)) return NotFound();
         if (GameplayGainPercent is < 0 or > 100 || MusicGainPercent is < 0 or > 100)
             return BadRequest();
         if (EnabledEffectGroups.Any(value => !DynamicEffectGroups.All.Contains(value)))
@@ -289,6 +292,7 @@ public sealed class MusicModel(
         string publicId,
         CancellationToken cancellationToken)
     {
+        if (!await CanReadAsync(publicId, cancellationToken)) return NotFound();
         await using GenerationDbContext db =
             await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation? generation = await db.Generations.SingleOrDefaultAsync(
@@ -314,7 +318,7 @@ public sealed class MusicModel(
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation? generation = await db.Generations.AsNoTracking()
             .SingleOrDefaultAsync(value => value.PublicId == publicId, cancellationToken);
-        if (generation is null) return NotFound();
+        if (generation is null || !GenerationAccess.CanRead(generation, User, environment)) return NotFound();
         if (generation.Status is not (
             GenerationStatus.AwaitingMusicUpload or
             GenerationStatus.AnalyzingMusic or
@@ -337,6 +341,14 @@ public sealed class MusicModel(
         EstimatedDurationText =
             $"{TimeSpan.FromMilliseconds(duration / 1.1):m\\:ss}–{TimeSpan.FromMilliseconds(duration / 0.9):m\\:ss}";
         return Page();
+    }
+
+    private async Task<bool> CanReadAsync(string publicId, CancellationToken cancellationToken)
+    {
+        await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        Generation? generation = await db.Generations.AsNoTracking().SingleOrDefaultAsync(
+            value => value.PublicId == publicId, cancellationToken);
+        return generation is not null && GenerationAccess.CanRead(generation, User, environment);
     }
 
     private static double PercentToDb(int percent) =>

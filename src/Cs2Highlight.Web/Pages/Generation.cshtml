@@ -3,6 +3,7 @@
 @{
   ViewData["Title"] = "Генерация мувика";
   ViewData["CurrentStep"] = UiText.Step(Model.Generation.Status);
+  ViewData["ShowStepper"] = true;
   bool completed = Model.Generation.Status is
     GenerationStatus.Completed or GenerationStatus.CompletedWithWarnings;
   bool terminalFailure = Model.Generation.Status is
@@ -78,28 +79,13 @@
         </div>
       </div>
       <div class="generation-stage-grid" data-generation-stages>
-        @{
-          (string Label, int Threshold)[] stages =
-          [
-            ("Анализ моментов", 18),
-            ("Анализ музыки", 38),
-            ("Монтажный план", 50),
-            ("Рендер клипов", 72),
-            ("Синхронизация", 82),
-            ("Цвет и звук", 94),
-            ("Финальная проверка", 99),
-            ("Готово", 100)
-          ];
-        }
-        @foreach (var stage in stages)
+        @foreach (GenerationStageView stage in GenerationStageMapping.For(
+                     Model.Generation.Status, Model.Generation.ActiveStageKey))
         {
-          string stageClass = progress >= stage.Threshold
-            ? "is-complete"
-            : progress + 16 >= stage.Threshold
-              ? "is-current"
-              : string.Empty;
-          <article class="generation-stage-card @stageClass">
-            <span class="timeline__dot">@(progress >= stage.Threshold ? "✓" : "•")</span>
+          <article class="generation-stage-card stage-state--@stage.State.ToString().ToLowerInvariant()"
+                   data-stage-key="@stage.Key"
+                   aria-current="@(stage.State == GenerationStageState.Current ? "step" : null)">
+            <span class="timeline__dot">@(stage.State == GenerationStageState.Complete ? "✓" : stage.State == GenerationStageState.Failed ? "!" : "•")</span>
             <strong style="display:block;margin-top:11px;font-size:13px">@stage.Label</strong>
           </article>
         }

@@ -33,11 +33,40 @@ public sealed class WebIntegrationTests : IDisposable
 
         Assert.Contains("Загрузить и найти моменты", home);
         Assert.Contains("cshighlighter", home);
+        Assert.DoesNotContain("class=\"generation-stepper\"", home);
         Assert.Contains("<title>CSHighlighter - Создай КС2 мувик</title>", home);
         Assert.Contains("Доставка и получение товара", delivery);
         Assert.Contains("Публичная оферта", offer);
         Assert.Contains("Контакты и реквизиты", contacts);
         Assert.Equal(HttpStatusCode.OK, health.StatusCode);
+    }
+
+    [Fact]
+    public async Task GenerationPageShowsStepperAfterGenerationExists()
+    {
+        WebApplicationFactory<Program> app = CreateFactory();
+        string publicId = Guid.NewGuid().ToString("N");
+        using (IServiceScope scope = app.Services.CreateScope())
+        {
+            IDbContextFactory<GenerationDbContext> dbFactory =
+                scope.ServiceProvider.GetRequiredService<IDbContextFactory<GenerationDbContext>>();
+            await using GenerationDbContext db = await dbFactory.CreateDbContextAsync();
+            db.Generations.Add(new Generation
+            {
+                PublicId = publicId,
+                Status = GenerationStatus.Analyzing,
+                CurrentStage = "Analyzing",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync();
+        }
+
+        using HttpClient client = app.CreateClient();
+        string page = await client.GetStringAsync($"/generations/{publicId}");
+
+        Assert.Contains("class=\"generation-stepper\"", page);
+        Assert.Contains("data-stage-key=\"analysis\"", page);
     }
 
     [Fact]

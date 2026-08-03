@@ -6,6 +6,7 @@ using Cs2Highlight.Web.Domain;
 using Cs2Highlight.Web.Hubs;
 using Cs2Highlight.Web.Services;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.EntityFrameworkCore;
 
@@ -18,6 +19,21 @@ builder.Services.AddRazorPages(options =>
 {
     options.Conventions.ConfigureFilter(new Microsoft.AspNetCore.Mvc.AutoValidateAntiforgeryTokenAttribute());
 });
+builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
+{
+    options.User.RequireUniqueEmail = true;
+    options.SignIn.RequireConfirmedEmail = true;
+    options.Password.RequiredLength = 10;
+    options.Password.RequireDigit = true;
+    options.Password.RequireUppercase = true;
+    options.Password.RequireNonAlphanumeric = true;
+    options.Lockout.MaxFailedAccessAttempts = 5;
+    options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
+})
+    .AddEntityFrameworkStores<GenerationDbContext>()
+    .AddDefaultTokenProviders();
+builder.Services.AddAuthorization(options =>
+    options.AddPolicy("AdminOnly", policy => policy.RequireRole("Admin")));
 builder.Services.AddSignalR();
 builder.Services.AddDbContextFactory<GenerationDbContext>(options =>
     options.UseSqlite(
@@ -41,6 +57,8 @@ PaymentOptions paymentOptions =
     builder.Configuration.GetSection("Payments").Get<PaymentOptions>() ?? new();
 CommerceOptions commerceOptions =
     builder.Configuration.GetSection("Commerce").Get<CommerceOptions>() ?? new();
+LegalOptions legalOptions =
+    builder.Configuration.GetSection("Legal").Get<LegalOptions>() ?? new();
 builder.Services.AddSingleton(uploadOptions);
 builder.Services.AddSingleton(storageOptions);
 builder.Services.AddSingleton(pipelineOptions);
@@ -51,6 +69,7 @@ builder.Services.AddSingleton(trustedLutOptions);
 builder.Services.AddSingleton(selectionOptions);
 builder.Services.AddSingleton(paymentOptions);
 builder.Services.AddSingleton(commerceOptions);
+builder.Services.AddSingleton(legalOptions);
 builder.Services.Configure<FormOptions>(options =>
 {
     options.MultipartBodyLengthLimit = uploadOptions.MaximumTotalSizeBytes;
@@ -59,6 +78,7 @@ builder.Services.Configure<FormOptions>(options =>
 builder.WebHost.ConfigureKestrel(options =>
     options.Limits.MaxRequestBodySize = uploadOptions.MaximumTotalSizeBytes);
 builder.Services.AddSingleton<GenerationStorage>();
+builder.Services.AddSingleton<GenerationMetrics>();
 builder.Services.AddSingleton<DemoUploadService>();
 builder.Services.AddSingleton<IMusicMediaValidator, FfprobeMusicMediaValidator>();
 builder.Services.AddSingleton<MusicUploadService>();
@@ -116,18 +136,61 @@ builder.Services.AddScoped<IPaymentProvider>(services =>
         : services.GetRequiredService<TestPaymentProvider>());
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddScoped<PaymentService>();
+builder.Services.AddSingleton<ITokenService, TokenService>();
+builder.Services.AddSingleton<IEmailSender, DevelopmentEmailSender>();
 builder.Services.AddHostedService<GenerationWorker>();
 builder.Services.AddHostedService<GenerationCleanupService>();
 builder.Services.AddHealthChecks().AddCheck<GenerationReadinessHealthCheck>("pipeline");
 builder.Services.AddRateLimiter(options =>
 {
     options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-    options.AddFixedWindowLimiter("uploads", limiter =>
+    options.AddPolicy("uploads", httpContext =>
     {
-        limiter.PermitLimit = 5;
-        limiter.Window = TimeSpan.FromMinutes(1);
-        limiter.QueueLimit = 0;
+        string client = httpContext.User.Identity?.Name ??
+            httpContext.Connection.RemoteIpAddress?.ToString() ??
+            "anonymous";
+        string partitionKey = $"{httpContext.Request.Method}:{client}";
+        return RateLimitPartition.GetFixedWindowLimiter(
+            partitionKey,
+            _ => new FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 10,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            });
     });
+    options.OnRejected = static async (context, cancellationToken) =>
+    {
+        context.HttpContext.Response.Headers.RetryAfter = "60";
+        context.HttpContext.Response.ContentType = "text/html; charset=utf-8";
+        await context.HttpContext.Response.WriteAsync(
+            """
+            <!doctype html>
+            <html lang="ru">
+            <head>
+              <meta charset="utf-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1">
+              <title>Слишком много попыток</title>
+              <style>
+                :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+                body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #090b0e; color: #f2efe8; }
+                main { width: min(520px, calc(100% - 40px)); padding: 32px; border: 1px solid #2a353d; border-radius: 14px; background: #141a20; }
+                h1 { margin: 0 0 12px; font-size: 26px; }
+                p { color: #c0c8ca; line-height: 1.55; }
+                a { display: inline-block; margin-top: 12px; padding: 12px 16px; border-radius: 8px; background: #ff623d; color: #1b100d; font-weight: 700; text-decoration: none; }
+              </style>
+            </head>
+            <body>
+              <main>
+                <h1>Слишком много попыток загрузки</h1>
+                <p>Подожди около минуты и повтори загрузку. Обновления страницы больше не расходуют лимит.</p>
+                <a href="/">Вернуться к загрузке</a>
+              </main>
+            </body>
+            </html>
+            """,
+            cancellationToken);
+    };
 });
 
 WebApplication app = builder.Build();
@@ -141,6 +204,48 @@ await using (AsyncServiceScope scope = app.Services.CreateAsyncScope())
         scope.ServiceProvider.GetRequiredService<IDbContextFactory<GenerationDbContext>>();
     await using GenerationDbContext db = await factory.CreateDbContextAsync();
     await db.Database.MigrateAsync();
+    RoleManager<IdentityRole> roleManager =
+        scope.ServiceProvider.GetRequiredService<RoleManager<IdentityRole>>();
+    foreach (string role in new[] { "User", "Admin" })
+    {
+        if (!await roleManager.RoleExistsAsync(role))
+            await roleManager.CreateAsync(new IdentityRole(role));
+    }
+    foreach (TokenPackage package in new[]
+    {
+        new TokenPackage { Code = "single", Name = "1 токен", TokenAmount = 1, PriceAmountMinor = 100, Currency = "RUB", SortOrder = 1 },
+        new TokenPackage { Code = "starter", Name = "5 токенов", TokenAmount = 5, PriceAmountMinor = 450, Currency = "RUB", SortOrder = 2 },
+        new TokenPackage { Code = "creator", Name = "10 токенов", TokenAmount = 10, PriceAmountMinor = 800, Currency = "RUB", SortOrder = 3 }
+    })
+    {
+        if (!await db.TokenPackages.AnyAsync(value => value.Code == package.Code))
+            db.TokenPackages.Add(package);
+    }
+    string? adminEmail = builder.Configuration["Admin:Email"];
+    string? adminPassword = builder.Configuration["Admin:Password"];
+    if (!string.IsNullOrWhiteSpace(adminEmail) && !string.IsNullOrWhiteSpace(adminPassword))
+    {
+        UserManager<ApplicationUser> userManager =
+            scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        ApplicationUser? admin = await userManager.FindByEmailAsync(adminEmail);
+        if (admin is null)
+        {
+            admin = new ApplicationUser
+            {
+                UserName = adminEmail,
+                Email = adminEmail,
+                EmailConfirmed = true,
+                RegisteredAtUtc = DateTimeOffset.UtcNow,
+                ReferralCode = Convert.ToHexString(Guid.NewGuid().ToByteArray())[..10]
+            };
+            IdentityResult result = await userManager.CreateAsync(admin, adminPassword);
+            if (!result.Succeeded)
+                throw new InvalidOperationException("ADMIN_SEED_FAILED");
+        }
+        if (!await userManager.IsInRoleAsync(admin, "Admin"))
+            await userManager.AddToRoleAsync(admin, "Admin");
+    }
+    await db.SaveChangesAsync();
 }
 if (!app.Environment.IsDevelopment()) app.UseExceptionHandler("/Error");
 app.Use(async (context, next) =>
@@ -155,6 +260,8 @@ if (app.Configuration.GetValue("HttpsRedirection:Enabled", false))
     app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
+app.UseAuthentication();
+app.UseAuthorization();
 app.UseRateLimiter();
 app.MapRazorPages();
 app.MapHub<GenerationHub>("/hubs/generations");
@@ -182,6 +289,7 @@ app.MapHealthChecks("/health/ready");
 app.MapGet("/api/generations/{publicId}", async (
     string publicId,
     IDbContextFactory<GenerationDbContext> factory,
+    HttpContext context,
     CancellationToken cancellationToken) =>
 {
     await using GenerationDbContext db =
@@ -190,7 +298,8 @@ app.MapGet("/api/generations/{publicId}", async (
         .SingleOrDefaultAsync(
             value => value.PublicId == publicId,
             cancellationToken);
-    if (generation is null) return Results.NotFound();
+    if (generation is null || !GenerationAccess.CanRead(generation, context.User, app.Environment))
+        return Results.NotFound();
     int demoCount = await db.GenerationDemos.CountAsync(
         value => value.GenerationId == generation.Id,
         cancellationToken);
@@ -227,11 +336,22 @@ app.MapGet("/api/generations/{publicId}", async (
             $"/generations/{publicId}/music",
         _ => null
     };
+    IReadOnlyList<GenerationStageView> stages = GenerationStageMapping.For(
+        generation.Status, generation.ActiveStageKey);
+    string? activeStageKey = stages.FirstOrDefault(value =>
+        value.State is GenerationStageState.Current or GenerationStageState.Failed)?.Key;
     return Results.Ok(new
     {
         publicId,
         status = generation.Status.ToString(),
         stage = generation.CurrentStage,
+        activeStageKey,
+        stages = stages.Select(value => new
+        {
+            key = value.Key,
+            label = value.Label,
+            state = value.State.ToString().ToLowerInvariant()
+        }),
         generation.ProgressPercent,
         demoCount,
         playerCount,
@@ -248,6 +368,7 @@ app.MapGet("/api/generations/{publicId}/highlights", async (
     string publicId,
     IDbContextFactory<GenerationDbContext> factory,
     IWeaponCatalog weaponCatalog,
+    HttpContext context,
     CancellationToken cancellationToken) =>
 {
     await using GenerationDbContext db =
@@ -257,6 +378,10 @@ app.MapGet("/api/generations/{publicId}/highlights", async (
         .Select(value => (long?)value.Id)
         .SingleOrDefaultAsync(cancellationToken);
     if (generationId is null) return Results.NotFound();
+    Generation? owner = await db.Generations.AsNoTracking()
+        .SingleOrDefaultAsync(value => value.Id == generationId.Value, cancellationToken);
+    if (owner is null || !GenerationAccess.CanRead(owner, context.User, app.Environment))
+        return Results.NotFound();
     GenerationHighlight[] highlights = await db.GenerationHighlights.AsNoTracking()
         .Where(value => value.GenerationId == generationId.Value)
         .OrderByDescending(value => value.TotalScore)
@@ -296,13 +421,15 @@ app.MapGet("/api/generations/{publicId}/events", async (
     string publicId,
     long? after,
     IDbContextFactory<GenerationDbContext> factory,
+    HttpContext context,
     CancellationToken cancellationToken) =>
 {
     await using GenerationDbContext db =
         await factory.CreateDbContextAsync(cancellationToken);
-    bool exists = await db.Generations.AnyAsync(
+    Generation? owner = await db.Generations.AsNoTracking().SingleOrDefaultAsync(
         value => value.PublicId == publicId, cancellationToken);
-    if (!exists) return Results.NotFound();
+    if (owner is null || !GenerationAccess.CanRead(owner, context.User, app.Environment))
+        return Results.NotFound();
     var events = await db.GenerationEvents.AsNoTracking()
         .Where(value =>
             value.Generation.PublicId == publicId &&
@@ -325,9 +452,16 @@ app.MapGet("/generations/{publicId}/video", async (
     string publicId,
     bool? download,
     IDbContextFactory<GenerationDbContext> factory,
+    HttpContext context,
     CancellationToken cancellationToken) =>
 {
     await using GenerationDbContext db = await factory.CreateDbContextAsync(cancellationToken);
+    Generation? owner = await db.Generations.AsNoTracking().SingleOrDefaultAsync(
+        value => value.PublicId == publicId, cancellationToken);
+    if (owner is null || !GenerationAccess.CanRead(owner, context.User, app.Environment))
+        return Results.NotFound();
+    if (owner.ExpiresAtUtc is not null && owner.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        return Results.NotFound();
     GenerationArtifact? artifact = await db.GenerationArtifacts
         .Where(value => value.Generation.PublicId == publicId && value.Type == ArtifactType.FinalVideo)
         .SingleOrDefaultAsync(cancellationToken);
@@ -342,10 +476,15 @@ app.MapGet("/generations/{publicId}/video", async (
 app.MapGet("/generations/{publicId}/music-audio", async (
     string publicId,
     IDbContextFactory<GenerationDbContext> factory,
+    HttpContext context,
     CancellationToken cancellationToken) =>
 {
     await using GenerationDbContext db =
         await factory.CreateDbContextAsync(cancellationToken);
+    Generation? owner = await db.Generations.AsNoTracking().SingleOrDefaultAsync(
+        value => value.PublicId == publicId, cancellationToken);
+    if (owner is null || !GenerationAccess.CanRead(owner, context.User, app.Environment))
+        return Results.NotFound();
     GenerationMusic? music = await db.GenerationMusic.AsNoTracking()
         .SingleOrDefaultAsync(
             value =>

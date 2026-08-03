@@ -1,0 +1,153 @@
+@page "/profile"
+@model Cs2Highlight.Web.Pages.ProfileModel
+@{
+  ViewData["Title"] = "Профиль";
+  bool isPrintstream = Model.UserAccount.ThemePreference is "printstream";
+  string initial = (Model.UserAccount.Email ?? "U").Substring(0, 1).ToUpperInvariant();
+}
+
+<section class="profile-hero page-header">
+  <div class="profile-identity">
+    <span class="profile-avatar" aria-hidden="true">@initial</span>
+    <div>
+      <p class="page-eyebrow">Личный кабинет</p>
+      <h1 class="page-title">Профиль</h1>
+      <p class="page-lead">@Model.UserAccount.Email</p>
+    </div>
+  </div>
+  <div class="profile-hero__actions">
+    <div class="profile-balance">
+      <img class="ui-icon ui-icon--brand" src="/assets/icons/badge-dollar-sign.svg" alt="" />
+      <span><small>Баланс</small><strong>@Model.UserAccount.TokenBalance токенов</strong></span>
+    </div>
+    <a class="btn btn-primary" asp-page="/Purchase">Пополнить баланс</a>
+  </div>
+</section>
+
+<section class="profile-stats" aria-label="Сводка профиля">
+  <article class="profile-stat surface">
+    <span class="profile-stat__icon"><img src="/assets/icons/film.svg" alt="" /></span>
+    <span><small>Всего монтажей</small><strong>@Model.Generations.Count</strong><em>в вашей библиотеке</em></span>
+  </article>
+  <article class="profile-stat surface">
+    <span class="profile-stat__icon profile-stat__icon--cyan"><img src="/assets/icons/check-circle-2.svg" alt="" /></span>
+    <span><small>Готовы к просмотру</small><strong>@Model.Generations.Count(value => value.Status is GenerationStatus.Completed or GenerationStatus.CompletedWithWarnings)</strong><em>можно открыть и скачать</em></span>
+  </article>
+  <article class="profile-stat surface">
+    <span class="profile-stat__icon profile-stat__icon--yellow"><img src="/assets/icons/users-round.svg" alt="" /></span>
+    <span><small>Приглашено друзей</small><strong>@Model.Referrals.Count</strong><em>+1 токен за подтверждение</em></span>
+  </article>
+</section>
+
+<section class="profile-section surface surface-pad" aria-labelledby="theme-title">
+  <div class="profile-section__heading">
+    <div>
+      <p class="page-eyebrow">Внешний вид</p>
+      <h2 id="theme-title" class="section-title">Выберите настроение интерфейса</h2>
+      <p class="muted">Настройка действует во всём приложении и сохраняется в вашем аккаунте.</p>
+    </div>
+    <img class="profile-section__heading-icon" src="/assets/icons/settings-2.svg" alt="" />
+  </div>
+  <div class="profile-theme-grid">
+    <form method="post" asp-page-handler="Theme" class="profile-theme-card @(isPrintstream ? "" : "is-selected")">
+      <button type="submit" name="theme" value="redline" aria-pressed="@(!isPrintstream)">
+        <span class="profile-theme-card__preview profile-theme-card__preview--redline" aria-hidden="true"><i></i><b></b><em></em></span>
+        <span class="profile-theme-card__copy"><strong>Сигнал</strong><small>Тёмная студия с тёплым orange-акцентом</small></span>
+        <span class="profile-theme-card__check" aria-hidden="true"><img src="/assets/icons/check.svg" alt="" /></span>
+      </button>
+    </form>
+    <form method="post" asp-page-handler="Theme" class="profile-theme-card @(isPrintstream ? "is-selected" : "")">
+      <button type="submit" name="theme" value="printstream" aria-pressed="@isPrintstream">
+        <span class="profile-theme-card__preview profile-theme-card__preview--printstream" aria-hidden="true"><i></i><b></b><em></em></span>
+        <span class="profile-theme-card__copy"><strong>Световой поток</strong><small>Чистая светлая тема с cyan-акцентом</small></span>
+        <span class="profile-theme-card__check" aria-hidden="true"><img src="/assets/icons/check.svg" alt="" /></span>
+      </button>
+    </form>
+  </div>
+</section>
+
+<section class="profile-section surface surface-pad" aria-labelledby="generations-title">
+  <div class="profile-section__heading">
+    <div>
+      <p class="page-eyebrow">Библиотека</p>
+      <h2 id="generations-title" class="section-title">Мои генерации</h2>
+      <p class="muted">Здесь хранятся последние 50 мувиков и их текущий статус.</p>
+    </div>
+    <a asp-page="/Index" class="btn btn-secondary"><img class="ui-icon" src="/assets/icons/plus.svg" alt="" />Новая генерация</a>
+  </div>
+  @if (Model.Generations.Count == 0)
+  {
+    <div class="profile-empty"><img src="/assets/icons/film.svg" alt="" /><strong>Пока нет генераций</strong><span>Загрузите первую демку — и здесь появится ваш мувик.</span><a class="btn btn-primary" asp-page="/Index">Создать первый мувик</a></div>
+  }
+  else
+  {
+    <div class="table-scroll profile-table-wrap">
+      <table class="profile-table">
+        <thead><tr><th>Дата</th><th>Статус</th><th>Текущий этап</th><th>Прогресс</th><th></th></tr></thead>
+        <tbody>
+        @foreach (Generation item in Model.Generations)
+        {
+          <tr>
+            <td data-label="Дата"><time datetime="@item.CreatedAt.ToUniversalTime().ToString("O")">@item.CreatedAt.ToLocalTime().ToString("dd.MM.yyyy HH:mm")</time></td>
+            <td data-label="Статус"><span class="badge profile-status profile-status--@item.Status.ToString().ToLowerInvariant()">@UiText.Status(item.Status)</span></td>
+            <td data-label="Текущий этап">@UiText.Stage(item.CurrentStage)</td>
+            <td data-label="Прогресс"><div class="profile-progress"><span style="width:@Math.Clamp(item.ProgressPercent, 0, 100)%"></span></div><small>@item.ProgressPercent%</small></td>
+            <td><a class="table-action" asp-page="/Generation" asp-route-publicId="@item.PublicId">Открыть <span aria-hidden="true">→</span></a></td>
+          </tr>
+        }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>
+
+<section class="profile-section surface surface-pad" aria-labelledby="transactions-title">
+  <div class="profile-section__heading">
+    <div>
+      <p class="page-eyebrow">Баланс</p>
+      <h2 id="transactions-title" class="section-title">История токенов</h2>
+      <p class="muted">Покупки, списания и начисления по вашему аккаунту.</p>
+    </div>
+    <a asp-page="/Purchase" class="btn btn-secondary"><img class="ui-icon" src="/assets/icons/badge-dollar-sign.svg" alt="" />Купить токены</a>
+  </div>
+  @if (Model.Transactions.Count == 0)
+  {
+    <div class="profile-empty profile-empty--compact"><img src="/assets/icons/badge-dollar-sign.svg" alt="" /><strong>История пока пустая</strong><span>Здесь появятся операции с токенами.</span></div>
+  }
+  else
+  {
+    <div class="table-scroll profile-table-wrap">
+      <table class="profile-table profile-table--transactions">
+        <thead><tr><th>Дата</th><th>Операция</th><th>Количество</th><th>Баланс после</th><th>Описание</th></tr></thead>
+        <tbody>
+        @foreach (TokenTransaction item in Model.Transactions)
+        {
+          <tr>
+            <td data-label="Дата"><time datetime="@item.CreatedAtUtc.ToString("O")">@item.CreatedAtUtc.ToLocalTime().ToString("dd.MM.yyyy HH:mm")</time></td>
+            <td data-label="Операция">@UiText.Transaction(item.Type)</td>
+            <td data-label="Количество"><strong class="token-amount @(item.Amount >= 0 ? "is-positive" : "is-negative")">@(item.Amount > 0 ? "+" : "")@item.Amount</strong></td>
+            <td data-label="Баланс после">@item.BalanceAfter</td>
+            <td data-label="Описание">@item.Description</td>
+          </tr>
+        }
+        </tbody>
+      </table>
+    </div>
+  }
+</section>
+
+<section class="profile-section profile-referrals surface surface-pad" aria-labelledby="referrals-title">
+  <div class="profile-section__heading">
+    <div>
+      <p class="page-eyebrow">Бонусы</p>
+      <h2 id="referrals-title" class="section-title">Пригласите тиммейта</h2>
+      <p class="muted">Поделитесь ссылкой с другом. После подтверждения email вы получите бонус.</p>
+    </div>
+    <img class="profile-section__heading-icon" src="/assets/icons/users-round.svg" alt="" />
+  </div>
+  <div class="referral-share">
+    <div><span>Ваш код</span><code>@Model.UserAccount.ReferralCode</code></div>
+    <div class="referral-share__link"><span>Ссылка для приглашения</span><code>@($"{Request.Scheme}://{Request.Host}/account/register?ref={Model.UserAccount.ReferralCode}")</code></div>
+    <a class="btn btn-secondary" asp-page="/ReferralRules">Условия программы</a>
+  </div>
+</section>

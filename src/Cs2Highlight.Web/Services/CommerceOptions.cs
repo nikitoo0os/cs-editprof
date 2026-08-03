@@ -5,7 +5,6 @@ public sealed class CommerceOptions
     public string SellerName { get; set; } = "[Укажите полное наименование продавца]";
     public string LegalAddress { get; set; } = "[Укажите юридический адрес]";
     public string Inn { get; set; } = "[Укажите ИНН]";
-    public string Ogrn { get; set; } = "[Укажите ОГРН/ОГРНИП]";
     public string SettlementAccount { get; set; } = "[Укажите расчётный счёт]";
     public string BankName { get; set; } = "[Укажите банк]";
     public string Bic { get; set; } = "[Укажите БИК]";
@@ -16,7 +15,7 @@ public sealed class CommerceOptions
     public bool IsDraft =>
         new[]
         {
-            SellerName, LegalAddress, Inn, Ogrn, SupportEmail
+            SellerName, LegalAddress, Inn, SupportEmail
         }.Any(value =>
             string.IsNullOrWhiteSpace(value) ||
             value.StartsWith('[') ||

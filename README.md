@@ -59,6 +59,35 @@ dotnet build -c Release
 dotnet test -c Release --no-build
 ```
 
+## Web quickstart
+
+On a clean Windows machine, the supported entry point is the quickstart.ps1
+script. It restores, builds the solution and frontend, runs migrations, and
+starts the Web host with SQLite, Identity, SignalR, the test payment provider
+and local workers.
+
+Use quickstart.ps1 with Development mode for a machine without Steam, CS2 or
+HLAE. Use RenderMachine mode only on a Windows desktop with Steam,
+CS2, HLAE/AfxHookSource2, FFmpeg and FFprobe configured. The script also
+supports -Status, -Stop, -QuickClose, -Doctor, and the confirmation-protected
+-ResetDevelopmentData action. It stores only a PID/state file and logs under
+storage and logs, and never overwrites appsettings.local.json.
+
+For a host started manually with `dotnet run`, use
+`.\quickstart.ps1 -QuickClose` to close only this project's web host.
+
+Set secrets through environment variables using double underscores, for
+example Payments__SecretKey. Start from appsettings.local.example.json and
+.env.example. Before publishing, fill the configurable legal details and have
+the legal templates reviewed by a qualified lawyer for the applicable
+jurisdiction and business form.
+
+The web application uses owner-scoped Identity generations, separate consent
+records, an auditable and idempotent token ledger, referral rewards after
+email confirmation, authoritative backend stage mapping, and a seven-day
+default final-video retention period. Existing ownerless rows are treated as
+legacy and are not visible to ordinary production users.
+
 ## Stage 8.2: Interactive Music Timeline Director
 
 The Cinematic Director configuration now opens an editable music timeline

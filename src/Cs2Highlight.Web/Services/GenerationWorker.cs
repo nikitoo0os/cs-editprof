@@ -29,6 +29,9 @@ public sealed partial class GenerationWorker(
     IHighlightCompilationService compilationService,
     IHubContext<GenerationHub> hub,
     TimeProvider timeProvider,
+    RetentionOptions retentionOptions,
+    ITokenService tokenService,
+    GenerationMetrics metrics,
     ILoggerFactory loggerFactory,
     ILogger<GenerationWorker> logger) : BackgroundService
 {
@@ -163,12 +166,13 @@ public sealed partial class GenerationWorker(
                 generation.PublicId,
                 code,
                 exception.Message,
-                cancellationToken);
+                cancellationToken,
+                refundToken: false);
         }
         catch (Exception exception)
         {
             LogGenerationFailure(logger, generation.PublicId, exception);
-            await FailAsync(generation.PublicId, "UNEXPECTED_ERROR", exception.Message, cancellationToken);
+            await FailAsync(generation.PublicId, "UNEXPECTED_ERROR", exception.Message, cancellationToken, refundToken: true);
         }
         finally
         {
@@ -1814,6 +1818,13 @@ public sealed partial class GenerationWorker(
         GenerationStateMachine.Transition(generation, status, now);
         generation.ProgressPercent = 100;
         generation.GenerationCompletedAt = now;
+        generation.ExpiresAtUtc = now.AddDays(Math.Max(1, retentionOptions.CompletedGenerationDays));
+        generation.CleanupStatus = CleanupStatus.Pending;
+        generation.ProcessingDurationMilliseconds = generation.GenerationStartedAt is null
+            ? 0
+            : Math.Max(0, (long)(now - generation.GenerationStartedAt.Value).TotalMilliseconds);
+        metrics.GenerationCompleted.Add(1);
+        metrics.GenerationDurationSeconds.Record(generation.ProcessingDurationMilliseconds / 1000d);
         db.GenerationEvents.Add(new GenerationEvent
         {
             GenerationId = generation.Id,
@@ -2055,6 +2066,8 @@ public sealed partial class GenerationWorker(
             GenerationStateMachine.Transition(generation, status, timeProvider.GetUtcNow());
         generation.ProgressPercent = Math.Max(generation.ProgressPercent, progress);
         generation.CurrentStage = stage;
+        generation.ActiveStageKey = GenerationStageMapping.For(status)
+            .FirstOrDefault(value => value.State == GenerationStageState.Current)?.Key;
         generation.UpdatedAt = timeProvider.GetUtcNow();
         db.GenerationEvents.Add(new GenerationEvent
         {
@@ -2083,7 +2096,8 @@ public sealed partial class GenerationWorker(
         string publicId,
         string code,
         string message,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool refundToken = false)
     {
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation generation = await db.Generations.SingleAsync(value => value.PublicId == publicId, cancellationToken);
@@ -2091,8 +2105,16 @@ public sealed partial class GenerationWorker(
         generation.ErrorCode = code;
         generation.ErrorMessage = message.Length > 1024 ? message[..1024] : message;
         generation.CurrentStage = "Failed";
+        generation.ErrorCategory = code.StartsWith("MUSIC_", StringComparison.Ordinal) ? "UserInput" : "Platform";
         generation.UpdatedAt = timeProvider.GetUtcNow();
+        metrics.GenerationFailed.Add(1);
         await db.SaveChangesAsync(cancellationToken);
+        if (refundToken && generation.UserId is not null)
+            await tokenService.RefundAsync(
+                generation.UserId,
+                generation.Id,
+                $"Возврат токена: {code}",
+                cancellationToken);
         await PublishAsync(publicId, GenerationStatus.Failed, generation.ProgressPercent, code, cancellationToken);
     }
 

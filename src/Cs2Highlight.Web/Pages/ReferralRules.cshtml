@@ -1,0 +1,5 @@
+@page "/referral-rules"
+@using Cs2Highlight.Web.Services
+@inject LegalOptions Legal
+@{ ViewData["Title"] = "Правила реферальной программы"; }
+<article class="surface surface--elevated surface-pad legal-document"><p class="page-eyebrow">Версия @Legal.ReferralRulesVersion · действует с @Legal.EffectiveDate</p><h1 class="page-title">Реферальная программа</h1><p>Пригласивший получает 1 токен за одного нового пользователя после подтверждения его email. Приглашение фиксируется при регистрации по ссылке <code>/account/register?ref=CODE</code>.</p><h2>Ограничения</h2><p>Самоприглашение, повторное начисление и попытки обхода правил запрещены. Каждое приглашение приносит награду только один раз; подозрительные случаи проверяются вручную.</p></article>

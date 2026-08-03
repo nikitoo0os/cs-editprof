@@ -1,0 +1,4 @@
+@page "/account/confirm-email"
+@model Cs2Highlight.Web.Pages.Account.ConfirmEmailModel
+@{ ViewData["Title"] = "Подтверждение email"; }
+<section class="auth-card surface surface--elevated surface-pad"><h1 class="page-title">@(Model.Confirmed ? "Email подтверждён" : "Не удалось подтвердить email")</h1><p class="page-lead">@(Model.Confirmed ? "Теперь доступны все функции аккаунта." : "Ссылка недействительна или уже использована.")</p><a class="btn btn-primary" asp-page="/Profile">Открыть профиль</a></section>

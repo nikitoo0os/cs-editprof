@@ -1,11 +1,13 @@
 using Cs2Highlight.Web.Domain;
+using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 
 namespace Cs2Highlight.Web.Data;
 
 public sealed class GenerationDbContext(DbContextOptions<GenerationDbContext> options)
-    : DbContext(options)
+    : IdentityDbContext<ApplicationUser>(options)
 {
+    public DbSet<ApplicationUser> ApplicationUsers => Set<ApplicationUser>();
     public DbSet<Generation> Generations => Set<Generation>();
     public DbSet<GenerationDemo> GenerationDemos => Set<GenerationDemo>();
     public DbSet<GenerationPlayer> GenerationPlayers => Set<GenerationPlayer>();
@@ -26,82 +28,117 @@ public sealed class GenerationDbContext(DbContextOptions<GenerationDbContext> op
     public DbSet<GenerationTimelineRevision> GenerationTimelineRevisions => Set<GenerationTimelineRevision>();
     public DbSet<Payment> Payments => Set<Payment>();
     public DbSet<GenerationEvent> GenerationEvents => Set<GenerationEvent>();
+    public DbSet<UserConsent> UserConsents => Set<UserConsent>();
+    public DbSet<TokenTransaction> TokenTransactions => Set<TokenTransaction>();
+    public DbSet<TokenPackage> TokenPackages => Set<TokenPackage>();
+    public DbSet<TokenPurchase> TokenPurchases => Set<TokenPurchase>();
+    public DbSet<Referral> Referrals => Set<Referral>();
 
-    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    protected override void OnModelCreating(ModelBuilder builder)
     {
-        modelBuilder.Entity<Generation>().HasIndex(value => value.PublicId).IsUnique();
-        modelBuilder.Entity<Generation>().Property(value => value.Status).HasConversion<string>();
-        modelBuilder.Entity<Generation>().Property(value => value.PaymentStatus).HasConversion<string>();
-        modelBuilder.Entity<Generation>().Property(value => value.OutputOrder).HasConversion<string>();
-        modelBuilder.Entity<Generation>().Property(value => value.TransitionType).HasConversion<string>();
-        modelBuilder.Entity<Generation>().Property(value => value.EffectPreset).HasConversion<string>();
-        modelBuilder.Entity<Generation>().Property(value => value.Version).IsConcurrencyToken();
-        modelBuilder.Entity<GenerationDemo>()
+        base.OnModelCreating(builder);
+        builder.Entity<ApplicationUser>().HasIndex(value => value.ReferralCode).IsUnique();
+        builder.Entity<ApplicationUser>().Property(value => value.ThemePreference).HasDefaultValue("redline");
+        builder.Entity<UserConsent>().Property(value => value.ConsentType).HasConversion<string>();
+        builder.Entity<UserConsent>().HasIndex(value => new { value.UserId, value.ConsentType, value.DocumentVersion }).IsUnique();
+        builder.Entity<TokenTransaction>().Property(value => value.Type).HasConversion<string>();
+        builder.Entity<TokenTransaction>().Property(value => value.Status).HasConversion<string>();
+        builder.Entity<TokenTransaction>().HasIndex(value => new { value.UserId, value.IdempotencyKey }).IsUnique();
+        builder.Entity<TokenPackage>().HasIndex(value => value.Code).IsUnique();
+        builder.Entity<TokenPurchase>().Property(value => value.Status).HasConversion<string>();
+        builder.Entity<TokenPurchase>().HasIndex(value => value.IdempotencyKey).IsUnique();
+        builder.Entity<TokenPurchase>().HasIndex(value => value.ProviderPaymentId).IsUnique();
+        builder.Entity<Referral>().HasIndex(value => value.ReferredUserId).IsUnique();
+        builder.Entity<Referral>().HasIndex(value => new { value.ReferrerUserId, value.ReferredUserId }).IsUnique();
+        builder.Entity<Generation>().HasIndex(value => value.PublicId).IsUnique();
+        builder.Entity<Generation>().Property(value => value.Status).HasConversion<string>();
+        builder.Entity<Generation>().Property(value => value.PaymentStatus).HasConversion<string>();
+        builder.Entity<Generation>().Property(value => value.OutputOrder).HasConversion<string>();
+        builder.Entity<Generation>().Property(value => value.TransitionType).HasConversion<string>();
+        builder.Entity<Generation>().Property(value => value.EffectPreset).HasConversion<string>();
+        builder.Entity<Generation>().Property(value => value.Version).IsConcurrencyToken();
+        builder.Entity<GenerationDemo>()
             .HasIndex(value => new { value.GenerationId, value.Sha256 }).IsUnique();
-        modelBuilder.Entity<GenerationDemo>().Property(value => value.AnalysisStatus).HasConversion<string>();
-        modelBuilder.Entity<GenerationPlayer>()
+        builder.Entity<GenerationDemo>().Property(value => value.AnalysisStatus).HasConversion<string>();
+        builder.Entity<GenerationPlayer>()
             .HasIndex(value => new { value.GenerationId, value.SteamId }).IsUnique();
-        modelBuilder.Entity<GenerationHighlight>()
+        builder.Entity<GenerationHighlight>()
             .HasIndex(value => new { value.GenerationId, value.GenerationDemoId, value.HighlightId }).IsUnique();
-        modelBuilder.Entity<GenerationEffectPlan>().Property(value => value.Preset).HasConversion<string>();
-        modelBuilder.Entity<GenerationEffectPlan>()
+        builder.Entity<GenerationEffectPlan>().Property(value => value.Preset).HasConversion<string>();
+        builder.Entity<GenerationEffectPlan>()
             .HasIndex(value => new { value.GenerationId, value.GenerationHighlightId }).IsUnique();
-        modelBuilder.Entity<GenerationMusic>()
+        builder.Entity<GenerationMusic>()
             .HasIndex(value => value.GenerationId).IsUnique();
-        modelBuilder.Entity<GenerationMovieSettings>()
+        builder.Entity<GenerationMovieSettings>()
             .HasIndex(value => value.GenerationId).IsUnique();
-        modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.MovieStyle).HasConversion<string>();
-        modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.EffectIntensity).HasConversion<string>();
-        modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.SyncIntensity).HasConversion<string>();
-        modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.ColorGradePreset).HasConversion<string>();
-        modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.MusicDurationPolicy).HasConversion<string>();
-        modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.CinematicDuration).HasConversion<string>();
-        modelBuilder.Entity<GenerationMovieSettings>().Property(value => value.CinematicEditIntensity).HasConversion<string>();
-        modelBuilder.Entity<GenerationMusicAnchor>().Property(value => value.Type).HasConversion<string>();
-        modelBuilder.Entity<GenerationMusicAnchor>()
+        builder.Entity<GenerationMovieSettings>().Property(value => value.MovieStyle).HasConversion<string>();
+        builder.Entity<GenerationMovieSettings>().Property(value => value.EffectIntensity).HasConversion<string>();
+        builder.Entity<GenerationMovieSettings>().Property(value => value.SyncIntensity).HasConversion<string>();
+        builder.Entity<GenerationMovieSettings>().Property(value => value.ColorGradePreset).HasConversion<string>();
+        builder.Entity<GenerationMovieSettings>().Property(value => value.MusicDurationPolicy).HasConversion<string>();
+        builder.Entity<GenerationMovieSettings>().Property(value => value.CinematicDuration).HasConversion<string>();
+        builder.Entity<GenerationMovieSettings>().Property(value => value.CinematicEditIntensity).HasConversion<string>();
+        builder.Entity<GenerationMusicAnchor>().Property(value => value.Type).HasConversion<string>();
+        builder.Entity<GenerationMusicAnchor>()
             .HasIndex(value => new { value.GenerationId, value.AnchorId }).IsUnique();
-        modelBuilder.Entity<GenerationEditSegment>()
+        builder.Entity<GenerationEditSegment>()
             .HasIndex(value => new { value.GenerationId, value.Sequence }).IsUnique();
-        modelBuilder.Entity<GenerationMusicSection>().Property(value => value.Type).HasConversion<string>();
-        modelBuilder.Entity<GenerationMusicSection>()
+        builder.Entity<GenerationMusicSection>().Property(value => value.Type).HasConversion<string>();
+        builder.Entity<GenerationMusicSection>()
             .HasIndex(value => new { value.GenerationId, value.SectionId }).IsUnique();
-        modelBuilder.Entity<GenerationBrollCandidate>().Property(value => value.Type).HasConversion<string>();
-        modelBuilder.Entity<GenerationBrollCandidate>()
+        builder.Entity<GenerationBrollCandidate>().Property(value => value.Type).HasConversion<string>();
+        builder.Entity<GenerationBrollCandidate>()
             .HasIndex(value => new { value.GenerationId, value.CandidateId }).IsUnique();
-        modelBuilder.Entity<GenerationCameraShot>().Property(value => value.Type).HasConversion<string>();
-        modelBuilder.Entity<GenerationCameraShot>().Property(value => value.PreviewStatus).HasConversion<string>();
-        modelBuilder.Entity<GenerationCameraShot>().Property(value => value.FallbackType).HasConversion<string>();
-        modelBuilder.Entity<GenerationCameraShot>()
+        builder.Entity<GenerationCameraShot>().Property(value => value.Type).HasConversion<string>();
+        builder.Entity<GenerationCameraShot>().Property(value => value.PreviewStatus).HasConversion<string>();
+        builder.Entity<GenerationCameraShot>().Property(value => value.FallbackType).HasConversion<string>();
+        builder.Entity<GenerationCameraShot>()
             .HasIndex(value => new { value.GenerationId, value.ShotId }).IsUnique();
-        modelBuilder.Entity<GenerationCinematicPlan>()
+        builder.Entity<GenerationCinematicPlan>()
             .HasIndex(value => value.GenerationId).IsUnique();
-        modelBuilder.Entity<GenerationTimelinePlan>()
+        builder.Entity<GenerationTimelinePlan>()
             .HasIndex(value => value.GenerationId).IsUnique();
-        modelBuilder.Entity<GenerationTimelinePlan>()
+        builder.Entity<GenerationTimelinePlan>()
             .Property(value => value.Mode).HasConversion<string>();
-        modelBuilder.Entity<GenerationTimelinePlan>()
+        builder.Entity<GenerationTimelinePlan>()
             .Property(value => value.State).HasConversion<string>();
-        modelBuilder.Entity<GenerationTimelineAnchor>()
+        builder.Entity<GenerationTimelineAnchor>()
             .HasIndex(value => new { value.TimelinePlanId, value.AnchorId })
             .IsUnique();
-        modelBuilder.Entity<GenerationTimelineAnchor>()
+        builder.Entity<GenerationTimelineAnchor>()
             .Property(value => value.MarkerType).HasConversion<string>();
-        modelBuilder.Entity<GenerationTimelineAnchor>()
+        builder.Entity<GenerationTimelineAnchor>()
             .Property(value => value.FeasibilityStatus).HasConversion<string>();
-        modelBuilder.Entity<GenerationTimelineGap>()
+        builder.Entity<GenerationTimelineGap>()
             .HasIndex(value => new { value.TimelinePlanId, value.GapId })
             .IsUnique();
-        modelBuilder.Entity<GenerationTimelineGap>()
+        builder.Entity<GenerationTimelineGap>()
             .Property(value => value.Role).HasConversion<string>();
-        modelBuilder.Entity<GenerationTimelineGap>()
+        builder.Entity<GenerationTimelineGap>()
             .Property(value => value.State).HasConversion<string>();
-        modelBuilder.Entity<GenerationTimelineRevision>()
+        builder.Entity<GenerationTimelineRevision>()
             .HasIndex(value => new { value.TimelinePlanId, value.Number })
             .IsUnique();
-        modelBuilder.Entity<GenerationArtifact>().Property(value => value.Type).HasConversion<string>();
-        modelBuilder.Entity<Payment>().Property(value => value.Status).HasConversion<string>();
-        modelBuilder.Entity<Payment>().HasIndex(value => value.IdempotencyKey).IsUnique();
-        modelBuilder.Entity<Payment>().HasIndex(value => value.ProviderPaymentId).IsUnique();
+        builder.Entity<GenerationArtifact>().Property(value => value.Type).HasConversion<string>();
+        builder.Entity<Payment>().Property(value => value.Status).HasConversion<string>();
+        builder.Entity<Payment>().HasIndex(value => value.IdempotencyKey).IsUnique();
+        builder.Entity<Payment>().HasIndex(value => value.ProviderPaymentId).IsUnique();
+        builder.Entity<Generation>().Property(value => value.CleanupStatus).HasConversion<string>();
+        builder.Entity<Generation>().HasIndex(value => new { value.UserId, value.CreatedAt });
+        builder.Entity<Generation>().HasOne(value => value.User)
+            .WithMany(value => value.Generations)
+            .HasForeignKey(value => value.UserId)
+            .OnDelete(DeleteBehavior.SetNull);
+        builder.Entity<TokenTransaction>().HasOne(value => value.Generation)
+            .WithMany().HasForeignKey(value => value.GenerationId).OnDelete(DeleteBehavior.SetNull);
+        builder.Entity<TokenTransaction>().HasOne(value => value.TokenPurchase)
+            .WithMany().HasForeignKey(value => value.TokenPurchaseId).OnDelete(DeleteBehavior.SetNull);
+        builder.Entity<TokenTransaction>().HasOne(value => value.Referral)
+            .WithMany().HasForeignKey(value => value.ReferralId).OnDelete(DeleteBehavior.SetNull);
+        builder.Entity<Referral>().HasOne(value => value.ReferrerUser)
+            .WithMany().HasForeignKey(value => value.ReferrerUserId).OnDelete(DeleteBehavior.Restrict);
+        builder.Entity<Referral>().HasOne(value => value.ReferredUser)
+            .WithMany().HasForeignKey(value => value.ReferredUserId).OnDelete(DeleteBehavior.Restrict);
     }
 
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)

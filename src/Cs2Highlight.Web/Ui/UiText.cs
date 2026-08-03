@@ -83,6 +83,18 @@ public static class UiText
 
     public static string Status(GenerationStatus status) => Status(status.ToString());
 
+    public static string Transaction(TokenTransactionType type) => type switch
+    {
+        TokenTransactionType.Purchase => "Покупка токенов",
+        TokenTransactionType.GenerationDebit => "Монтаж",
+        TokenTransactionType.GenerationRefund => "Возврат за монтаж",
+        TokenTransactionType.ReferralReward => "Бонус за друга",
+        TokenTransactionType.AdminAdjustment => "Корректировка",
+        TokenTransactionType.Chargeback => "Отмена покупки",
+        TokenTransactionType.Expiration => "Срок токенов истёк",
+        _ => "Операция с токенами"
+    };
+
     public static string Status(string? status) => status switch
     {
         "Draft" => "Подготовка",

@@ -1,0 +1,17 @@
+@page "/account/register"
+@model Cs2Highlight.Web.Pages.Account.RegisterModel
+@{ ViewData["Title"] = "Регистрация"; }
+<section class="auth-card surface surface--elevated surface-pad">
+  <p class="page-eyebrow">Новый аккаунт</p><h1 class="page-title">Регистрация</h1>
+  <div asp-validation-summary="All" class="validation-summary-errors" role="alert"></div>
+  <form method="post" class="form-stack">
+    <input type="hidden" asp-for="ReturnUrl" /><input type="hidden" asp-for="Ref" />
+    <label>Email<input asp-for="Input.Email" autocomplete="email" /></label>
+    <label>Пароль<input asp-for="Input.Password" autocomplete="new-password" /></label>
+    <label>Повторите пароль<input asp-for="Input.ConfirmPassword" autocomplete="new-password" /></label>
+    <label class="checkbox-row"><input asp-for="Input.PrivacyAccepted" /> Я принимаю <a asp-page="/Privacy">политику конфиденциальности</a> (версия @Model.PrivacyVersion).</label>
+    <label class="checkbox-row"><input asp-for="Input.PersonalDataAccepted" /> Я даю отдельное согласие на <a asp-page="/PersonalData">обработку персональных данных</a> (версия @Model.PersonalDataVersion).</label>
+    <button class="btn btn-primary btn-lg" type="submit">Создать аккаунт</button>
+  </form>
+  <p class="muted">Уже есть аккаунт? <a asp-page="/Account/Login">Войти</a></p>
+</section>

@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-03T15:26:00+03:00",
+  "title": "Design System: CSHighlighter Beatgrid Control Room",
+  "extensions": {
+    "colorMeta": {
+      "graphite": { "role": "neutral", "displayName": "Graphite", "canonical": "#090b0e", "tonalRamp": ["#090b0e", "#101419", "#141a20", "#1a2229", "#40515b", "#839097", "#c0c8ca", "#f2efe8"] },
+      "signal-orange": { "role": "primary", "displayName": "Signal Orange", "canonical": "#ff623d", "tonalRamp": ["#42140d", "#702113", "#a32f1e", "#d8432b", "#ff623d", "#ff8061", "#ffb09c", "#ffe0d8"] },
+      "data-cyan": { "role": "secondary", "displayName": "Data Cyan", "canonical": "#71d8d4", "tonalRamp": ["#0d3c3e", "#126064", "#18868a", "#43b9b7", "#71d8d4", "#9be7e1", "#c4f1ed", "#e7fbf8"] },
+      "state-green": { "role": "tertiary", "displayName": "State Green", "canonical": "#98d6a5", "tonalRamp": ["#173523", "#275b36", "#39824d", "#67ae76", "#98d6a5", "#b5e2bb", "#d2eed5", "#eef9ef"] },
+      "state-yellow": { "role": "tertiary", "displayName": "State Yellow", "canonical": "#e6c56b", "tonalRamp": ["#493a0c", "#705913", "#92700c", "#b49436", "#e6c56b", "#edd68e", "#f4e5b2", "#fbf4db"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Control-room sans", "purpose": "Large task headings and the home promise; weight and scale carry the hierarchy." },
+      "label": { "displayName": "Operator mono", "purpose": "Workflow lanes, state labels, counts, and measurements only." }
+    },
+    "shadows": [
+      { "name": "surface-ambient", "value": "0 18px 44px rgb(0 0 0 / 0.36)", "purpose": "Separate major work surfaces from the page." },
+      { "name": "action-lift", "value": "0 9px 20px rgb(255 98 61 / 0.16)", "purpose": "Give the primary action a small, deliberate lift." }
+    ],
+    "motion": [
+      { "name": "state-transition", "value": "180ms ease", "purpose": "Buttons, borders, surfaces, and selection states." },
+      { "name": "reduced-motion", "value": "prefers-reduced-motion: reduce", "purpose": "Remove movement while preserving state and feedback." }
+    ],
+    "breakpoints": [
+      { "name": "compact", "value": "720px" },
+      { "name": "rail", "value": "980px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The decisive action for upload, submit, and current work.",
+      "html": "<button class=\"ds-btn-primary\">UPLOAD AND FIND MOMENTS</button>",
+      "css": ".ds-btn-primary{min-height:44px;border:1px solid #ff623d;border-radius:8px;padding:0 16px;background:#ff623d;color:#1b100d;font:800 13px ui-sans-serif,system-ui,sans-serif;transition:transform 180ms ease,background-color 180ms ease}.ds-btn-primary:hover{transform:translateY(-2px);background:#ff8061}.ds-btn-primary:focus-visible{outline:3px solid #71d8d4;outline-offset:3px}"
+    },
+    {
+      "name": "Input Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "A quiet field that belongs to the control room instead of a marketing card.",
+      "html": "<label class=\"ds-field\">EMAIL<input class=\"ds-input\" type=\"email\" /></label>",
+      "css": ".ds-field{display:grid;gap:7px;color:#c0c8ca;font:700 13px ui-sans-serif,system-ui,sans-serif}.ds-input{min-height:44px;border:1px solid #40515b;border-radius:8px;padding:0 14px;background:#101419;color:#f2efe8}.ds-input:focus-visible{border-color:#71d8d4;outline:3px solid rgb(113 216 212 / .13);outline-offset:0}"
+    },
+    {
+      "name": "Control Surface",
+      "kind": "card",
+      "refersTo": "surface",
+      "description": "A major work surface for capture, editing, profile, and delivery states.",
+      "html": "<section class=\"ds-surface\"><span class=\"ds-label\">CAPTURE BAY / READY</span><h2>ADD DEMOS</h2></section>",
+      "css": ".ds-surface{border:1px solid #2a353d;border-radius:14px;padding:36px;background:#141a20;color:#f2efe8;box-shadow:0 18px 44px rgb(0 0 0 / .36)}.ds-label{color:#71d8d4;font:700 10px/1.2 monospace;letter-spacing:.08em;text-transform:uppercase}.ds-surface h2{margin:14px 0 0;font:800 24px/1 ui-sans-serif,system-ui,sans-serif}"
+    },
+    {
+      "name": "Workflow Strip",
+      "kind": "custom",
+      "refersTo": "workflow-strip",
+      "description": "The signature bridge from raw demo to finished movie.",
+      "html": "<ol class=\"ds-workflow\"><li class=\"is-active\"><span>01</span><strong>DEMOS</strong><small>INPUT</small></li><li><span>02</span><strong>MOMENTS</strong><small>SELECT</small></li></ol>",
+      "css": ".ds-workflow{display:grid;grid-template-columns:repeat(2,1fr);gap:0;border-block:1px solid #2a353d;padding:15px 0;list-style:none}.ds-workflow li{display:grid;gap:5px;border-left:1px solid #2a353d;padding-left:12px}.ds-workflow li.is-active{border-left-color:#ff623d}.ds-workflow span,.ds-workflow small{color:#71d8d4;font:700 10px monospace;letter-spacing:.08em}.ds-workflow strong{color:#f2efe8;font:800 12px ui-sans-serif,system-ui,sans-serif}"
+    }
+  ],
+  "narrative": {
+    "northStar": "Beatgrid Control Room",
+    "overview": "A measured production console for CS2 editors. Graphite surfaces, warm text, signal-orange action, and data-cyan state keep the work legible while the workflow strip makes the path from demo to movie memorable.",
+    "keyCharacteristics": ["Production-lane hierarchy", "Signal-orange action", "Data-cyan measurement", "Compact operator geometry", "Responsive structural collapse"],
+    "rules": [
+      { "name": "The Signal Rarity Rule", "body": "Orange is reserved for actions and current work; cyan is reserved for data.", "section": "colors" },
+      { "name": "The One Voice Rule", "body": "Do not introduce a second display family; hierarchy comes from scale, weight, and the signal vocabulary.", "section": "typography" },
+      { "name": "The Layer Before Shadow Rule", "body": "Use a tonal surface or structural line first; use a shadow only when a surface truly needs to lift.", "section": "elevation" }
+    ],
+    "dos": ["Do make the next operational action visible within the first viewport.", "Do keep controls keyboard reachable with a visible focus treatment.", "Do let responsive layouts collapse structurally."],
+    "donts": ["Don't reintroduce gradient text, glass cards, or decorative grid texture.", "Don't use a second display font for a technical mood.", "Don't let workflow lanes create horizontal page overflow on narrow screens."]
+  }
+}

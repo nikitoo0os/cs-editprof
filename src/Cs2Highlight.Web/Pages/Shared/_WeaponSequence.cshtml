@@ -8,9 +8,10 @@
         <span aria-hidden="true">→</span> СМЕНА <span aria-hidden="true">→</span>
       </span>
     }
-    <span class="weapon">
-      <img src="@weapon.IconPath" alt="" width="50" height="28" />
-      @weapon.DisplayName@if (weapon.KillCount > 1) { <text> ×@weapon.KillCount</text> }
+    <span class="weapon" data-weapon="@weapon.WeaponCode" title="@weapon.DisplayName">
+      <img class="weapon__icon" src="@weapon.IconPath" alt="" width="64" height="28" loading="lazy" />
+      <span class="weapon__name">@weapon.DisplayName</span>
+      @if (weapon.KillCount > 1) { <span class="weapon__count">×@weapon.KillCount</span> }
     </span>
   }
 </div>
