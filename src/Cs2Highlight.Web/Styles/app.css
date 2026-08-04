@@ -520,6 +520,11 @@
     list-style: decimal;
   }
 
+  .legal-document ul {
+    margin: 10px 0 0 22px;
+    list-style: disc;
+  }
+
   .legal-draft-notice {
     margin-top: 20px;
     border: 1px solid var(--color-app-warning);
@@ -3157,6 +3162,26 @@
     white-space: normal;
   }
 }
+
+.modal-open { overflow: hidden; }
+
+.how-it-works-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.how-it-works-modal[hidden] { display: none; }
+.how-it-works-modal__backdrop { position: absolute; inset: 0; background: rgb(0 0 0 / 0.72); }
+.how-it-works-modal__dialog { position: relative; width: min(100%, 620px); max-height: min(90vh, 760px); overflow: auto; }
+.how-it-works-modal__close { position: absolute; top: 12px; right: 12px; }
+.instruction-list { display: grid; gap: 10px; margin: 20px 0; padding-left: 24px; color: var(--color-app-text-secondary); line-height: 1.55; }
+.generation-stage-card.stage-state--current { border-color: rgb(var(--theme-brand-rgb) / 0.7); box-shadow: 0 0 0 2px rgb(var(--theme-brand-rgb) / 0.12); }
+.generation-stage-card.stage-state--complete { border-color: rgb(52 211 153 / 0.45); }
+.generation-stage-card.stage-state--failed { border-color: rgb(251 113 133 / 0.75); color: #fda4af; }
 
 @media (prefers-reduced-motion: reduce) {
   html {

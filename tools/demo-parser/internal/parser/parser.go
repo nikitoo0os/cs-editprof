@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	demoinfocs "github.com/markus-wa/demoinfocs-golang/v5/pkg/demoinfocs"
@@ -60,6 +62,7 @@ func Analyze(path string) (contract.Analysis, error) {
 	roundNumber := 0
 	shotsSinceLastKill := make(map[string]int)
 	weaponFireEvents := 0
+	unknownWeaponNames := make(map[string]int)
 	pendingEvents := make(map[string][]contract.GameplayEventReference)
 	lastPositions := make(map[string]sampledPosition)
 	lastTimelineTick := int64(-1)
@@ -163,7 +166,11 @@ func Analyze(path string) (contract.Analysis, error) {
 		weaponFireEvents++
 		weapon := "unknown"
 		if event.Weapon != nil {
-			weapon = canonicalWeapon(event.Weapon.String())
+			rawWeapon := event.Weapon.String()
+			weapon = canonicalEquipment(event.Weapon)
+			if weapon == "unknown" {
+				unknownWeaponNames[rawWeapon]++
+			}
 		}
 		recordAction(event.Shooter, "WeaponFire", &weapon)
 	})
@@ -196,7 +203,11 @@ func Analyze(path string) (contract.Analysis, error) {
 		victim := mapPlayer(event.Victim)
 		weapon := "unknown"
 		if event.Weapon != nil {
-			weapon = canonicalWeapon(event.Weapon.String())
+			rawWeapon := event.Weapon.String()
+			weapon = canonicalEquipment(event.Weapon)
+			if weapon == "unknown" {
+				unknownWeaponNames[rawWeapon]++
+			}
 		}
 		wallbang := event.IsWallBang()
 		noScope := event.NoScope
@@ -318,7 +329,11 @@ func Analyze(path string) (contract.Analysis, error) {
 			utilityActive := false
 			hasBomb := false
 			if weapon := player.ActiveWeapon(); weapon != nil {
-				code := canonicalWeapon(weapon.String())
+				rawWeapon := weapon.String()
+				code := canonicalEquipment(weapon)
+				if code == "unknown" {
+					unknownWeaponNames[rawWeapon]++
+				}
 				activeWeapon = &code
 				utilityActive = weapon.Class() == common.EqClassGrenade
 			}
@@ -413,6 +428,16 @@ func Analyze(path string) (contract.Analysis, error) {
 			result.Warnings,
 			"WeaponFire events were unavailable; oneTap and shotsSinceLastKill are null.")
 	}
+	if len(unknownWeaponNames) > 0 {
+		rawNames := make([]string, 0, len(unknownWeaponNames))
+		for rawName := range unknownWeaponNames {
+			rawNames = append(rawNames, rawName)
+		}
+		sort.Strings(rawNames)
+		result.Warnings = append(
+			result.Warnings,
+			"Unmapped weapon labels: "+strings.Join(rawNames, ", ")+".")
+	}
 	result.Warnings = append(
 		result.Warnings,
 		"lastEnemyKill is unavailable in parser v0.4.0 and remains null.")
@@ -474,24 +499,204 @@ func markRoundEndingKills(result *contract.Analysis) {
 }
 
 func canonicalWeapon(value string) string {
+	normalized := strings.ToLower(strings.TrimSpace(value))
+	normalized = strings.TrimPrefix(normalized, "weapon_")
+	compact := strings.Map(func(r rune) rune {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			return r
+		}
+		return -1
+	}, normalized)
 	aliases := map[string]string{
-		"AK-47":        "ak47",
-		"M4A4":         "m4a1",
-		"M4A1-S":       "m4a1_silencer",
-		"AWP":          "awp",
-		"SSG 08":       "ssg08",
-		"Desert Eagle": "deagle",
-		"Glock-18":     "glock",
-		"USP-S":        "usp_silencer",
-		"Zeus x27":     "taser",
+		"ak47": "ak47", "aug": "aug", "famas": "famas", "galilar": "galilar", "galil": "galilar",
+		"m4a4": "m4a4", "m4a1": "m4a1", "m4a1s": "m4a1_silencer", "m4a1silencer": "m4a1_silencer", "m4a1silenceroff": "m4a1_silencer",
+		"sg553": "sg556", "awp": "awp", "g3sg1": "g3sg1", "scar20": "scar20", "ssg08": "ssg08", "scout": "ssg08",
+		"deserteagle": "deagle", "dualberettas": "elite", "elite": "elite", "fiveseven": "fiveseven", "glock18": "glock", "glock": "glock",
+		"p2000": "hkp2000", "hkp2000": "hkp2000", "p250": "p250", "r8revolver": "revolver", "revolver": "revolver", "tec9": "tec9", "cz75auto": "cz75a", "cz75a": "cz75a", "usps": "usp_silencer", "uspsilencer": "usp_silencer", "uspsilenceroff": "usp_silencer",
+		"mac10": "mac10", "mp5sd": "mp5sd", "mp7": "mp7", "mp9": "mp9", "p90": "p90", "ppbizon": "ppbizon", "bizon": "ppbizon", "ump45": "ump45",
+		"m249": "m249", "mag7": "mag7", "negev": "negev", "nova": "nova", "sawedoff": "sawedoff", "xm1014": "xm1014",
+		"zeusx27": "taser", "taser": "taser", "hegrenade": "hegrenade", "flashbang": "flashbang", "smokegrenade": "smokegrenade", "molotov": "molotov", "incendiarygrenade": "incgrenade", "incgrenade": "incgrenade", "decoygrenade": "decoy", "decoy": "decoy", "breachcharge": "breachcharge", "c4": "c4",
 	}
-	if code, ok := aliases[value]; ok {
+	if code, ok := aliases[compact]; ok {
 		return code
 	}
-	if len(value) >= 5 && value[:5] == "Knife" {
+	if strings.Contains(compact, "knife") || strings.Contains(compact, "bayonet") {
 		return "knife"
 	}
+	if equipment := common.MapEquipment(normalized); equipment != common.EqUnknown {
+		switch equipment {
+		case common.EqAK47:
+			return "ak47"
+		case common.EqAUG:
+			return "aug"
+		case common.EqAWP:
+			return "awp"
+		case common.EqBizon:
+			return "ppbizon"
+		case common.EqDeagle:
+			return "deagle"
+		case common.EqDecoy:
+			return "decoy"
+		case common.EqDualBerettas:
+			return "elite"
+		case common.EqFamas:
+			return "famas"
+		case common.EqFiveSeven:
+			return "fiveseven"
+		case common.EqFlash:
+			return "flashbang"
+		case common.EqG3SG1:
+			return "g3sg1"
+		case common.EqGalil:
+			return "galilar"
+		case common.EqGlock:
+			return "glock"
+		case common.EqHE:
+			return "hegrenade"
+		case common.EqP2000:
+			return "hkp2000"
+		case common.EqIncendiary:
+			return "incgrenade"
+		case common.EqM249:
+			return "m249"
+		case common.EqM4A4:
+			return "m4a4"
+		case common.EqMac10:
+			return "mac10"
+		case common.EqSwag7:
+			return "mag7"
+		case common.EqMolotov:
+			return "molotov"
+		case common.EqMP7:
+			return "mp7"
+		case common.EqMP5:
+			return "mp5sd"
+		case common.EqMP9:
+			return "mp9"
+		case common.EqNegev:
+			return "negev"
+		case common.EqNova:
+			return "nova"
+		case common.EqP250:
+			return "p250"
+		case common.EqP90:
+			return "p90"
+		case common.EqSawedOff:
+			return "sawedoff"
+		case common.EqScar20:
+			return "scar20"
+		case common.EqSG553:
+			return "sg556"
+		case common.EqSmoke:
+			return "smokegrenade"
+		case common.EqScout:
+			return "ssg08"
+		case common.EqZeus:
+			return "taser"
+		case common.EqTec9:
+			return "tec9"
+		case common.EqUMP:
+			return "ump45"
+		case common.EqXM1014:
+			return "xm1014"
+		case common.EqRevolver:
+			return "revolver"
+		case common.EqKnife:
+			return "knife"
+		}
+	}
 	return "unknown"
+}
+
+func canonicalEquipment(equipment *common.Equipment) string {
+	if equipment == nil {
+		return "unknown"
+	}
+	switch equipment.Type {
+	case common.EqAK47:
+		return "ak47"
+	case common.EqAUG:
+		return "aug"
+	case common.EqAWP:
+		return "awp"
+	case common.EqBizon:
+		return "ppbizon"
+	case common.EqDeagle:
+		return "deagle"
+	case common.EqDecoy:
+		return "decoy"
+	case common.EqDualBerettas:
+		return "elite"
+	case common.EqFamas:
+		return "famas"
+	case common.EqFiveSeven:
+		return "fiveseven"
+	case common.EqFlash:
+		return "flashbang"
+	case common.EqG3SG1:
+		return "g3sg1"
+	case common.EqGalil:
+		return "galilar"
+	case common.EqGlock:
+		return "glock"
+	case common.EqHE:
+		return "hegrenade"
+	case common.EqP2000:
+		return "hkp2000"
+	case common.EqIncendiary:
+		return "incgrenade"
+	case common.EqM249:
+		return "m249"
+	case common.EqM4A4:
+		return "m4a4"
+	case common.EqM4A1:
+		return "m4a1_silencer"
+	case common.EqMac10:
+		return "mac10"
+	case common.EqSwag7:
+		return "mag7"
+	case common.EqMolotov:
+		return "molotov"
+	case common.EqMP7:
+		return "mp7"
+	case common.EqMP5:
+		return "mp5sd"
+	case common.EqMP9:
+		return "mp9"
+	case common.EqNegev:
+		return "negev"
+	case common.EqNova:
+		return "nova"
+	case common.EqP250:
+		return "p250"
+	case common.EqP90:
+		return "p90"
+	case common.EqSawedOff:
+		return "sawedoff"
+	case common.EqScar20:
+		return "scar20"
+	case common.EqSG553:
+		return "sg556"
+	case common.EqSmoke:
+		return "smokegrenade"
+	case common.EqScout:
+		return "ssg08"
+	case common.EqZeus:
+		return "taser"
+	case common.EqTec9:
+		return "tec9"
+	case common.EqUMP:
+		return "ump45"
+	case common.EqXM1014:
+		return "xm1014"
+	case common.EqRevolver:
+		return "revolver"
+	case common.EqKnife:
+		return "knife"
+	case common.EqBomb:
+		return "c4"
+	}
+	return canonicalWeapon(equipment.String())
 }
 
 func mapPlayer(player *common.Player) contract.Player {

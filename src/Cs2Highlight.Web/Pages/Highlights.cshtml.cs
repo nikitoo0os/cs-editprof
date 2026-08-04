@@ -30,7 +30,8 @@ public sealed record HighlightCard(
 public sealed class HighlightsModel(
     IDbContextFactory<GenerationDbContext> dbFactory,
     HighlightSelectionService selections,
-    IWeaponCatalog weapons) : PageModel
+    IWeaponCatalog weapons,
+    IWebHostEnvironment environment) : PageModel
 {
     private static readonly JsonSerializerOptions JsonOptions =
         new(JsonSerializerDefaults.Web);
@@ -71,6 +72,7 @@ public sealed class HighlightsModel(
         string publicId,
         CancellationToken cancellationToken)
     {
+        if (!await CanReadAsync(publicId, cancellationToken)) return NotFound();
         try
         {
             await selections.SaveSelectionAsync(
@@ -102,7 +104,7 @@ public sealed class HighlightsModel(
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation? generation = await db.Generations.AsNoTracking()
             .SingleOrDefaultAsync(value => value.PublicId == publicId, cancellationToken);
-        if (generation is null) return NotFound();
+        if (generation is null || !GenerationAccess.CanRead(generation, User, environment)) return NotFound();
         if (generation.Status != GenerationStatus.AwaitingHighlightSelection)
             return RedirectToPage("/Generation", new { publicId });
         Generation = generation;
@@ -184,6 +186,14 @@ public sealed class HighlightsModel(
                 capacity.MaximumTimelineMilliseconds;
         }
         return Page();
+    }
+
+    private async Task<bool> CanReadAsync(string publicId, CancellationToken cancellationToken)
+    {
+        await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        Generation? generation = await db.Generations.AsNoTracking().SingleOrDefaultAsync(
+            value => value.PublicId == publicId, cancellationToken);
+        return generation is not null && GenerationAccess.CanRead(generation, User, environment);
     }
 
     private static T Deserialize<T>(string json, T fallback)

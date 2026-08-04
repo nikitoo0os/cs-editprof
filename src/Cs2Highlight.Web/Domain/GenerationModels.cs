@@ -57,6 +57,8 @@ public enum ArtifactType
 public sealed class Generation
 {
     public long Id { get; set; }
+    [MaxLength(450)] public string? UserId { get; set; }
+    public ApplicationUser? User { get; set; }
     [MaxLength(64)] public string PublicId { get; set; } = string.Empty;
     public GenerationStatus Status { get; set; } = GenerationStatus.Draft;
     [MaxLength(17)] public string? SelectedSteamId { get; set; }
@@ -79,11 +81,27 @@ public sealed class Generation
     [MaxLength(128)] public string? PaymentIdempotencyKey { get; set; }
     public int ProgressPercent { get; set; }
     [MaxLength(128)] public string CurrentStage { get; set; } = "Draft";
+    [MaxLength(32)] public string? ActiveStageKey { get; set; }
     public DateTimeOffset CreatedAt { get; set; }
     public DateTimeOffset UpdatedAt { get; set; }
     public DateTimeOffset? PaidAt { get; set; }
     public DateTimeOffset? GenerationStartedAt { get; set; }
     public DateTimeOffset? GenerationCompletedAt { get; set; }
+    public DateTimeOffset? ExpiresAtUtc { get; set; }
+    public DateTimeOffset? OutputDeletedAtUtc { get; set; }
+    public DateTimeOffset? QueueEnteredAtUtc { get; set; }
+    public DateTimeOffset? CleanupStartedAtUtc { get; set; }
+    public DateTimeOffset? CleanupCompletedAtUtc { get; set; }
+    public CleanupStatus CleanupStatus { get; set; } = CleanupStatus.Pending;
+    public int CleanupAttemptCount { get; set; }
+    [MaxLength(1024)] public string? CleanupError { get; set; }
+    public long DeletedTemporaryBytes { get; set; }
+    public long TemporaryBytesPeak { get; set; }
+    public long QueueDurationMilliseconds { get; set; }
+    public long ProcessingDurationMilliseconds { get; set; }
+    [MaxLength(64)] public string? ErrorCategory { get; set; }
+    public int RetryCount { get; set; }
+    public bool TokenRefunded { get; set; }
     public long? FinalVideoArtifactId { get; set; }
     [MaxLength(64)] public string? ErrorCode { get; set; }
     [MaxLength(1024)] public string? ErrorMessage { get; set; }

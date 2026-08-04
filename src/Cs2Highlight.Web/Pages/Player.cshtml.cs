@@ -10,7 +10,8 @@ namespace Cs2Highlight.Web.Pages;
 public sealed class PlayerModel(
     IDbContextFactory<GenerationDbContext> dbFactory,
     HighlightSelectionService selections,
-    TimeProvider timeProvider) : PageModel
+    TimeProvider timeProvider,
+    IWebHostEnvironment environment) : PageModel
 {
     public IReadOnlyList<GenerationPlayer> Players { get; private set; } = [];
     [BindProperty] public string SteamId { get; set; } = string.Empty;
@@ -23,7 +24,7 @@ public sealed class PlayerModel(
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation? generation = await db.Generations.AsNoTracking()
             .SingleOrDefaultAsync(value => value.PublicId == publicId, cancellationToken);
-        if (generation is null) return NotFound();
+        if (generation is null || !GenerationAccess.CanRead(generation, User, environment)) return NotFound();
         if (generation.Status != GenerationStatus.AwaitingPlayerSelection)
             return RedirectToPage("/Generation", new { publicId });
         Players = await db.GenerationPlayers.AsNoTracking()
@@ -44,6 +45,7 @@ public sealed class PlayerModel(
         Generation generation = await db.Generations
             .Include(value => value.Players)
             .SingleAsync(value => value.PublicId == publicId, cancellationToken);
+        if (!GenerationAccess.CanRead(generation, User, environment)) return NotFound();
         if (generation.Status != GenerationStatus.AwaitingPlayerSelection)
             return StatusCode(StatusCodes.Status409Conflict);
         GenerationPlayer? selected = generation.Players.SingleOrDefault(value => value.SteamId == SteamId);

@@ -1,5 +1,9 @@
+@using Cs2Highlight.Web.Domain
+@using Microsoft.AspNetCore.Identity
+@inject UserManager<ApplicationUser> UserManager
+@{ ApplicationUser? layoutUser = User.Identity?.IsAuthenticated == true ? await UserManager.GetUserAsync(User) : null; string layoutTheme = layoutUser?.ThemePreference is "printstream" ? "printstream" : "redline"; }
 <!doctype html>
-<html lang="ru">
+<html lang="ru" data-theme="@layoutTheme">
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -8,12 +12,17 @@
     <title>CSHighlighter - Создай КС2 мувик</title>
     <script src="~/js/theme-bootstrap.js" asp-append-version="true"></script>
     <link rel="stylesheet" href="~/css/app.generated.css" asp-append-version="true" />
+    <link rel="stylesheet" href="~/css/redesign.css" asp-append-version="true" />
 </head>
 <body>
+<!-- THESIS: A CS2 generation is a production lane, not a generic upload form; the interface makes the next cut visible and refuses decorative dashboard chrome. OWN-WORLD: Graphite control-room surfaces, warm signal-orange actions, cyan measured data, mono operational labels, and crisp 8–14px geometry. STORY: The user sees raw demos enter a lane, selects the moments that matter, and trusts the path to a finished movie. FIRST VIEWPORT: The work headline and benefits occupy the left, while the upload bay is the first operational surface on the right. FORM: Beatgrid Control Room, grounded candidate 4, seed 29885da0. FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md -->
 <a class="skip-link" href="#main-content">Перейти к содержимому</a>
 <div class="app-shell">
   <partial name="_AppHeader" />
-  <partial name="_GenerationStepper" />
+  @if (ViewData["ShowStepper"] as bool? == true)
+  {
+    <partial name="_GenerationStepper" />
+  }
   <main id="main-content" class="app-main" tabindex="-1">
     <div class="app-container">
       @RenderBody()
@@ -26,16 +35,19 @@
         <span>Цифровой товар доступен для скачивания после обработки</span>
       </div>
       <nav class="app-footer__links" aria-label="Правовая информация">
-        <a asp-page="/Delivery">Доставка и получение</a>
         <a asp-page="/Offer">Публичная оферта</a>
+        <a asp-page="/Delivery">Доставка и получение товара</a>
+        <a asp-page="/PersonalData">Согласие на обработку данных</a>
         <a asp-page="/Contacts">Контакты и реквизиты</a>
       </nav>
     </div>
   </footer>
 </div>
 <partial name="_ToastHost" />
+<partial name="_HowItWorksModal" />
 <script src="/js/vendor/flowbite.min.js"></script>
 <script type="module" src="/js/app-shell.js"></script>
+<script type="module" src="/js/instruction-modal.js"></script>
 @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

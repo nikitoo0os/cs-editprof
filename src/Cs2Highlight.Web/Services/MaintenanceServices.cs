@@ -57,6 +57,7 @@ public sealed class GenerationCleanupService(
     GenerationStorage storage,
     RetentionOptions options,
     TimeProvider timeProvider,
+    GenerationMetrics metrics,
     ILogger<GenerationCleanupService> logger) : BackgroundService
 {
     private static readonly Action<ILogger, Exception?> LogCleanupFailure =
@@ -81,6 +82,13 @@ public sealed class GenerationCleanupService(
     {
         DateTimeOffset now = timeProvider.GetUtcNow();
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        Generation[] completed = await db.Generations.Where(value =>
+                (value.Status == GenerationStatus.Completed || value.Status == GenerationStatus.CompletedWithWarnings) &&
+                (value.CleanupStatus == CleanupStatus.Pending || value.CleanupStatus == CleanupStatus.Failed))
+            .Take(20).ToArrayAsync(cancellationToken);
+        foreach (Generation generation in completed)
+            CleanupIntermediateFiles(generation, now);
+
         Generation[] readyForDeletion = (await db.Generations
                 .Where(value => value.Status == GenerationStatus.Expired)
                 .ToArrayAsync(cancellationToken))
@@ -107,7 +115,7 @@ public sealed class GenerationCleanupService(
                 (value.Status == GenerationStatus.AwaitingPayment &&
                  value.UpdatedAt < now.AddHours(-options.UnpaidGenerationHours)) ||
                 (value.Status is GenerationStatus.Completed or GenerationStatus.CompletedWithWarnings &&
-                 value.UpdatedAt < now.AddDays(-options.CompletedGenerationDays)) ||
+                 (value.ExpiresAtUtc ?? value.UpdatedAt.AddDays(options.CompletedGenerationDays)) <= now) ||
                 (value.Status == GenerationStatus.Failed &&
                  value.UpdatedAt < now.AddDays(-options.FailedGenerationDays)) ||
                 (value.Status == GenerationStatus.Cancelled &&
@@ -115,9 +123,66 @@ public sealed class GenerationCleanupService(
             .ToArray();
         foreach (Generation generation in expired)
         {
+            if (generation.Status is GenerationStatus.Completed or GenerationStatus.CompletedWithWarnings)
+            {
+                GenerationArtifact? final = await db.GenerationArtifacts.SingleOrDefaultAsync(
+                    value => value.GenerationId == generation.Id && value.Type == ArtifactType.FinalVideo,
+                    cancellationToken);
+                if (final is not null && File.Exists(final.StoredPath))
+                    File.Delete(final.StoredPath);
+                generation.OutputDeletedAtUtc ??= now;
+            }
             generation.Status = GenerationStatus.Expired;
             generation.UpdatedAt = now;
         }
         await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private void CleanupIntermediateFiles(Generation generation, DateTimeOffset now)
+    {
+        string root = storage.GenerationRoot(generation.PublicId);
+        storage.EnsureWithinRoot(root);
+        generation.CleanupStatus = CleanupStatus.Running;
+        generation.CleanupStartedAtUtc ??= now;
+        generation.CleanupAttemptCount++;
+        try
+        {
+            long deleted = 0;
+            if (Directory.Exists(root))
+            {
+                foreach (string directory in Directory.EnumerateDirectories(root))
+                {
+                    DirectoryInfo info = new(directory);
+                    if (info.Name.Equals("output", StringComparison.OrdinalIgnoreCase) ||
+                        info.Attributes.HasFlag(FileAttributes.ReparsePoint)) continue;
+                    deleted += DirectorySize(directory);
+                    Directory.Delete(directory, recursive: true);
+                }
+            }
+            generation.DeletedTemporaryBytes += deleted;
+            metrics.CleanupDeletedBytes.Add(deleted);
+            generation.CleanupStatus = CleanupStatus.Completed;
+            generation.CleanupCompletedAtUtc = now;
+            generation.CleanupError = null;
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            metrics.CleanupFailures.Add(1);
+            generation.CleanupStatus = CleanupStatus.Failed;
+            generation.CleanupError = exception.Message[..Math.Min(1024, exception.Message.Length)];
+        }
+    }
+
+    private static long DirectorySize(string path)
+    {
+        long total = 0;
+        try
+        {
+            foreach (string file in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+                total += new FileInfo(file).Length;
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
+        return total;
     }
 }

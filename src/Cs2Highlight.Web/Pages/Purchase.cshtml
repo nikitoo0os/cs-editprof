@@ -1,0 +1,5 @@
+@page "/purchase"
+@model Cs2Highlight.Web.Pages.PurchaseModel
+@{ ViewData["Title"] = "Покупка токенов"; }
+<section class="page-header"><div><p class="page-eyebrow">Баланс</p><h1 class="page-title">Пакеты токенов</h1><p class="page-lead">1 токен = 1 готовое видео. Токен списывается только после успешной первичной проверки demo.</p></div></section>
+<div class="option-grid">@foreach (TokenPackage package in Model.Packages){<article class="surface surface--elevated surface-pad"><h2 class="section-title">@package.Name</h2><p class="page-lead">@package.TokenAmount токен(ов) · @(package.PriceAmountMinor / 100m) @package.Currency</p><form method="post" asp-page-handler="Buy"><button class="btn btn-primary" name="code" value="@package.Code">Купить пакет</button></form></article>}</div>

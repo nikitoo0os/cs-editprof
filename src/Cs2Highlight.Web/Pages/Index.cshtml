@@ -2,7 +2,6 @@
 @model IndexModel
 @{
   ViewData["Title"] = "Создать CS2-мувик";
-  ViewData["CurrentStep"] = 1;
   string? friendlyError = Model.Error switch
   {
     "FILE_TOO_LARGE" => "Одна из демок превышает допустимый размер.",
@@ -12,7 +11,7 @@
     _ => null
   };
 }
-<section class="section-grid-2" style="align-items:center;min-height:610px">
+<section class="home-landing section-grid-2">
   <div>
     <p class="page-eyebrow">Автоматический CS2-монтаж</p>
     <h1 class="hero-title text-gradient">Преврати свои лучшие моменты в CS2-мувик</h1>
@@ -31,20 +30,34 @@
       </li>
       <li class="benefit">
         <span class="benefit__icon"><img class="ui-icon ui-icon--brand" src="/assets/icons/badge-dollar-sign.svg" alt="" /></span>
-        Готовое видео за @Model.DisplayPrice
+       Одно видео за один токен
       </li>
     </ul>
+    <div class="hero-sequence" aria-label="Workflow">
+      <div class="hero-sequence__header">
+        <span>РАБОЧИЙ ПОТОК / 04</span>
+        <span>ДЕМКА → МУВИК</span>
+      </div>
+      <ol class="hero-sequence__track">
+        <li class="hero-sequence__item is-active"><span>01</span><strong>ДЕМКИ</strong><small>ввод</small></li>
+        <li class="hero-sequence__item"><span>02</span><strong>МОМЕНТЫ</strong><small>выбор</small></li>
+        <li class="hero-sequence__item"><span>03</span><strong>МОНТАЖ</strong><small>сборка</small></li>
+        <li class="hero-sequence__item"><span>04</span><strong>МУВИК</strong><small>финиш</small></li>
+      </ol>
+    </div>
     <p style="margin-top:28px">
-      <a class="btn btn-secondary" href="#upload-workspace">
+      <button class="btn btn-secondary" type="button" data-help-modal-open>
         Как это работает
         <img class="ui-icon" src="/assets/icons/chevron-right.svg" alt="" />
-      </a>
+      </button>
     </p>
   </div>
 
   <section id="upload-workspace" class="surface surface--elevated surface-pad">
+    <div class="upload-workspace__signal" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px">
       <div>
+        <span class="console-kicker">ЗОНА ЗАХВАТА / ГОТОВА К ВВОДУ</span>
         <span class="badge badge-brand">Новый мувик</span>
         <h2 class="section-title" style="margin-top:12px">Добавь демки</h2>
       </div>
@@ -70,6 +83,12 @@
       </button>
     </form>
   </section>
+</section>
+
+<section class="surface surface-pad" style="margin-top:18px">
+  <h2 class="section-title">Как работают токены</h2>
+  <p class="muted">Один токен создаёт одно видео. Токены покупаются пакетами, списываются после принятия корректной Generation в обработку, а при подтверждённой системной ошибке возвращаются. Готовое видео хранится до 7 дней, промежуточные технические файлы удаляются после генерации.</p>
+  <p class="muted">Приглашайте друзей и получайте 1 токен за каждого приглашённого пользователя после подтверждения email. <a asp-page="/ReferralRules">Условия реферальной программы</a>.</p>
 </section>
 
 @section Scripts {

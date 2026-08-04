@@ -20,6 +20,22 @@ public static class TimelineDirectorApi
     {
         RouteGroupBuilder group = endpoints.MapGroup(
             "/api/generations/{publicId}/timeline");
+        group.AddEndpointFilter(async (context, next) =>
+        {
+            string? publicId = context.HttpContext.Request.RouteValues["publicId"] as string;
+            IDbContextFactory<GenerationDbContext> factory = context.HttpContext.RequestServices
+                .GetRequiredService<IDbContextFactory<GenerationDbContext>>();
+            IWebHostEnvironment environment = context.HttpContext.RequestServices
+                .GetRequiredService<IWebHostEnvironment>();
+            await using GenerationDbContext db = await factory.CreateDbContextAsync(
+                context.HttpContext.RequestAborted);
+            Generation? generation = await db.Generations.AsNoTracking().SingleOrDefaultAsync(
+                value => value.PublicId == publicId, context.HttpContext.RequestAborted);
+            return generation is null || !GenerationAccess.CanRead(
+                generation, context.HttpContext.User, environment)
+                ? Results.NotFound()
+                : await next(context);
+        });
 
         group.MapGet("/", (
             string publicId,

@@ -84,6 +84,7 @@ if (root) {
     error: root.querySelector("#generation-error"),
     events: root.querySelector("#event-feed")
   };
+  const stageCards = [...root.querySelectorAll("[data-stage-key]")];
 
   const actionLabel = status =>
     status === "AwaitingPlayerSelection"
@@ -102,6 +103,16 @@ if (root) {
     elements.demos.textContent = state.demoCount;
     elements.players.textContent = state.playerCount;
     elements.highlights.textContent = state.highlightCount;
+    for (const card of stageCards) {
+      const stage = (state.stages || []).find(item => item.key === card.dataset.stageKey);
+      if (!stage) continue;
+      card.classList.remove("stage-state--pending", "stage-state--current", "stage-state--complete", "stage-state--failed", "stage-state--skipped");
+      card.classList.add("stage-state--" + stage.state);
+      if (stage.state === "current") card.setAttribute("aria-current", "step");
+      else card.removeAttribute("aria-current");
+      const title = card.querySelector("strong");
+      if (title && stage.label) title.textContent = stage.label;
+    }
 
     elements.action.replaceChildren();
     if (state.actionUrl) {

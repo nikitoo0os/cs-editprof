@@ -11,7 +11,8 @@ public sealed class GenerationModel(
     IDbContextFactory<GenerationDbContext> dbFactory,
     GenerationCancellationRegistry cancellations,
     GenerationWakeSignal queue,
-    TimeProvider timeProvider) : PageModel
+    TimeProvider timeProvider,
+    IWebHostEnvironment environment) : PageModel
 {
     public Generation Generation { get; private set; } = null!;
     public int DemoCount { get; private set; }
@@ -28,7 +29,7 @@ public sealed class GenerationModel(
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation? generation = await db.Generations.AsNoTracking()
             .SingleOrDefaultAsync(value => value.PublicId == publicId, cancellationToken);
-        if (generation is null) return NotFound();
+        if (generation is null || !GenerationAccess.CanRead(generation, User, environment)) return NotFound();
         Generation = generation;
         DemoCount = await db.GenerationDemos.CountAsync(value => value.GenerationId == generation.Id, cancellationToken);
         PlayerCount = await db.GenerationPlayers.CountAsync(value => value.GenerationId == generation.Id, cancellationToken);
@@ -52,7 +53,7 @@ public sealed class GenerationModel(
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation? generation = await db.Generations.SingleOrDefaultAsync(
             value => value.PublicId == publicId, cancellationToken);
-        if (generation is null) return NotFound();
+        if (generation is null || !GenerationAccess.CanRead(generation, User, environment)) return NotFound();
         if (generation.Status is GenerationStatus.Completed or GenerationStatus.CompletedWithWarnings
             or GenerationStatus.Cancelled or GenerationStatus.Failed or GenerationStatus.Expired)
             return StatusCode(StatusCodes.Status409Conflict);
@@ -93,7 +94,7 @@ public sealed class GenerationModel(
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation? generation = await db.Generations.SingleOrDefaultAsync(
             value => value.PublicId == publicId, cancellationToken);
-        if (generation is null) return NotFound();
+        if (generation is null || !GenerationAccess.CanRead(generation, User, environment)) return NotFound();
         bool musicAnalysisRetry =
             generation.ErrorCode?.StartsWith(
                 "MUSIC_",

@@ -1,6 +1,6 @@
 (() => {
   const storageKey = "cshighlighter-theme-v1";
-  let theme = "redline";
+  let theme = document.documentElement.dataset.theme === "printstream" ? "printstream" : "redline";
 
   try {
     const savedTheme = localStorage.getItem(storageKey);

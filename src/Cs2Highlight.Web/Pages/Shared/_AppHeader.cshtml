@@ -1,5 +1,8 @@
 @using Cs2Highlight.Web.Services
-@inject PaymentOptions PaymentOptions
+@using Cs2Highlight.Web.Domain
+@using Microsoft.AspNetCore.Identity
+@inject UserManager<ApplicationUser> UserManager
+@{ ApplicationUser? headerUser = Context.User.Identity?.IsAuthenticated == true ? await UserManager.GetUserAsync(Context.User) : null; }
 <header class="app-header">
   <div class="app-container app-header__inner">
     <a class="brand" asp-page="/Index" aria-label="cshighlighter — на главную">
@@ -7,36 +10,30 @@
       <span class="brand__wordmark">cs<span>highlighter</span></span>
     </a>
     <nav class="app-nav" aria-label="Основная навигация">
-      <div class="theme-switcher" role="group" aria-label="Тема оформления">
-        <button class="theme-switcher__button"
-                type="button"
-                data-theme-choice="redline"
-                aria-pressed="false"
-                title="Тёмная тема «Красная линия»">
-          <span class="theme-switcher__swatch theme-switcher__swatch--redline" aria-hidden="true"></span>
-          <span class="theme-switcher__label">Redline</span>
-        </button>
-        <button class="theme-switcher__button"
-                type="button"
-                data-theme-choice="printstream"
-                aria-pressed="false"
-                title="Светлая тема «Поток информации»">
-          <span class="theme-switcher__swatch theme-switcher__swatch--printstream" aria-hidden="true"></span>
-          <span class="theme-switcher__label">Printstream</span>
-        </button>
-      </div>
       <a class="app-nav__link app-nav__home" asp-page="/Index">
         <img class="ui-icon" src="/assets/icons/gamepad-2.svg" alt="" />
         Главная
       </a>
-      <span class="price-pill" aria-label="Стоимость одной генерации — @PaymentOptions.DisplayPrice">
-        <img class="ui-icon ui-icon--brand" src="/assets/icons/badge-dollar-sign.svg" alt="" />
-        <span>@PaymentOptions.DisplayPrice за генерацию</span>
-      </span>
-      <a class="app-nav__link app-nav__help" href="#app-help">
+      @if (Context.User.Identity?.IsAuthenticated == true)
+      {
+        <a class="app-nav__link" asp-page="/Profile">Профиль</a>
+        <form method="post" asp-page="/Account/Logout"><button class="app-nav__link" type="submit">Выйти</button></form>
+      }
+      else
+      {
+        <a class="app-nav__link" asp-page="/Account/Login">Войти</a>
+      }
+      @if (headerUser is not null)
+      {
+        <a class="price-pill" asp-page="/Purchase" aria-label="Баланс токенов: @headerUser.TokenBalance">
+          <img class="ui-icon ui-icon--brand" src="/assets/icons/badge-dollar-sign.svg" alt="" />
+          <span>@headerUser.TokenBalance токенов</span>
+        </a>
+      }
+      <button class="app-nav__link app-nav__help" type="button" data-help-modal-open>
         <img class="ui-icon" src="/assets/icons/circle-help.svg" alt="" />
         Помощь
-      </a>
+      </button>
     </nav>
   </div>
 </header>
