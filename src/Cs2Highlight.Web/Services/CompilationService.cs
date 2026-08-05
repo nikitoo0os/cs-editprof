@@ -185,6 +185,32 @@ public sealed partial class FfmpegHighlightCompilationService(
         Directory.CreateDirectory(outputDirectory);
         string normalizedDirectory = Path.Combine(outputDirectory, ".normalized");
         Directory.CreateDirectory(normalizedDirectory);
+        bool enforceCinematicContract =
+            request.CinematicMoviePlan is not null &&
+            request.MovieSettings?.MovieStyle == MovieStyle.CinematicDirector &&
+            !request.CinematicMoviePlan.Warnings.Contains(
+                "CAMERA_ONLY_VARIANT",
+                StringComparer.Ordinal);
+        CinematicContractValidationReport? contractPlanReport = null;
+        if (enforceCinematicContract)
+        {
+            contractPlanReport = CinematicContractPolicy.ValidatePlan(
+                request.CinematicMoviePlan!,
+                request.Fps);
+            await File.WriteAllTextAsync(
+                Path.Combine(outputDirectory, "cinematic-contract-plan-report.json"),
+                JsonSerializer.Serialize(contractPlanReport, JsonOptions),
+                cancellationToken);
+            if (!contractPlanReport.IsValid)
+            {
+                return Failure(
+                    "CINEMATIC_CONTRACT_PLAN_FAILED: " +
+                    string.Join(',', contractPlanReport.Violations),
+                    request.ClipPaths.Count,
+                    request.ClipPaths.Count,
+                    watch.ElapsedMilliseconds);
+            }
+        }
         List<string> normalized = [];
         List<string> probeErrors = [];
         List<DynamicEffectClipResult> effectResults = [];
@@ -568,6 +594,35 @@ public sealed partial class FfmpegHighlightCompilationService(
                 }, JsonOptions),
                 cancellationToken);
         }
+        if (enforceCinematicContract)
+        {
+            int plannedEffectClips = request.DynamicEffectPlans?
+                .Count(value => value is not null) ?? 0;
+            bool effectsVerified = plannedEffectClips == effectResults.Count &&
+                effectResults.All(value => value.Verified);
+            if (!effectsVerified)
+            {
+                await File.WriteAllTextAsync(
+                    Path.Combine(outputDirectory, "cinematic-contract-render-report.json"),
+                    JsonSerializer.Serialize(new
+                    {
+                        schemaVersion = "1.0",
+                        contractVersion = CinematicContractPolicy.ContractVersion,
+                        passed = false,
+                        plan = contractPlanReport,
+                        effectsVerified,
+                        plannedEffectClips,
+                        renderedEffectClips = effectResults.Count,
+                        effectResults
+                    }, JsonOptions),
+                    cancellationToken);
+                return Failure(
+                    "CINEMATIC_CONTRACT_EFFECT_RENDER_FAILED",
+                    request.ClipPaths.Count,
+                    skipped,
+                    watch.ElapsedMilliseconds);
+            }
+        }
         if (normalized.Count == 0)
             return Failure(
                 probeErrors.Count > 0
@@ -730,6 +785,35 @@ public sealed partial class FfmpegHighlightCompilationService(
             finalMetadata.Width != request.Width || finalMetadata.Height != request.Height ||
             file.Length < request.MinimumOutputBytes)
             return Failure("FINAL_VIDEO_INVALID", request.ClipPaths.Count, skipped, watch.ElapsedMilliseconds);
+        if (enforceCinematicContract)
+        {
+            double durationTolerance = Math.Max(0.05, 2d / Math.Max(1, request.Fps));
+            if (Math.Abs(
+                    finalMetadata.DurationSeconds -
+                    request.CinematicMoviePlan!.TargetDurationSeconds) >
+                durationTolerance)
+            {
+                await File.WriteAllTextAsync(
+                    Path.Combine(outputDirectory, "cinematic-contract-render-report.json"),
+                    JsonSerializer.Serialize(new
+                    {
+                        schemaVersion = "1.0",
+                        contractVersion = CinematicContractPolicy.ContractVersion,
+                        passed = false,
+                        violation = "CINEMATIC_DURATION_RENDER_MISMATCH",
+                        plannedDurationSeconds = request.CinematicMoviePlan.TargetDurationSeconds,
+                        renderedDurationSeconds = finalMetadata.DurationSeconds,
+                        toleranceSeconds = durationTolerance,
+                        plan = contractPlanReport
+                    }, JsonOptions),
+                    cancellationToken);
+                return Failure(
+                    "CINEMATIC_DURATION_RENDER_MISMATCH",
+                    request.ClipPaths.Count,
+                    skipped,
+                    watch.ElapsedMilliseconds);
+            }
+        }
         LogDecodeVerification(logger);
         ProcessResult decodeVerification = await RunAsync(
             options.FfmpegPath,
@@ -812,7 +896,8 @@ public sealed partial class FfmpegHighlightCompilationService(
                 watch.ElapsedMilliseconds);
         }
         LoudnessMeasurement? loudness = null;
-        if (request.MusicPath is not null && request.MovieSettings is not null)
+        if ((request.MusicPath is not null && request.MovieSettings is not null) ||
+            enforceCinematicContract)
         {
             loudness = await MeasureLoudnessAsync(temporary, cancellationToken);
             if (!loudness.Success)
@@ -820,6 +905,53 @@ public sealed partial class FfmpegHighlightCompilationService(
                 File.Delete(temporary);
                 return Failure(
                     $"AUDIO_LOUDNESS_ANALYSIS_FAILED: {loudness.Error}",
+                    request.ClipPaths.Count,
+                    skipped,
+                    watch.ElapsedMilliseconds);
+            }
+        }
+        IReadOnlyList<string> audioContractViolations = [];
+        if (enforceCinematicContract)
+        {
+            audioContractViolations = CinematicContractPolicy.ValidateAudio(
+                loudness?.IntegratedLoudnessLufs ?? double.NaN,
+                loudness?.LoudnessRangeLu ?? double.NaN,
+                loudness?.TruePeakDb ?? double.NaN);
+            bool passed = continuity.IsValid &&
+                audioContractViolations.Count == 0;
+            await File.WriteAllTextAsync(
+                Path.Combine(outputDirectory, "cinematic-contract-render-report.json"),
+                JsonSerializer.Serialize(new
+                {
+                    schemaVersion = "1.0",
+                    contractVersion = CinematicContractPolicy.ContractVersion,
+                    passed,
+                    plan = contractPlanReport,
+                    finalDurationSeconds = finalMetadata.DurationSeconds,
+                    audio = new
+                    {
+                        targetIntegratedLoudnessLufs = CinematicContractPolicy.TargetIntegratedLoudnessLufs,
+                        targetLoudnessRangeLu = CinematicContractPolicy.TargetLoudnessRangeLu,
+                        maximumTruePeakDb = CinematicContractPolicy.MaximumTruePeakDb,
+                        measuredIntegratedLoudnessLufs = loudness?.IntegratedLoudnessLufs,
+                        measuredLoudnessRangeLu = loudness?.LoudnessRangeLu,
+                        measuredTruePeakDb = loudness?.TruePeakDb,
+                        violations = audioContractViolations,
+                        startFadeSeconds = 0.30,
+                        endFadeSeconds = 0.50
+                    },
+                    frameContinuity = continuity,
+                    effectsVerified = request.DynamicEffectPlans is null ||
+                        effectResults.All(value => value.Verified),
+                    effectResults
+                }, JsonOptions),
+                cancellationToken);
+            if (audioContractViolations.Count > 0)
+            {
+                File.Delete(temporary);
+                return Failure(
+                    "CINEMATIC_CONTRACT_AUDIO_FAILED: " +
+                    string.Join(',', audioContractViolations),
                     request.ClipPaths.Count,
                     skipped,
                     watch.ElapsedMilliseconds);
@@ -889,10 +1021,14 @@ public sealed partial class FfmpegHighlightCompilationService(
                             deltaDb = 0.0
                         }).ToArray(),
                     limiter = true,
-                    targetIntegratedLoudnessLufs = -14.0,
-                    targetTruePeakDb = -1.0,
+                    targetIntegratedLoudnessLufs =
+                        CinematicContractPolicy.TargetIntegratedLoudnessLufs,
+                    targetLoudnessRangeLu =
+                        CinematicContractPolicy.TargetLoudnessRangeLu,
+                    targetTruePeakDb = CinematicContractPolicy.MaximumTruePeakDb,
                     measuredIntegratedLoudnessLufs =
                         loudness?.IntegratedLoudnessLufs,
+                    measuredLoudnessRangeLu = loudness?.LoudnessRangeLu,
                     measuredTruePeakDb = loudness?.TruePeakDb
                 }, JsonOptions),
                 cancellationToken);
@@ -1148,7 +1284,12 @@ public sealed partial class FfmpegHighlightCompilationService(
              "ebur128=peak=true", "-f", "null", "-"],
             cancellationToken);
         if (result.ExitCode != 0)
-            return new LoudnessMeasurement(false, null, null, result.Error.Trim());
+            return new LoudnessMeasurement(
+                false,
+                null,
+                null,
+                null,
+                result.Error.Trim());
         MatchCollection integratedMatches = Regex.Matches(
             result.Error,
             @"I:\s*(-?\d+(?:\.\d+)?)\s+LUFS",
@@ -1157,13 +1298,21 @@ public sealed partial class FfmpegHighlightCompilationService(
             result.Error,
             @"Peak:\s*(-?\d+(?:\.\d+)?)\s+dBFS",
             RegexOptions.CultureInvariant);
+        MatchCollection rangeMatches = Regex.Matches(
+            result.Error,
+            @"LRA:\s*(-?\d+(?:\.\d+)?)\s+LU",
+            RegexOptions.CultureInvariant);
         double? integrated = ParseLast(integratedMatches);
         double? peak = ParseLast(peakMatches);
+        double? range = ParseLast(rangeMatches);
         return new LoudnessMeasurement(
-            integrated is not null,
+            integrated is not null && range is not null && peak is not null,
             integrated,
+            range,
             peak,
-            integrated is null ? "FFmpeg did not emit an integrated loudness summary." : null);
+            integrated is null || range is null || peak is null
+                ? "FFmpeg did not emit a complete loudness summary."
+                : null);
     }
 
     private async Task<FrameContinuityScan> AnalyzeFrameContinuityAsync(
@@ -1453,6 +1602,7 @@ public sealed partial class FfmpegHighlightCompilationService(
     private sealed record LoudnessMeasurement(
         bool Success,
         double? IntegratedLoudnessLufs,
+        double? LoudnessRangeLu,
         double? TruePeakDb,
         string? Error);
 
@@ -1587,6 +1737,19 @@ public static class FfmpegMovieFilterBuilder
             graph.Append(",alimiter=limit=")
                 .Append(Number(Linear(options.OutputTruePeakDb)))
                 .Append(":attack=5:release=50");
+        if (cinematic is not null)
+        {
+            graph.Append(",afade=t=in:st=0:d=0.30");
+            if (outputDuration > 0.5)
+            {
+                double fadeDuration = Math.Min(0.5, outputDuration);
+                double fadeStart = Math.Max(0, outputDuration - fadeDuration);
+                graph.Append(",afade=t=out:st=")
+                    .Append(Number(fadeStart))
+                    .Append(":d=")
+                    .Append(Number(fadeDuration));
+            }
+        }
         graph.Append("[mixed]");
         return graph.ToString();
     }

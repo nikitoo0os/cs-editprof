@@ -187,7 +187,8 @@ public sealed partial class CinematicPlanService(
             MaximumBrollToHighlightRatio = 1.0,
             MaximumIntroSeconds = 4,
             MaximumOutroSeconds = 0.75,
-            MaximumMovieDurationSeconds = 210
+            MaximumMovieDurationSeconds = CinematicContractPolicy
+                .MaximumMovieDurationSeconds
         };
         MovieDurationBudget budget = durationPolicy.Calculate(
             highlights,

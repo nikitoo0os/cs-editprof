@@ -470,6 +470,7 @@ public sealed class CinematicDurationPolicy : ICinematicDurationPolicy
             MovieDurationSelection.Seconds15 => 15,
             MovieDurationSelection.Seconds30 => 30,
             MovieDurationSelection.Seconds45 => 45,
+            MovieDurationSelection.Seconds60 => 60,
             _ => double.MaxValue
         };
 }

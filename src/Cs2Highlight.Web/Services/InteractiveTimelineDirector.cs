@@ -281,24 +281,31 @@ public sealed class InteractiveTimelineDirector(
             {
                 EnsureEditable(plan);
                 double duration = PlanDurationSeconds(plan);
+                double target = ClampMarkerTarget(
+                    request.TargetMusicTimeSeconds,
+                    duration);
+                TimelineMarkerType markerType = request.MarkerType;
+                string? highlightId = request.HighlightId;
+                List<string> warnings = [];
                 if (!double.IsFinite(request.TargetMusicTimeSeconds) ||
-                    request.TargetMusicTimeSeconds < 0 ||
-                    request.TargetMusicTimeSeconds > duration)
+                    Math.Abs(target - request.TargetMusicTimeSeconds) > 0.001)
+                    warnings.Add("MARKER_TIME_AUTO_CLAMPED");
+                if (markerType == TimelineMarkerType.ExactHighlight &&
+                    string.IsNullOrWhiteSpace(highlightId))
                 {
-                    throw new TimelineValidationException(
-                        "MARKER_OUTSIDE_MUSIC_EXCERPT");
+                    markerType = TimelineMarkerType.BestAvailableHighlight;
+                    warnings.Add("MARKER_AUTO_RESOLVED");
                 }
                 plan.Anchors.Add(new GenerationTimelineAnchor
                 {
                     AnchorId = $"anchor-{Guid.NewGuid():N}",
-                    MarkerType = request.MarkerType,
-                    HighlightId = request.MarkerType ==
-                        TimelineMarkerType.ExactHighlight
-                            ? request.HighlightId
-                            : null,
-                    TargetMilliseconds = ToMilliseconds(
-                        request.TargetMusicTimeSeconds),
+                    MarkerType = markerType,
+                    HighlightId = markerType == TimelineMarkerType.ExactHighlight
+                        ? highlightId
+                        : null,
+                    TargetMilliseconds = ToMilliseconds(target),
                     IsLocked = request.IsLocked,
+                    WarningsJson = JsonSerializer.Serialize(warnings, Json),
                     Order = plan.Anchors.Count
                 });
                 return Task.CompletedTask;
@@ -330,14 +337,13 @@ public sealed class InteractiveTimelineDirector(
                 }
                 if (request.TargetMusicTimeSeconds is double target)
                 {
+                    double clamped = ClampMarkerTarget(
+                        target,
+                        PlanDurationSeconds(plan));
+                    anchor.TargetMilliseconds = ToMilliseconds(clamped);
                     if (!double.IsFinite(target) ||
-                        target < 0 ||
-                        target > PlanDurationSeconds(plan))
-                    {
-                        throw new TimelineValidationException(
-                            "MARKER_OUTSIDE_MUSIC_EXCERPT");
-                    }
-                    anchor.TargetMilliseconds = ToMilliseconds(target);
+                        Math.Abs(clamped - target) > 0.001)
+                        AppendAnchorWarning(anchor, "MARKER_TIME_AUTO_CLAMPED");
                 }
                 if (request.MarkerType is TimelineMarkerType markerType)
                 {
@@ -400,7 +406,7 @@ public sealed class InteractiveTimelineDirector(
                 db.GenerationTimelineAnchors.RemoveRange(removable);
                 foreach (GenerationTimelineAnchor anchor in removable)
                     plan.Anchors.Remove(anchor);
-                int desired = Math.Clamp(highlights.Length, 1, 5);
+                int desired = Math.Clamp(highlights.Length, 1, 12);
                 double duration = PlanDurationSeconds(plan);
                 GenerationMusicAnchor[] snapPoints =
                     await db.GenerationMusicAnchors.AsNoTracking()
@@ -471,15 +477,9 @@ public sealed class InteractiveTimelineDirector(
             throw new TimelineNotFoundException("TIMELINE_NOT_FOUND");
         CheckConcurrency(plan, concurrencyToken);
         EnsureEditable(plan);
-        await RecalculateAsync(db, plan, cancellationToken);
+        await AutoRepairMarkersAsync(db, plan, cancellationToken);
         if (plan.Anchors.Count == 0)
             throw new TimelineValidationException("AT_LEAST_ONE_MARKER_REQUIRED");
-        if (plan.Anchors.Any(value =>
-                value.FeasibilityStatus == AnchorFeasibilityStatus.Invalid))
-        {
-            throw new TimelineValidationException(
-                "INVALID_MARKERS_BLOCK_CONFIRMATION");
-        }
         if (plan.Gaps.Any(value =>
                 value.State == TimelineGapState.Failed))
         {
@@ -587,10 +587,9 @@ public sealed class InteractiveTimelineDirector(
         await mutation(plan, db, cancellationToken);
         NormalizeOrder(plan);
         await RecalculateAsync(db, plan, cancellationToken);
-        plan.State = plan.Anchors.Any(value =>
-            value.FeasibilityStatus == AnchorFeasibilityStatus.Invalid)
-                ? TimelinePlanState.Draft
-                : TimelinePlanState.Ready;
+        plan.State = plan.Anchors.Count == 0
+            ? TimelinePlanState.Draft
+            : TimelinePlanState.Ready;
         Touch(plan);
         await CreateRevisionAsync(db, plan, reason, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
@@ -740,6 +739,7 @@ public sealed class InteractiveTimelineDirector(
         {
             GenerationTimelineAnchor anchor = ordered[index];
             List<string> warnings = [];
+            string? requestedHighlightId = anchor.HighlightId;
             GenerationHighlight? highlight = ResolveHighlight(
                 anchor, highlights, assigned);
             if (highlight is null)
@@ -753,6 +753,12 @@ public sealed class InteractiveTimelineDirector(
                 anchor.WarningsJson = JsonSerializer.Serialize(warnings, Json);
                 continue;
             }
+            if (anchor.MarkerType == TimelineMarkerType.ExactHighlight &&
+                !string.Equals(
+                    requestedHighlightId,
+                    highlight.HighlightId,
+                    StringComparison.Ordinal))
+                warnings.Add("MARKER_AUTO_RESOLVED");
             anchor.HighlightId = highlight.HighlightId;
             bool duplicate = !assigned.Add(highlight.HighlightId);
             int tickRate = highlight.TickRate > 0 ? highlight.TickRate : 64;
@@ -831,6 +837,57 @@ public sealed class InteractiveTimelineDirector(
         }
         NormalizeOrder(plan);
         await RebuildGapsAsync(db, plan, cancellationToken);
+    }
+
+    private async Task AutoRepairMarkersAsync(
+        GenerationDbContext db,
+        GenerationTimelinePlan plan,
+        CancellationToken cancellationToken)
+    {
+        List<string> diagnostics = [];
+        int attempts = Math.Max(1, plan.Anchors.Count * 2);
+        for (int attempt = 0; attempt < attempts; attempt++)
+        {
+            await RecalculateAsync(db, plan, cancellationToken);
+            GenerationTimelineAnchor? invalid = plan.Anchors
+                .Where(value =>
+                    value.FeasibilityStatus == AnchorFeasibilityStatus.Invalid &&
+                    !value.IsLocked)
+                .OrderBy(value => value.TargetMilliseconds)
+                .FirstOrDefault();
+            if (invalid is not null)
+            {
+                diagnostics.Add($"MARKER_AUTO_DROPPED:{invalid.AnchorId}");
+                db.GenerationTimelineAnchors.Remove(invalid);
+                plan.Anchors.Remove(invalid);
+                continue;
+            }
+            GenerationTimelineGap? failed = plan.Gaps
+                .Where(value => value.State == TimelineGapState.Failed)
+                .OrderBy(value => value.StartMilliseconds)
+                .FirstOrDefault();
+            if (failed is null)
+                break;
+            string? removableId = failed.NextAnchorId ?? failed.PreviousAnchorId;
+            GenerationTimelineAnchor? removable = removableId is null
+                ? null
+                : plan.Anchors.SingleOrDefault(value =>
+                    value.AnchorId == removableId && !value.IsLocked);
+            if (removable is null)
+                break;
+            diagnostics.Add($"MARKER_AUTO_DROPPED_FOR_REGION:{removable.AnchorId}");
+            db.GenerationTimelineAnchors.Remove(removable);
+            plan.Anchors.Remove(removable);
+        }
+        await RecalculateAsync(db, plan, cancellationToken);
+        if (diagnostics.Count > 0)
+        {
+            Dictionary<string, object?> current =
+                Deserialize<Dictionary<string, object?>>(plan.DiagnosticsJson) ??
+                new(StringComparer.Ordinal);
+            current["markerAutoRepair"] = diagnostics.Distinct().ToArray();
+            plan.DiagnosticsJson = JsonSerializer.Serialize(current, Json);
+        }
     }
 
     private static async Task ApplyCinematicAnchorsAsync(
@@ -1024,7 +1081,7 @@ public sealed class InteractiveTimelineDirector(
         CinematicMoviePlan updated = plan with
         {
             SchemaVersion = "2.0",
-            PlannerVersion = "10.7-local.1",
+            PlannerVersion = "10.8-local.1",
             MusicExcerpt = excerpt,
             TargetDurationSeconds = targetDuration,
             Segments = segments,
@@ -1045,7 +1102,7 @@ public sealed class InteractiveTimelineDirector(
         };
         stored.PlanJson = JsonSerializer.Serialize(updated, Json);
         stored.MusicExcerptJson = JsonSerializer.Serialize(excerpt, Json);
-        stored.PlannerVersion = "10.7-local.1";
+        stored.PlannerVersion = "10.8-local.1";
 
         HashSet<string> selectedBrollIds = segments
             .Where(value => value.BrollCandidateId is not null)
@@ -1893,7 +1950,7 @@ public sealed class InteractiveTimelineDirector(
                 timeline.RevisionCursor + 1,
                 descriptor,
                 settings?.EffectPlannerVersion ?? "7.0"),
-            PlannerVersion = "10.7-local.1",
+            PlannerVersion = "10.8-local.1",
             ReusedSuccessfulPlan = false
         };
         return new LocalRegionBuildResult(localPlan, shortenedEnd);
@@ -2432,7 +2489,7 @@ public sealed class InteractiveTimelineDirector(
             ["local-region-plans.json"] = new
             {
                 schemaVersion = "2.2",
-                plannerVersion = "10.7-local.1",
+                plannerVersion = "10.8-local.1",
                 generationId = generation.PublicId,
                 timelineRevision = plan.RevisionCursor,
                 regions = localRegions
@@ -2796,11 +2853,14 @@ public sealed class InteractiveTimelineDirector(
         IReadOnlyList<GenerationHighlight> highlights,
         HashSet<string> assigned)
     {
-        IEnumerable<GenerationHighlight> candidates = highlights;
+        IEnumerable<GenerationHighlight> candidates = highlights
+            .Where(value => !assigned.Contains(value.HighlightId));
         if (anchor.MarkerType == TimelineMarkerType.ExactHighlight)
         {
-            return highlights.SingleOrDefault(value =>
+            GenerationHighlight? exact = candidates.SingleOrDefault(value =>
                 value.HighlightId == anchor.HighlightId);
+            if (exact is not null)
+                return exact;
         }
         string? category = anchor.MarkerType switch
         {
@@ -2813,18 +2873,38 @@ public sealed class InteractiveTimelineDirector(
         };
         if (category is not null)
         {
-            candidates = candidates.Where(value =>
+            IEnumerable<GenerationHighlight> categoryCandidates = candidates.Where(value =>
                 value.Type.Contains(
                     category,
                     StringComparison.OrdinalIgnoreCase));
+            if (categoryCandidates.Any())
+                candidates = categoryCandidates;
         }
         return candidates
-            .Where(value => !assigned.Contains(value.HighlightId))
             .OrderByDescending(value => value.BeautyScore)
             .ThenByDescending(value => value.TotalScore)
             .ThenBy(value => value.EstimatedDurationMilliseconds)
             .ThenBy(value => value.HighlightId, StringComparer.Ordinal)
             .FirstOrDefault();
+    }
+
+    private static double ClampMarkerTarget(double target, double duration)
+    {
+        double safeDuration = Math.Max(0, duration);
+        if (!double.IsFinite(target))
+            return safeDuration / 2;
+        return Math.Clamp(target, 0, safeDuration);
+    }
+
+    private static void AppendAnchorWarning(
+        GenerationTimelineAnchor anchor,
+        string warning)
+    {
+        List<string> warnings =
+            Deserialize<List<string>>(anchor.WarningsJson) ?? [];
+        if (!warnings.Contains(warning, StringComparer.Ordinal))
+            warnings.Add(warning);
+        anchor.WarningsJson = JsonSerializer.Serialize(warnings, Json);
     }
 
     private static TimelineGapRole GapRole(

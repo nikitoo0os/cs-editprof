@@ -318,8 +318,7 @@ if (root) {
       button.disabled = state.isLocked;
     });
     root.querySelector("[data-timeline-confirm]").disabled =
-      state.isLocked || counts.invalid > 0 || failedGaps.length > 0 ||
-      state.anchors.length === 0;
+      state.isLocked || state.anchors.length === 0;
     if (preserveAnnouncement) return;
     if (state.isLocked) {
       announce("Timeline locked for rendering.", "success");

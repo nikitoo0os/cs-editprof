@@ -1158,7 +1158,9 @@ public sealed partial class GenerationWorker(
                     value.Highlight.Id))
                 .ToArray();
         }
-        if (musicContext is not null && snapshot.EffectPreset != EffectPreset.None)
+        if (musicContext is not null &&
+            (snapshot.EffectPreset != EffectPreset.None ||
+             cinematicPlan is not null))
         {
             capabilities = await GetOrCreateCapabilitiesAsync(
                 publicId,
@@ -1285,7 +1287,8 @@ public sealed partial class GenerationWorker(
             double actualDuration = compilation.DurationMilliseconds / 1000d;
             if (Math.Abs(
                     actualDuration -
-                    cinematicPlan.TargetDurationSeconds) > 0.50)
+                    cinematicPlan.TargetDurationSeconds) >
+                Math.Max(0.05, 2d / Math.Max(1, snapshot.Fps)))
             {
                 await FailAsync(
                     publicId,

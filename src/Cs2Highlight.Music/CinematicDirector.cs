@@ -22,7 +22,7 @@ public sealed class CinematicDirector(
     ICinematicDurationPolicy durationPolicy) : ICinematicDirector
 {
     public const string SchemaVersion = "2.0";
-    public const string PlannerVersion = "10.7";
+    public const string PlannerVersion = "10.8";
 
     public CinematicMoviePlan Create(
         MusicNarrative music,

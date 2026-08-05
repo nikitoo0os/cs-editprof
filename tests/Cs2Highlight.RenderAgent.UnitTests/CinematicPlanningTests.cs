@@ -133,6 +133,20 @@ public sealed class CinematicPlanningTests
     }
 
     [Fact]
+    public void ExplicitSixtySecondDurationUsesTheContractMaximum()
+    {
+        MovieDurationBudget budget = new CinematicDurationPolicy().Calculate(
+            [Highlight("solo", HighlightType.SoloKill, 8, 20)],
+            new MovieDurationOptions
+            {
+                Selection = MovieDurationSelection.Seconds60
+            });
+
+        Assert.Equal(60, budget.MaximumTotalSeconds);
+        Assert.Equal(60, budget.TargetSeconds);
+    }
+
+    [Fact]
     public void ExcerptContainsBuildUpDropAndEnoughPeaks()
     {
         MusicNarrative narrative = ExcerptNarrative();

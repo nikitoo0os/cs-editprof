@@ -89,7 +89,7 @@ public sealed class InteractiveTimelineDirectorTests :
     }
 
     [Fact]
-    public async Task DuplicateHighlightIsInvalidAndBlocksConfirmation()
+    public async Task DuplicateHighlightIsAutomaticallyReassigned()
     {
         InteractiveTimelineView initial =
             await director.GetOrCreateAsync(
@@ -114,17 +114,15 @@ public sealed class InteractiveTimelineDirectorTests :
                     ConcurrencyToken: first.ConcurrencyToken),
                 CancellationToken.None);
 
-        Assert.Contains(
+        Assert.DoesNotContain(
             duplicate.Anchors,
-            value =>
-                value.Feasibility ==
-                AnchorFeasibilityStatus.Invalid &&
-                value.Warnings.Contains("DUPLICATE_HIGHLIGHT"));
-        await Assert.ThrowsAsync<TimelineValidationException>(() =>
-            director.ConfirmAsync(
-                publicId,
-                duplicate.ConcurrencyToken,
-                CancellationToken.None));
+            value => value.Feasibility == AnchorFeasibilityStatus.Invalid);
+        Assert.Equal(
+            ["highlight-triple", "highlight-solo"],
+            duplicate.Anchors.Select(value => value.HighlightId).ToArray());
+        Assert.Contains(
+            duplicate.Anchors[1].Warnings,
+            value => value == "MARKER_AUTO_RESOLVED");
     }
 
     [Fact]

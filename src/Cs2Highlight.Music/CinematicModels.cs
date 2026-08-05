@@ -70,7 +70,8 @@ public enum MovieDurationSelection
     Auto,
     Seconds15,
     Seconds30,
-    Seconds45
+    Seconds45,
+    Seconds60
 }
 
 public enum CinematicEditIntensity
@@ -366,7 +367,18 @@ public sealed record MotivatedEffectDirective(
     MotivatedEffectReason Reason,
     double StartSeconds,
     double EndSeconds,
-    double Intensity);
+    double Intensity)
+{
+    public string Anchor => Reason switch
+    {
+        MotivatedEffectReason.CameraTransition => "camera_transition",
+        MotivatedEffectReason.TimeRamp => "impact",
+        MotivatedEffectReason.FinalKill => "impact",
+        MotivatedEffectReason.SectionChange => "section_change",
+        MotivatedEffectReason.BassImpact => "bass_impact",
+        _ => "music_onset"
+    };
+}
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
 public enum EffectRarityTier
