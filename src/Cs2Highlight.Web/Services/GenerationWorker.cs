@@ -2123,6 +2123,26 @@ public sealed partial class GenerationWorker(
             await AddArtifactAsync(
                 db, generation.Id, ArtifactType.DynamicEffectResult,
                 dynamicEffectResultPath, cancellationToken);
+        string cinematicContractPlanReportPath = Path.Combine(
+            storage.EnsureDirectory(publicId, "output"),
+            "cinematic-contract-plan-report.json");
+        string cinematicContractRenderReportPath = Path.Combine(
+            storage.EnsureDirectory(publicId, "output"),
+            "cinematic-contract-render-report.json");
+        if (File.Exists(cinematicContractPlanReportPath))
+            await AddArtifactAsync(
+                db,
+                generation.Id,
+                ArtifactType.CinematicContractPlanReport,
+                cinematicContractPlanReportPath,
+                cancellationToken);
+        if (File.Exists(cinematicContractRenderReportPath))
+            await AddArtifactAsync(
+                db,
+                generation.Id,
+                ArtifactType.CinematicContractRenderReport,
+                cinematicContractRenderReportPath,
+                cancellationToken);
         if (File.Exists(frameContinuityReportPath))
             await AddArtifactAsync(
                 db, generation.Id, ArtifactType.FrameContinuityReport,
@@ -2231,6 +2251,27 @@ public sealed partial class GenerationWorker(
         generation.ErrorCategory = code.StartsWith("MUSIC_", StringComparison.Ordinal) ? "UserInput" : "Platform";
         generation.UpdatedAt = timeProvider.GetUtcNow();
         metrics.GenerationFailed.Add(1);
+        string outputDirectory = storage.EnsureDirectory(publicId, "output");
+        string contractPlanReport = Path.Combine(
+            outputDirectory,
+            "cinematic-contract-plan-report.json");
+        string contractRenderReport = Path.Combine(
+            outputDirectory,
+            "cinematic-contract-render-report.json");
+        if (File.Exists(contractPlanReport))
+            await AddArtifactAsync(
+                db,
+                generation.Id,
+                ArtifactType.CinematicContractPlanReport,
+                contractPlanReport,
+                cancellationToken);
+        if (File.Exists(contractRenderReport))
+            await AddArtifactAsync(
+                db,
+                generation.Id,
+                ArtifactType.CinematicContractRenderReport,
+                contractRenderReport,
+                cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
         if (refundToken && generation.UserId is not null)
             await tokenService.RefundAsync(

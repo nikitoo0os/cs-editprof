@@ -148,8 +148,9 @@ evidence.
   (about 0.5 seconds), and an intentionally aggressive loudness profile
   (measured at approximately -6.3 LUFS integrated and +1.9 dBTP true peak).
   Those source values are descriptive only; the generated deliverable must
-  use the safer project target of -14 LUFS integrated, LRA 7 LU, and -0.8 dBTP
-  maximum true peak. No final render may clip.
+  use the safer project target of -14 LUFS integrated, LRA no higher than 7 LU,
+  and -0.8 dBTP maximum true peak. A lower measured LRA is valid when the
+  source is dynamically compressed; no final render may clip.
 - `MusicOnset` means a measured beat/transient or section-energy change, not a
   guessed timestamp. The plan stores onset time in source and output time so
   retiming can be verified. A kill accent may lead or trail the onset only
@@ -185,7 +186,7 @@ Before compilation, the locked plan must satisfy all of the following:
 8. no adjacent shots repeat `RgbSplit`, and no cinematic effect stack obscures
    the selected kill or scope proof;
 9. gameplay is restored to full-frame 16:9 after any letterboxed prelude;
-10. final audio measures -14 LUFS integrated, LRA 7 LU and no higher than
+10. final audio measures -14 LUFS integrated, LRA no higher than 7 LU and no higher than
     -0.8 dBTP true peak, with verified start/end fades.
 
 The planner version implementing this contract is `10.8` or newer.

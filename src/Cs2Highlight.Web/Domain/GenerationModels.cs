@@ -52,7 +52,7 @@ public enum ArtifactType
     SourceIntervalReuseReport, EffectRarityReport, TransitionBoundaryReport,
     FrameContinuityReport, MusicGainEnvelope, GameplayAudioEnvelope,
     DemoUiDetectionReport, ExcerptExtensionReport, CinematicAcceptanceReport,
-    CameraOnlyVideo
+    CameraOnlyVideo, CinematicContractPlanReport, CinematicContractRenderReport
 }
 
 public sealed class Generation

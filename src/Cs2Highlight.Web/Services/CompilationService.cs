@@ -911,12 +911,83 @@ public sealed partial class FfmpegHighlightCompilationService(
             }
         }
         IReadOnlyList<string> audioContractViolations = [];
+        bool audioSafetyPassApplied = false;
         if (enforceCinematicContract)
         {
             audioContractViolations = CinematicContractPolicy.ValidateAudio(
                 loudness?.IntegratedLoudnessLufs ?? double.NaN,
                 loudness?.LoudnessRangeLu ?? double.NaN,
                 loudness?.TruePeakDb ?? double.NaN);
+            if (audioContractViolations.Contains(
+                    "AUDIO_INTEGRATED_LOUDNESS_OUT_OF_RANGE",
+                    StringComparer.Ordinal) ||
+                audioContractViolations.Contains(
+                    "AUDIO_TRUE_PEAK_EXCEEDED",
+                    StringComparer.Ordinal))
+            {
+                double measuredLoudness =
+                    loudness?.IntegratedLoudnessLufs ??
+                    CinematicContractPolicy.TargetIntegratedLoudnessLufs;
+                double measuredPeak = loudness?.TruePeakDb ??
+                    CinematicContractPolicy.MaximumTruePeakDb;
+                double requestedGain =
+                    CinematicContractPolicy.TargetIntegratedLoudnessLufs -
+                    measuredLoudness;
+                double peakSafeGain =
+                    CinematicContractPolicy.MaximumTruePeakDb - measuredPeak;
+                double correctionDb = Math.Min(requestedGain, peakSafeGain);
+                if (Math.Abs(correctionDb) >= 0.05)
+                {
+                    string corrected = temporary + ".audio-safe.mp4";
+                    if (File.Exists(corrected))
+                        File.Delete(corrected);
+                    string correction = correctionDb.ToString(
+                        "0.######",
+                        CultureInfo.InvariantCulture);
+                    string limiter = Math.Pow(10, -1.8 / 20d).ToString(
+                        "0.######",
+                        CultureInfo.InvariantCulture);
+                    ProcessResult safetyPass = await RunAsync(
+                        options.FfmpegPath,
+                        [
+                            "-y", "-hide_banner", "-loglevel", "error",
+                            "-i", temporary,
+                            "-map", "0:v:0",
+                            "-map", "0:a:0",
+                            "-af", $"volume={correction}dB,alimiter=limit={limiter}:attack=5:release=50",
+                            "-c:v", "copy",
+                            "-c:a", "aac", "-ar", "48000", "-ac", "2",
+                            "-b:a", "256k", "-t",
+                            finalMetadata.DurationSeconds.ToString(
+                                "0.######",
+                                CultureInfo.InvariantCulture),
+                            "-movflags", "+faststart",
+                            corrected
+                        ],
+                        cancellationToken);
+                    await WriteProcessLogAsync(
+                        Path.Combine(outputDirectory, "audio-safety-pass.ffmpeg.log"),
+                        safetyPass,
+                        cancellationToken);
+                    if (safetyPass.ExitCode == 0 && File.Exists(corrected))
+                    {
+                        File.Move(corrected, temporary, true);
+                        loudness = await MeasureLoudnessAsync(
+                            temporary,
+                            cancellationToken);
+                        audioContractViolations =
+                            CinematicContractPolicy.ValidateAudio(
+                                loudness.IntegratedLoudnessLufs ?? double.NaN,
+                                loudness.LoudnessRangeLu ?? double.NaN,
+                                loudness.TruePeakDb ?? double.NaN);
+                        audioSafetyPassApplied = true;
+                    }
+                    else if (File.Exists(corrected))
+                    {
+                        File.Delete(corrected);
+                    }
+                }
+            }
             bool passed = continuity.IsValid &&
                 audioContractViolations.Count == 0;
             await File.WriteAllTextAsync(
@@ -937,6 +1008,7 @@ public sealed partial class FfmpegHighlightCompilationService(
                         measuredLoudnessRangeLu = loudness?.LoudnessRangeLu,
                         measuredTruePeakDb = loudness?.TruePeakDb,
                         violations = audioContractViolations,
+                        audioSafetyPassApplied,
                         startFadeSeconds = 0.30,
                         endFadeSeconds = 0.50
                     },
@@ -949,9 +1021,19 @@ public sealed partial class FfmpegHighlightCompilationService(
             if (audioContractViolations.Count > 0)
             {
                 File.Delete(temporary);
+                static string Metric(double? value, string unit) =>
+                    value is null
+                        ? "n/a"
+                        : value.Value.ToString("0.00", CultureInfo.InvariantCulture) +
+                          unit;
                 return Failure(
                     "CINEMATIC_CONTRACT_AUDIO_FAILED: " +
-                    string.Join(',', audioContractViolations),
+                    string.Join(',', audioContractViolations) +
+                    "; measured integrated=" +
+                    Metric(loudness?.IntegratedLoudnessLufs, " LUFS") +
+                    ", LRA=" + Metric(loudness?.LoudnessRangeLu, " LU") +
+                    ", truePeak=" + Metric(loudness?.TruePeakDb, " dBTP") +
+                    "; report=output/cinematic-contract-render-report.json",
                     request.ClipPaths.Count,
                     skipped,
                     watch.ElapsedMilliseconds);

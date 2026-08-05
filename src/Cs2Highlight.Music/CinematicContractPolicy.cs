@@ -187,7 +187,7 @@ public static class CinematicContractPolicy
             Math.Abs(integratedLoudnessLufs - TargetIntegratedLoudnessLufs) > 0.5)
             violations.Add("AUDIO_INTEGRATED_LOUDNESS_OUT_OF_RANGE");
         if (!double.IsFinite(loudnessRangeLu) ||
-            Math.Abs(loudnessRangeLu - TargetLoudnessRangeLu) > 1.5)
+            loudnessRangeLu > TargetLoudnessRangeLu + 0.5)
             violations.Add("AUDIO_LOUDNESS_RANGE_OUT_OF_RANGE");
         if (!double.IsFinite(truePeakDb) ||
             truePeakDb > MaximumTruePeakDb + 0.05)
