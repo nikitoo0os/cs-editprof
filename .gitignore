@@ -5,6 +5,7 @@ TestResults/
 artifacts/
 node_modules/
 src/Cs2Highlight.Web/storage/
+storage/
 appsettings.local.json
 *.user
 *.suo

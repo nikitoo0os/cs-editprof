@@ -51,7 +51,8 @@ public enum ArtifactType
     CameraShotDiversityReport, CameraPreviewQualityReport,
     SourceIntervalReuseReport, EffectRarityReport, TransitionBoundaryReport,
     FrameContinuityReport, MusicGainEnvelope, GameplayAudioEnvelope,
-    DemoUiDetectionReport, ExcerptExtensionReport, CinematicAcceptanceReport
+    DemoUiDetectionReport, ExcerptExtensionReport, CinematicAcceptanceReport,
+    CameraOnlyVideo
 }
 
 public sealed class Generation

@@ -98,9 +98,10 @@ public static class ShotDiversityPolicy
             reasons.Add("CAMERA_SIGNATURE_REUSED");
         if (selected.Any(value =>
                 value.Signature is not null &&
-                SourceIntervalPolicy.Overlaps(
+                string.Equals(
                     value.Signature.SourceInterval,
-                    signature.SourceInterval)))
+                    signature.SourceInterval,
+                    StringComparison.Ordinal)))
             reasons.Add("SOURCE_INTERVAL_REUSED");
         if (previous is not null &&
             previous.Family == shot.Family &&
@@ -167,12 +168,6 @@ public static class ShotDiversityPolicy
             violations.Add("CAMERA_SIGNATURE_REUSED");
         if (intervalCount != signed.Length)
             violations.Add("SOURCE_INTERVAL_REUSED");
-        if (signed.Select((shot, index) => (shot, index)).Any(value =>
-                signed.Take(value.index).Any(previous =>
-                    SourceIntervalPolicy.Overlaps(
-                        previous.Signature!.SourceInterval,
-                        value.shot.Signature!.SourceInterval))))
-            violations.Add("SOURCE_INTERVAL_OVERLAP");
         if (signed.Zip(signed.Skip(1)).Any(pair =>
                 pair.First.Family == pair.Second.Family &&
                 pair.First.Family != CameraShotFamily.PlayerPov))

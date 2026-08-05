@@ -20,6 +20,7 @@ public sealed class MusicModel(
     ICinematicPlanService cinematicPlans,
     IEffectSeedProvider effectSeedProvider,
     TrustedLutCatalog trustedLuts,
+    IInteractiveTimelineDirector timelineDirector,
     GenerationWakeSignal queue,
     TimeProvider timeProvider,
     IWebHostEnvironment environment) : PageModel
@@ -44,7 +45,7 @@ public sealed class MusicModel(
 
     [BindProperty] public IFormFile? MusicFile { get; set; }
     [BindProperty] public bool RightsConfirmed { get; set; }
-    [BindProperty] public MovieStyle MovieStyle { get; set; } = MovieStyle.Dynamic;
+    [BindProperty] public MovieStyle MovieStyle { get; set; } = MovieStyle.Clean;
     [BindProperty] public MusicSyncIntensity SyncIntensity { get; set; } = MusicSyncIntensity.Aggressive;
     [BindProperty] public EffectIntensity EffectIntensity { get; set; } = EffectIntensity.Balanced;
     [BindProperty] public List<string> EnabledEffectGroups { get; set; } =
@@ -132,6 +133,8 @@ public sealed class MusicModel(
     {
         if (!await CanReadAsync(publicId, cancellationToken)) return NotFound();
         if (GameplayGainPercent is < 0 or > 100 || MusicGainPercent is < 0 or > 100)
+            return BadRequest();
+        if (MovieStyle is not (MovieStyle.Clean or MovieStyle.CinematicDirector))
             return BadRequest();
         if (EnabledEffectGroups.Any(value => !DynamicEffectGroups.All.Contains(value)))
             return BadRequest();
@@ -249,8 +252,45 @@ public sealed class MusicModel(
             generation.ProgressPercent = Math.Max(
                 generation.ProgressPercent,
                 35);
+            if (MovieStyle == MovieStyle.Clean)
+            {
+                int tokenBalance = await db.Users
+                    .Where(value => value.Id == generation.UserId)
+                    .Select(value => value.TokenBalance)
+                    .SingleAsync(cancellationToken);
+                int activeTokenCommitments = await db.Generations.CountAsync(
+                    value =>
+                        value.UserId == generation.UserId &&
+                        value.Id != generation.Id &&
+                        value.PaymentStatus == PaymentStatus.Succeeded &&
+                        value.Status != GenerationStatus.Completed &&
+                        value.Status != GenerationStatus.CompletedWithWarnings &&
+                        value.Status != GenerationStatus.Failed &&
+                        value.Status != GenerationStatus.Cancelled &&
+                        value.Status != GenerationStatus.Expired,
+                    cancellationToken);
+                if (tokenBalance <= activeTokenCommitments)
+                    throw new InvalidOperationException(
+                        "TOKEN_BALANCE_INSUFFICIENT");
+                generation.PaymentStatus = PaymentStatus.Succeeded;
+                generation.PaidAt = now;
+                generation.QueueEnteredAtUtc = now;
+                await timelineDirector.LockAfterPaymentAsync(
+                    generation.Id,
+                    now,
+                    db,
+                    cancellationToken);
+                GenerationStateMachine.Transition(
+                    generation, GenerationStatus.PaymentProcessing, now);
+                GenerationStateMachine.Transition(
+                    generation, GenerationStatus.Paid, now);
+                GenerationStateMachine.Transition(
+                    generation, GenerationStatus.QueuedForGeneration, now);
+            }
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
+            if (MovieStyle == MovieStyle.Clean)
+                queue.Wake();
         }
         catch (InvalidOperationException exception)
         {
@@ -264,6 +304,15 @@ public sealed class MusicModel(
             resetGeneration.CurrentStage =
                 GenerationStatus.AwaitingMovieConfiguration.ToString();
             resetGeneration.UpdatedAt = now;
+            db.GenerationEvents.Add(new GenerationEvent
+            {
+                GenerationId = resetGeneration.Id,
+                Level = "Warning",
+                Stage = "MoviePlanRejected",
+                Message = exception.Message,
+                ProgressPercent = resetGeneration.ProgressPercent,
+                CreatedAt = now
+            });
             await db.SaveChangesAsync(cancellationToken);
             EnableHighlightSelectionReturn(exception.Message);
             string errorMessage = UiText.Error(exception.Message);
@@ -285,7 +334,7 @@ public sealed class MusicModel(
         }
         return MovieStyle == MovieStyle.CinematicDirector
             ? RedirectToPage("/Timeline", new { publicId })
-            : RedirectToPage("/Checkout", new { publicId });
+            : RedirectToPage("/Generation", new { publicId });
     }
 
     public async Task<IActionResult> OnPostReturnToHighlightsAsync(

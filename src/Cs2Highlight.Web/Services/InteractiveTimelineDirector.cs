@@ -156,7 +156,8 @@ public sealed class InteractiveTimelineDirector(
     IDbContextFactory<GenerationDbContext> dbFactory,
     TimeProvider timeProvider,
     InteractiveRetimingOptions retimingOptions,
-    GenerationStorage storage) : IInteractiveTimelineDirector
+    GenerationStorage storage,
+    GenerationWakeSignal queue) : IInteractiveTimelineDirector
 {
     private static readonly JsonSerializerOptions Json =
         new(JsonSerializerDefaults.Web);
@@ -177,6 +178,16 @@ public sealed class InteractiveTimelineDirector(
         GenerationTimelinePlan plan = await LoadPlanAsync(
             db, generation.Id, tracking: true, cancellationToken) ??
             await CreatePlanAsync(db, generation, cancellationToken);
+        bool localPlannerUpgradeRequired = plan.LockedAt is null &&
+            plan.Gaps.Any(value =>
+                Deserialize<LocalTimelineRegionPlan>(value.PlanJson)?
+                    .SchemaVersion != "2.2");
+        if (localPlannerUpgradeRequired)
+        {
+            await RecalculateAsync(db, plan, cancellationToken);
+            Touch(plan);
+            await db.SaveChangesAsync(cancellationToken);
+        }
         return await BuildViewAsync(db, generation, plan, cancellationToken);
     }
 
@@ -490,7 +501,41 @@ public sealed class InteractiveTimelineDirector(
             generation,
             plan,
             cancellationToken);
+        int tokenBalance = await db.Users
+            .Where(value => value.Id == generation.UserId)
+            .Select(value => value.TokenBalance)
+            .SingleAsync(cancellationToken);
+        int activeTokenCommitments = await db.Generations.CountAsync(
+            value =>
+                value.UserId == generation.UserId &&
+                value.Id != generation.Id &&
+                value.PaymentStatus == PaymentStatus.Succeeded &&
+                value.Status != GenerationStatus.Completed &&
+                value.Status != GenerationStatus.CompletedWithWarnings &&
+                value.Status != GenerationStatus.Failed &&
+                value.Status != GenerationStatus.Cancelled &&
+                value.Status != GenerationStatus.Expired,
+            cancellationToken);
+        if (tokenBalance <= activeTokenCommitments)
+            throw new TimelineValidationException(
+                "TOKEN_BALANCE_INSUFFICIENT");
+        DateTimeOffset now = timeProvider.GetUtcNow();
+        generation.PaymentStatus = PaymentStatus.Succeeded;
+        generation.PaidAt = now;
+        generation.QueueEnteredAtUtc = now;
+        GenerationStateMachine.Transition(
+            generation, GenerationStatus.PaymentProcessing, now);
+        GenerationStateMachine.Transition(
+            generation, GenerationStatus.Paid, now);
+        GenerationStateMachine.Transition(
+            generation, GenerationStatus.QueuedForGeneration, now);
+        await LockAfterPaymentAsync(
+            generation.Id,
+            now,
+            db,
+            cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
+        queue.Wake();
         return await BuildViewAsync(db, generation, plan, cancellationToken);
     }
 
@@ -500,6 +545,11 @@ public sealed class InteractiveTimelineDirector(
         GenerationDbContext db,
         CancellationToken cancellationToken)
     {
+        GenerationMovieSettings settings =
+            await db.GenerationMovieSettings.SingleAsync(
+                value => value.GenerationId == generationId,
+                cancellationToken);
+        settings.LockedAt ??= now;
         GenerationTimelinePlan? plan =
             await db.GenerationTimelinePlans.SingleOrDefaultAsync(
                 value => value.GenerationId == generationId,
@@ -857,7 +907,10 @@ public sealed class InteractiveTimelineDirector(
                 double start = broll.OutputStartMilliseconds / 1000d;
                 double end = broll.OutputEndMilliseconds / 1000d;
                 if (end - start <
-                    (broll.IsFreeCamera ? 0.75 : 0.40) - 0.0001)
+                    (broll.IsFreeCamera
+                        ? MeaningfulGapPolicy.MinimumFreeCameraShotSeconds
+                        : MeaningfulGapPolicy.MinimumOrdinaryShotSeconds) -
+                    0.0001)
                 {
                     throw new TimelineValidationException(
                         "LOCAL_REGION_SHOT_TOO_SHORT");
@@ -878,7 +931,7 @@ public sealed class InteractiveTimelineDirector(
                             ? null
                             : broll.MaterialId,
                     Camera = camera,
-                    TimeWarp = new TimeWarpPlan(1, [], false, []),
+                    TimeWarp = BrollRetiming(camera, start, end),
                     Effects = []
                 });
             }
@@ -971,7 +1024,7 @@ public sealed class InteractiveTimelineDirector(
         CinematicMoviePlan updated = plan with
         {
             SchemaVersion = "2.0",
-            PlannerVersion = "10.1-local.1",
+            PlannerVersion = "10.7-local.1",
             MusicExcerpt = excerpt,
             TargetDurationSeconds = targetDuration,
             Segments = segments,
@@ -992,7 +1045,7 @@ public sealed class InteractiveTimelineDirector(
         };
         stored.PlanJson = JsonSerializer.Serialize(updated, Json);
         stored.MusicExcerptJson = JsonSerializer.Serialize(excerpt, Json);
-        stored.PlannerVersion = "10.1-local.1";
+        stored.PlannerVersion = "10.7-local.1";
 
         HashSet<string> selectedBrollIds = segments
             .Where(value => value.BrollCandidateId is not null)
@@ -1068,6 +1121,24 @@ public sealed class InteractiveTimelineDirector(
         }
     }
 
+    private static TimeWarpPlan BrollRetiming(
+        CameraShotPlan camera,
+        double outputStartSeconds,
+        double outputEndSeconds)
+    {
+        double outputDuration = Math.Max(
+            0.001,
+            outputEndSeconds - outputStartSeconds);
+        double speed = camera.TargetDurationSeconds / outputDuration;
+        if (Math.Abs(speed - 1) <= 0.0005)
+            return new TimeWarpPlan(1, [], false, []);
+        return new TimeWarpPlan(
+            speed,
+            [],
+            false,
+            ["FREECAM_GAP_ABSORPTION_RETIMING"]);
+    }
+
     public static CinematicSequenceSegment[] NormalizeCinematicContinuity(
         IReadOnlyList<CinematicSequenceSegment> source,
         Dictionary<string, LocalHighlightSegmentPlan> localByHighlight,
@@ -1075,7 +1146,8 @@ public sealed class InteractiveTimelineDirector(
         double targetDuration)
     {
         const double tolerance = 0.001;
-        const double maximumAbsorbableGap = 0.40;
+        const double maximumAbsorbableGap =
+            MeaningfulGapPolicy.MinimumFreeCameraShotSeconds;
         CinematicSequenceSegment[] segments = source
             .OrderBy(value => value.OutputStartSeconds)
             .ThenBy(value => value.Id, StringComparer.Ordinal)
@@ -1130,9 +1202,29 @@ public sealed class InteractiveTimelineDirector(
                 throw new TimelineValidationException(
                     "CINEMATIC_TIMELINE_DISCONTINUITY");
             }
-            segments[^1] = segments[^1] with
+            CinematicSequenceSegment last = segments[^1];
+            double originalDuration = Math.Max(
+                0.001,
+                last.OutputEndSeconds - last.OutputStartSeconds);
+            double extendedDuration = Math.Max(
+                0.001,
+                targetDuration - last.OutputStartSeconds);
+            double extensionSpeed = originalDuration / extendedDuration;
+            if (last.HighlightId is null && extensionSpeed < 0.72)
             {
-                OutputEndSeconds = targetDuration
+                throw new TimelineValidationException(
+                    "CINEMATIC_TIMELINE_DISCONTINUITY");
+            }
+            segments[^1] = last with
+            {
+                OutputEndSeconds = targetDuration,
+                TimeWarp = last.HighlightId is null
+                    ? new TimeWarpPlan(
+                        extensionSpeed,
+                        [],
+                        false,
+                        ["OUTRO_FREECAM_DURATION_ABSORPTION"])
+                    : last.TimeWarp
             };
         }
 
@@ -1374,6 +1466,26 @@ public sealed class InteractiveTimelineDirector(
                         .Camera,
                     StringComparer.Ordinal) ??
             new Dictionary<string, CameraShotPlan>(StringComparer.Ordinal);
+        Dictionary<string, (long Start, long End)> plannedBrollWindows =
+            cinematicPlan?.Segments
+                .Where(value => value.BrollCandidateId is not null)
+                .GroupBy(
+                    value => value.BrollCandidateId!,
+                    StringComparer.Ordinal)
+                .ToDictionary(
+                    value => value.Key,
+                    value =>
+                    {
+                        CinematicSequenceSegment segment = value
+                            .OrderBy(item => item.OutputStartSeconds)
+                            .First();
+                        return (
+                            ToMilliseconds(segment.OutputStartSeconds),
+                            ToMilliseconds(segment.OutputEndSeconds));
+                    },
+                    StringComparer.Ordinal) ??
+            new Dictionary<string, (long Start, long End)>(
+                StringComparer.Ordinal);
         GenerationMovieSettings? settings =
             await db.GenerationMovieSettings.AsNoTracking()
                 .SingleOrDefaultAsync(
@@ -1400,7 +1512,7 @@ public sealed class InteractiveTimelineDirector(
                 continue;
             LocalTimelineRegionPlan? parsed =
                 Deserialize<LocalTimelineRegionPlan>(gap.PlanJson);
-            if (parsed is null || parsed.SchemaVersion != "2.0" ||
+            if (parsed is null || parsed.SchemaVersion != "2.2" ||
                 !parsed.Validation.IsValid)
                 continue;
             reusable[descriptor.Id] = parsed;
@@ -1433,6 +1545,7 @@ public sealed class InteractiveTimelineDirector(
                 candidateRowIds,
                 shotsByCandidate,
                 cameraPrototypes,
+                plannedBrollWindows,
                 demosById,
                 generation,
                 settings,
@@ -1509,7 +1622,8 @@ public sealed class InteractiveTimelineDirector(
         IReadOnlyDictionary<string, GenerationHighlight> highlights,
         Dictionary<string, long> candidateRowIds,
         Dictionary<long, GenerationCameraShot> shotsByCandidate,
-        IReadOnlyDictionary<string, CameraShotPlan> cameraPrototypes,
+        Dictionary<string, CameraShotPlan> cameraPrototypes,
+        Dictionary<string, (long Start, long End)> plannedBrollWindows,
         Dictionary<long, GenerationDemo> demos,
         Generation generation,
         GenerationMovieSettings? settings,
@@ -1529,16 +1643,68 @@ public sealed class InteractiveTimelineDirector(
         long cursor = descriptor.StartMilliseconds;
         long end = descriptor.EndMilliseconds;
         long? shortenedEnd = null;
+        GapMaterialCandidate[] freeCameraCandidates = candidates
+            .Where(candidate =>
+                candidate.DurationSeconds >=
+                    MeaningfulGapPolicy.MinimumFreeCameraShotSeconds &&
+                candidateRowIds.TryGetValue(candidate.Id, out long rowId) &&
+                shotsByCandidate.TryGetValue(rowId, out GenerationCameraShot? shot) &&
+                shot.Type != CameraShotType.PlayerPov &&
+                shot.PreviewStatus is CameraPreviewStatus.NotAttempted or
+                    CameraPreviewStatus.Passed &&
+                cameraPrototypes.TryGetValue(
+                    candidate.Id,
+                    out CameraShotPlan? prototype) &&
+                prototype.Family != CameraShotFamily.PlayerPov &&
+                prototype.Keyframes.Count > 0 &&
+                prototype.SafetyVolume is not null)
+            .ToArray();
         while (end - cursor >= 180)
         {
             double available = (end - cursor) / 1000d;
+            GapMaterialCandidate[] plannedForRegion = freeCameraCandidates
+                .Where(candidate =>
+                    !usedSourceIntervals.Contains(candidate.SourceInterval) &&
+                    plannedBrollWindows.TryGetValue(
+                        candidate.Id,
+                        out (long Start, long End) window) &&
+                    window.End > cursor &&
+                    window.Start < end)
+                .ToArray();
             GapMaterialDecision decision = MeaningfulGapPolicy.Select(
-                candidates,
+                plannedForRegion.Length > 0
+                    ? plannedForRegion
+                    : freeCameraCandidates,
                 previous,
                 next,
                 descriptor.Role,
                 available,
                 usedSourceIntervals);
+            if (decision.UsePovContinuity)
+            {
+                decision = decision with
+                {
+                    Outcome = LocalRegionOutcome.Invalid,
+                    UsePovContinuity = false,
+                    Warnings = decision.Warnings.Concat(
+                        ["CINEMATIC_BROLL_POV_FORBIDDEN"])
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray()
+                };
+            }
+            if (decision.ShortenExcerpt &&
+                settings?.CinematicDuration != MovieDurationSelection.Auto)
+            {
+                decision = decision with
+                {
+                    Outcome = LocalRegionOutcome.Invalid,
+                    ShortenExcerpt = false,
+                    Warnings = decision.Warnings.Concat(
+                        ["EXPLICIT_DURATION_CANNOT_BE_SHORTENED"])
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray()
+                };
+            }
             warnings.AddRange(decision.Warnings);
             if (decision.Candidate is not null)
             {
@@ -1546,7 +1712,8 @@ public sealed class InteractiveTimelineDirector(
                 long duration = Math.Min(
                     end - cursor,
                     ToMilliseconds(candidate.DurationSeconds));
-                if (duration < 400)
+                if (duration < ToMilliseconds(
+                        MeaningfulGapPolicy.MinimumFreeCameraShotSeconds))
                     break;
                 GenerationCameraShot? storedShot = null;
                 CameraPreviewStatus? previewStatus = null;
@@ -1571,13 +1738,12 @@ public sealed class InteractiveTimelineDirector(
                             ? demo.MapName ?? string.Empty
                             : string.Empty,
                     duration / 1000d);
-                if (camera.Family == CameraShotFamily.PlayerPov &&
-                    storedShot?.Type != CameraShotType.PlayerPov)
+                if (camera.Family == CameraShotFamily.PlayerPov ||
+                    camera.Type == CameraShotType.PlayerPov)
                 {
-                    outcome = MoreSevere(
-                        outcome,
-                        LocalRegionOutcome.CameraFallback);
-                    warnings.Add("CAMERA_PREVIEW_REQUIRED_POV_FALLBACK");
+                    outcome = LocalRegionOutcome.Invalid;
+                    warnings.Add("CINEMATIC_BROLL_POV_FORBIDDEN");
+                    break;
                 }
                 materials.Add(new LocalSourceMaterial
                 {
@@ -1607,39 +1773,7 @@ public sealed class InteractiveTimelineDirector(
                 continue;
             }
             outcome = MoreSevere(outcome, decision.Outcome);
-            if (decision.UsePovContinuity)
-            {
-                (LocalSourceMaterial? material, CameraShotPlan? camera) =
-                    CreatePovContinuity(
-                        previous,
-                        next,
-                        cursor,
-                        end,
-                        generation.SelectedSteamId,
-                        usedSourceIntervals);
-                if (material is not null && camera is not null)
-                {
-                    materials.Add(material);
-                    broll.Add(new LocalBrollSegmentPlan
-                    {
-                        MaterialId = material.MaterialId,
-                        SourceInterval = material.SourceInterval,
-                        OutputStartMilliseconds = cursor,
-                        OutputEndMilliseconds = end,
-                        NarrativeRole = material.Rationale,
-                        IsFreeCamera = false
-                    });
-                    cameras.Add(camera);
-                    usedSourceIntervals.Add(material.SourceInterval);
-                }
-                else
-                {
-                    outcome = LocalRegionOutcome.Invalid;
-                    warnings.Add("POV_CONTINUITY_SOURCE_REUSED");
-                }
-                cursor = end;
-            }
-            else if (decision.ShortenExcerpt)
+            if (decision.ShortenExcerpt)
             {
                 shortenedEnd = cursor;
                 end = cursor;
@@ -1647,13 +1781,41 @@ public sealed class InteractiveTimelineDirector(
             break;
         }
         bool absorbIncomingGap = false;
-        if (end - cursor is > 0 and < 400)
+        if (end - cursor is > 0 and < 1500)
         {
             outcome = MoreSevere(outcome, LocalRegionOutcome.Retiming);
             warnings.Add("SHORT_GAP_RETIMING_REQUIRED");
+            if (descriptor.Next is not null &&
+                broll.Count > 0 &&
+                cameras.Count > 0)
+            {
+                int lastIndex = broll.Count - 1;
+                LocalBrollSegmentPlan lastBroll = broll[lastIndex];
+                CameraShotPlan lastCamera = cameras[lastIndex];
+                long currentDuration = Math.Max(
+                    1,
+                    lastBroll.OutputEndMilliseconds -
+                    lastBroll.OutputStartMilliseconds);
+                long maximumDuration = ToMilliseconds(
+                    lastCamera.TargetDurationSeconds / 0.72);
+                long extension = Math.Min(
+                    end - cursor,
+                    Math.Max(0, maximumDuration - currentDuration));
+                if (extension > 0)
+                {
+                    broll[lastIndex] = lastBroll with
+                    {
+                        OutputEndMilliseconds =
+                            lastBroll.OutputEndMilliseconds + extension
+                    };
+                    cursor += extension;
+                    warnings.Add(
+                        "SHORT_GAP_ABSORBED_BY_FREECAM_RETIMING");
+                }
+            }
             absorbIncomingGap = descriptor.Next is not null;
         }
-        if (end - cursor >= 400 && shortenedEnd is null)
+        if (end - cursor >= 1500 && shortenedEnd is null)
         {
             outcome = LocalRegionOutcome.Invalid;
             warnings.Add("REGION_HAS_UNFILLED_DURATION");
@@ -1681,7 +1843,7 @@ public sealed class InteractiveTimelineDirector(
                 : "anchor-local speed policy");
         LocalTimelineRegionPlan localPlan = new()
         {
-            SchemaVersion = "2.0",
+            SchemaVersion = "2.2",
             RegionId = descriptor.Id,
             PreviousAnchorId = descriptor.Previous?.AnchorId,
             NextAnchorId = descriptor.Next?.AnchorId,
@@ -1731,7 +1893,7 @@ public sealed class InteractiveTimelineDirector(
                 timeline.RevisionCursor + 1,
                 descriptor,
                 settings?.EffectPlannerVersion ?? "7.0"),
-            PlannerVersion = "10.1-local.1",
+            PlannerVersion = "10.7-local.1",
             ReusedSuccessfulPlan = false
         };
         return new LocalRegionBuildResult(localPlan, shortenedEnd);
@@ -1837,6 +1999,23 @@ public sealed class InteractiveTimelineDirector(
             family = CameraShotFamily.PlayerPov;
             keyframes = [];
         }
+        else
+        {
+            double sourceDuration = Math.Max(
+                0.001,
+                prototype?.TargetDurationSeconds ??
+                keyframes.Max(value => value.TimeSeconds));
+            keyframes = keyframes
+                .OrderBy(value => value.TimeSeconds)
+                .Select(value => value with
+                {
+                    TimeSeconds = Math.Clamp(
+                        value.TimeSeconds / sourceDuration * durationSeconds,
+                        0,
+                        durationSeconds)
+                })
+                .ToArray();
+        }
         CameraShotType type = validFreeCamera
             ? stored!.Type
             : CameraShotType.PlayerPov;
@@ -1854,7 +2033,10 @@ public sealed class InteractiveTimelineDirector(
             TargetDurationSeconds = durationSeconds,
             Keyframes = keyframes,
             TargetPoints = validFreeCamera
-                ? prototype?.TargetPoints ?? []
+                ? ScaleTargetPoints(
+                    prototype?.TargetPoints ?? [],
+                    prototype?.TargetDurationSeconds ?? durationSeconds,
+                    durationSeconds)
                 : [],
             FovCurve = keyframes.Select(value =>
                 new CameraFovPoint(value.TimeSeconds, value.Fov)).ToArray(),
@@ -1887,6 +2069,8 @@ public sealed class InteractiveTimelineDirector(
             VerifiedPresetId = validFreeCamera
                 ? prototype?.VerifiedPresetId
                 : null,
+            AutomaticCalibration = validFreeCamera &&
+                prototype?.AutomaticCalibration == true,
             Warnings = validFreeCamera
                 ? previewStatus == CameraPreviewStatus.Passed
                     ? []
@@ -1894,6 +2078,21 @@ public sealed class InteractiveTimelineDirector(
                 : ["CAMERA_PREVIEW_REQUIRED_POV_FALLBACK"]
         };
         return CameraShotSignatureBuilder.Attach(plan, mapName);
+    }
+
+    private static CameraTargetPoint[] ScaleTargetPoints(
+        IReadOnlyList<CameraTargetPoint> points,
+        double sourceDurationSeconds,
+        double targetDurationSeconds)
+    {
+        double sourceDuration = Math.Max(0.001, sourceDurationSeconds);
+        return points.Select(value => value with
+        {
+            TimeSeconds = Math.Clamp(
+                value.TimeSeconds / sourceDuration * targetDurationSeconds,
+                0,
+                targetDurationSeconds)
+        }).ToArray();
     }
 
     private static CameraShotFamily CameraFamily(CameraShotType type) =>
@@ -2161,9 +2360,10 @@ public sealed class InteractiveTimelineDirector(
             .Select((value, index) => new { value, index })
             .Where(current => sourceIntervals
                 .Take(current.index)
-                .Any(previous => SourceIntervalPolicy.Overlaps(
+                .Any(previous => string.Equals(
                     previous,
-                    current.value)))
+                    current.value,
+                    StringComparison.Ordinal)))
             .Select(value => value.value)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(value => value, StringComparer.Ordinal)
@@ -2231,8 +2431,8 @@ public sealed class InteractiveTimelineDirector(
             }).ToArray(),
             ["local-region-plans.json"] = new
             {
-                schemaVersion = "2.0",
-                plannerVersion = "10.1-local.1",
+                schemaVersion = "2.2",
+                plannerVersion = "10.7-local.1",
                 generationId = generation.PublicId,
                 timelineRevision = plan.RevisionCursor,
                 regions = localRegions

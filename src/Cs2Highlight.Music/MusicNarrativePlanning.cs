@@ -433,6 +433,18 @@ public sealed class CinematicDurationPolicy : ICinematicDurationPolicy
             0,
             value.Bounds.PlannedEndSeconds -
             value.Bounds.PlannedStartSeconds));
+        if (options.Selection != MovieDurationSelection.Auto)
+        {
+            double requested = Math.Min(
+                options.MaximumMovieDurationSeconds,
+                SelectionLimit(options.Selection));
+            double fixedTarget = Math.Max(highlightDuration, requested);
+            return new MovieDurationBudget(
+                highlightDuration,
+                Math.Max(0, fixedTarget - highlightDuration),
+                fixedTarget,
+                fixedTarget);
+        }
         double broll = highlightDuration * options.MaximumBrollToHighlightRatio;
         double maximum = options.MaximumMovieDurationSeconds;
         if (highlightDuration < options.ShortHighlightThresholdSeconds)
@@ -441,10 +453,9 @@ public sealed class CinematicDurationPolicy : ICinematicDurationPolicy
                 options.MaximumShortMovieDurationSeconds,
                 highlightDuration + broll);
         }
-        maximum = Math.Min(maximum, SelectionLimit(options.Selection));
-        double target = options.Selection == MovieDurationSelection.Auto
-            ? Math.Min(maximum, highlightDuration + Math.Min(broll, 10))
-            : maximum;
+        double target = Math.Min(
+            maximum,
+            highlightDuration + Math.Min(broll, 10));
         target = Math.Max(highlightDuration, target);
         return new MovieDurationBudget(
             highlightDuration,
@@ -499,7 +510,11 @@ public sealed class MusicExcerptSelector(
             .ThenBy(value => value.Start)
             .ThenBy(value => value.End)
             .ToArray();
-        Candidate? selected = candidates.FirstOrDefault(value => value.Valid);
+        bool FixedDuration(Candidate value) =>
+            durationOptions.Selection == MovieDurationSelection.Auto ||
+            Math.Abs(value.End - value.Start - budget.TargetSeconds) <= 0.05;
+        Candidate? selected = candidates.FirstOrDefault(value =>
+            value.Valid && FixedDuration(value));
         if (selected is null)
         {
             selected = BuildCandidates(
@@ -511,13 +526,14 @@ public sealed class MusicExcerptSelector(
                     narrative,
                     budget,
                     requiredPeaks))
-                .Where(value => value.Valid)
+                .Where(value => value.Valid && FixedDuration(value))
                 .OrderByDescending(value => value.Score)
                 .ThenBy(value => value.Start)
                 .ThenBy(value => value.End)
                 .FirstOrDefault();
         }
-        selected ??= candidates.FirstOrDefault();
+        if (durationOptions.Selection == MovieDurationSelection.Auto)
+            selected ??= candidates.FirstOrDefault();
         if (selected is null)
         {
             double end = Math.Min(

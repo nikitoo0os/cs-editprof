@@ -1,3 +1,6 @@
+using System.Net;
+using System.Net.Mail;
+using System.Text.Encodings.Web;
 using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
 using Microsoft.EntityFrameworkCore;
@@ -13,12 +16,51 @@ public sealed partial class DevelopmentEmailSender(ILogger<DevelopmentEmailSende
 {
     public Task SendAsync(string email, string subject, string htmlMessage, CancellationToken cancellationToken = default)
     {
-        LogDevelopmentEmail(logger, email, subject);
+        LogDevelopmentEmail(logger, email, subject, htmlMessage);
         return Task.CompletedTask;
     }
 
-    [LoggerMessage(EventId = 4201, Level = LogLevel.Information, Message = "Development email queued for {Email}: {Subject}")]
-    private static partial void LogDevelopmentEmail(ILogger logger, string email, string subject);
+    [LoggerMessage(EventId = 4201, Level = LogLevel.Information, Message = "Development email for {Email}: {Subject}. Open: {Message}")]
+    private static partial void LogDevelopmentEmail(ILogger logger, string email, string subject, string message);
+}
+
+public sealed class SmtpEmailSender(IConfiguration configuration) : IEmailSender
+{
+    public async Task SendAsync(
+        string email,
+        string subject,
+        string htmlMessage,
+        CancellationToken cancellationToken = default)
+    {
+        IConfigurationSection settings = configuration.GetSection("Email:Smtp");
+        string host = Required(settings["Host"], "Email:Smtp:Host");
+        string fromAddress = Required(settings["FromAddress"], "Email:Smtp:FromAddress");
+        int port = settings.GetValue("Port", 587);
+        bool enableSsl = settings.GetValue("EnableSsl", true);
+        string? userName = settings["UserName"];
+        string? password = settings["Password"];
+
+        using MailMessage message = new()
+        {
+            From = new MailAddress(fromAddress, settings["FromName"] ?? "CSHighlighter"),
+            Subject = subject,
+            Body = $"<p><a href=\"{HtmlEncoder.Default.Encode(htmlMessage)}\">Открыть ссылку</a></p>",
+            IsBodyHtml = true
+        };
+        message.To.Add(email);
+        using SmtpClient client = new(host, port)
+        {
+            EnableSsl = enableSsl
+        };
+        if (!string.IsNullOrWhiteSpace(userName))
+            client.Credentials = new NetworkCredential(userName, password);
+        await client.SendMailAsync(message, cancellationToken);
+    }
+
+    private static string Required(string? value, string key) =>
+        string.IsNullOrWhiteSpace(value)
+            ? throw new InvalidOperationException($"{key} must be configured to send account emails.")
+            : value;
 }
 
 public interface ITokenService
@@ -76,6 +118,18 @@ public sealed class TokenService(
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         await using Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction transaction =
             await db.Database.BeginTransactionAsync(cancellationToken);
+        bool wasDebited = await db.TokenTransactions.AnyAsync(
+            value =>
+                value.UserId == userId &&
+                value.GenerationId == generationId &&
+                value.Type == TokenTransactionType.GenerationDebit &&
+                value.Status == TokenTransactionStatus.Completed,
+            cancellationToken);
+        if (!wasDebited)
+        {
+            await transaction.CommitAsync(cancellationToken);
+            return null;
+        }
         TokenTransaction? result = await CreditCoreAsync(
             db, userId, 1, TokenTransactionType.GenerationRefund,
             $"generation-refund:{generationId}", reason, null, null, generationId, cancellationToken);

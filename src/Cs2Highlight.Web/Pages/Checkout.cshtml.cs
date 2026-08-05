@@ -12,7 +12,6 @@ namespace Cs2Highlight.Web.Pages;
 
 public sealed class CheckoutModel(
     IDbContextFactory<GenerationDbContext> dbFactory,
-    PaymentService payments,
     PaymentOptions paymentOptions) : PageModel
 {
     private static readonly JsonSerializerOptions WebJson =
@@ -29,10 +28,10 @@ public sealed class CheckoutModel(
         $"{(Generation.PriceAmountMinor / 100m).ToString("0.00", CultureInfo.GetCultureInfo("ru-RU"))} ₽";
     public bool IsTestPayment => !paymentOptions.UsesYooKassa;
 
-    public Task<IActionResult> OnGetAsync(
+    public IActionResult OnGet(
         string publicId,
         CancellationToken cancellationToken) =>
-        LoadAsync(publicId, cancellationToken);
+        RedirectToPage("/Generation", new { publicId });
 
     private async Task<IActionResult> LoadAsync(
         string publicId,
@@ -126,41 +125,8 @@ public sealed class CheckoutModel(
         }.Where(value => value.DurationSeconds > 0.01).ToArray();
     }
 
-    public async Task<IActionResult> OnPostAsync(
-        string publicId,
-        bool acceptTerms,
-        CancellationToken cancellationToken)
-    {
-        if (!acceptTerms)
-        {
-            ModelState.AddModelError(
-                nameof(acceptTerms),
-                "Подтвердите согласие с офертой и условиями получения цифрового товара.");
-            IActionResult loadResult = await LoadAsync(publicId, cancellationToken);
-            return loadResult is PageResult ? Page() : loadResult;
-        }
-
-        string returnUrl = BuildReturnUrl(publicId);
-        PaymentLaunch launch = await payments.CreateAsync(
-            publicId, returnUrl, cancellationToken);
-        return Redirect(launch.ConfirmationUrl);
-    }
-
-    private string BuildReturnUrl(string publicId)
-    {
-        if (!string.IsNullOrWhiteSpace(paymentOptions.ReturnUrlBase))
-        {
-            return $"{paymentOptions.ReturnUrlBase.TrimEnd('/')}/generations/" +
-                $"{Uri.EscapeDataString(publicId)}/payment-return";
-        }
-
-        return Url.Page(
-            "/PaymentReturn",
-            pageHandler: null,
-            values: new { publicId },
-            protocol: Request.Scheme) ??
-            throw new InvalidOperationException("PAYMENT_RETURN_URL_FAILED");
-    }
+    public IActionResult OnPost(string publicId) =>
+        RedirectToPage("/Generation", new { publicId });
 }
 
 public sealed record CinematicTimelineItem(

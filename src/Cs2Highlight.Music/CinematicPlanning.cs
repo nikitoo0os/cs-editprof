@@ -76,8 +76,11 @@ public sealed class BrollCandidateDetector : IBrollCandidateDetector
                     continue;
                 Dictionary<string, PlayerTrajectory> subjects =
                     SceneSubjects(context, window);
-                BrollCandidateType type = Classify(window);
-                if (subjects.Count >= 2)
+                long? jumpTick = JumpFocusTick(window);
+                BrollCandidateType type = jumpTick.HasValue
+                    ? BrollCandidateType.PlayerJump
+                    : Classify(window);
+                if (!jumpTick.HasValue && subjects.Count >= 2)
                 {
                     type = preparation
                         ? BrollCandidateType.TeamSetup
@@ -116,6 +119,7 @@ public sealed class BrollCandidateDetector : IBrollCandidateDetector
                             value.Player.Position,
                             value.Player.ViewAngles)).ToArray()),
                     Tags = Tags(window, preparation, subjects.Count),
+                    FocusTick = jumpTick,
                     SubjectIds = subjects.Keys
                         .OrderBy(value => value, StringComparer.Ordinal)
                         .ToArray(),
@@ -172,6 +176,22 @@ public sealed class BrollCandidateDetector : IBrollCandidateDetector
         if (eventTypes.Contains("ScopePreparation", StringComparer.Ordinal))
             return BrollCandidateType.ScopePreparation;
         return BrollCandidateType.PlayerApproach;
+    }
+
+    private static long? JumpFocusTick(
+        GameplayTimelineFrame[] frames)
+    {
+        if (frames.Length < 3)
+            return null;
+        double verticalRange = frames.Max(value => value.Player.Position.Z) -
+            frames.Min(value => value.Player.Position.Z);
+        GameplayTimelineFrame focus = frames
+            .OrderByDescending(value => Math.Abs(value.Player.Velocity.Z))
+            .First();
+        return verticalRange >= 18 &&
+               Math.Abs(focus.Player.Velocity.Z) >= 105
+            ? focus.Tick
+            : null;
     }
 
     private static string[] Tags(
@@ -380,7 +400,7 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
         CameraPlanningContext context)
     {
         List<string> warnings = [];
-        if (candidate.DurationSeconds < 0.75)
+        if (candidate.DurationSeconds < 1.5)
         {
             warnings.Add("CAMERA_SHOT_TOO_SHORT_FOR_CAMPATH");
             return Pov(candidate, warnings);
@@ -394,7 +414,8 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             return Pov(candidate, warnings);
         }
         if (context.Profile is null ||
-            !context.Profile.ManuallyVerified ||
+            (!context.Profile.ManuallyVerified &&
+             !context.Profile.AutomaticallyCalibrated) ||
             context.Profile.SafeVolumes.Count == 0)
         {
             warnings.Add("CAMERA_MAP_PROFILE_UNSUPPORTED");
@@ -419,53 +440,63 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
                 context,
                 warnings);
         }
+        GameplayVector3 startSubject = SubjectPosition(
+            candidate,
+            0,
+            samples[0].Position);
+        GameplayVector3 endSubject = context.DestinationSubjectPosition ??
+            SubjectPosition(candidate, 1, samples[^1].Position);
+        GameplayVector3 routeDirection = Normalize(
+            endSubject.X - startSubject.X,
+            endSubject.Y - startSubject.Y,
+            0);
+        if (Length(routeDirection) < 0.001)
+            routeDirection = DirectionFromYaw(samples[0].ViewAngles.Y);
+        GameplayVector3 routeSide = new(
+            -routeDirection.Y,
+            routeDirection.X,
+            0);
+        GameplayVector3 cameraA = CameraEndpoint(
+            startSubject,
+            routeDirection,
+            routeSide,
+            family,
+            context,
+            destination: false);
+        GameplayVector3 cameraB = CameraEndpoint(
+            endSubject,
+            routeDirection,
+            routeSide,
+            family,
+            context,
+            destination: true);
+        double maximumRouteDistance = Math.Max(
+            24,
+            context.MaximumCameraSpeedUnitsPerSecond *
+            candidate.DurationSeconds);
+        double routeDistance = cameraA.DistanceTo(cameraB);
+        if (routeDistance > maximumRouteDistance)
+        {
+            cameraA = Lerp(
+                cameraB,
+                cameraA,
+                maximumRouteDistance / routeDistance);
+            warnings.Add("CAMERA_ROUTE_SPEED_CLAMPED");
+        }
         List<CameraKeyframe> keyframes = [];
         const int count = 4;
         for (int index = 0; index < count; index++)
         {
-            double position = index / (double)(count - 1);
-            PlayerTransformSample sample = Sample(samples, position);
-            PlayerTransformSample neighbor = Sample(
-                samples,
-                Math.Min(1, position + 1d / (count - 1)));
-            GameplayVector3 direction = Normalize(
-                neighbor.Position.X - sample.Position.X,
-                neighbor.Position.Y - sample.Position.Y,
-                0);
-            if (Length(direction) < 0.001)
-                direction = DirectionFromYaw(sample.ViewAngles.Y);
-            GameplayVector3 side = new(-direction.Y, direction.X, 0);
-            GameplayVector3 offset = family switch
-            {
-                CameraShotFamily.SideTracking or
-                CameraShotFamily.GroupWide =>
-                    Scale(side, context.CameraDistance *
-                        (family == CameraShotFamily.GroupWide ? 1.35 : 1)),
-                CameraShotFamily.FrontTracking =>
-                    Scale(direction, context.CameraDistance),
-                CameraShotFamily.WeaponDetail => Add(
-                    Scale(direction, -42),
-                    Scale(side, index % 2 == 0 ? 24 : -24)),
-                CameraShotFamily.Orbit => new GameplayVector3(
-                    Math.Cos((-18 + 36 * position) * Math.PI / 180) *
-                        context.CameraDistance,
-                    Math.Sin((-18 + 36 * position) * Math.PI / 180) *
-                        context.CameraDistance,
-                    0),
-                _ => Scale(direction, -context.CameraDistance)
-            };
-            GameplayVector3 subject = SubjectPosition(
-                candidate,
-                position,
-                sample.Position);
-            GameplayVector3 camera = Add(
-                subject,
-                new GameplayVector3(
-                    offset.X,
-                    offset.Y,
-                    family == CameraShotFamily.WeaponDetail
-                        ? 46
-                        : context.CameraHeight));
+            double timeProgress = index / (double)(count - 1);
+            double routeProgress = SmoothStep(timeProgress);
+            GameplayVector3 camera = Lerp(
+                cameraA,
+                cameraB,
+                routeProgress);
+            GameplayVector3 subject = Lerp(
+                startSubject,
+                endSubject,
+                routeProgress);
             if (!context.Profile.SafeVolumes.Any(value => value.Contains(camera)))
             {
                 warnings.Add("CAMERA_PATH_OUTSIDE_SAFE_VOLUME");
@@ -477,30 +508,24 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             }
             keyframes.Add(new CameraKeyframe
             {
-                TimeSeconds = candidate.DurationSeconds * position,
+                TimeSeconds = candidate.DurationSeconds * timeProgress,
                 Position = camera,
                 Rotation = LookAt(
                     camera,
-                    Add(
-                        subject,
-                        new GameplayVector3(
-                            0,
-                            0,
-                            family == CameraShotFamily.WeaponDetail
-                                ? 44
-                                : 54))),
+                    Add(subject, new GameplayVector3(0, 0, 54))),
                 Fov = Math.Clamp(
                     family switch
                     {
-                        CameraShotFamily.GroupWide => 96 - 2 * position,
-                        CameraShotFamily.WeaponDetail => 68,
-                        CameraShotFamily.Orbit => 82,
-                        _ => 86 - 8 * position
+                        CameraShotFamily.GroupWide => 94,
+                        CameraShotFamily.WeaponDetail => 70,
+                        _ => 84 - 2 * routeProgress
                     },
                     context.MinimumFov,
                     context.MaximumFov)
             });
         }
+        if (context.DestinationSubjectPosition is not null)
+            warnings.Add("CAMERA_ROUTE_B_ANCHORED_TO_NEXT_HIGHLIGHT");
         if (keyframes
             .Zip(keyframes.Skip(1))
             .Any(pair => pair.First.Position.DistanceTo(pair.Second.Position) < 0.05))
@@ -519,6 +544,23 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             CameraShotFamily.EnvironmentReveal => CameraShotType.EnvironmentReveal,
             _ => CameraShotType.LinearCampath
         };
+        SafeCameraVolume? safetyVolume =
+            context.Profile.SafeVolumes.FirstOrDefault(value =>
+                keyframes.All(keyframe => value.Contains(keyframe.Position)));
+        if (safetyVolume is null &&
+            context.Profile.AutomaticallyCalibrated)
+        {
+            safetyVolume = EncloseAutomaticPath(keyframes);
+        }
+        if (safetyVolume is null)
+        {
+            warnings.Add("CAMERA_PATH_HAS_NO_SINGLE_SAFE_VOLUME");
+            return EstablishingFallback(
+                candidate,
+                context.Profile,
+                context,
+                warnings);
+        }
         CameraShotPlan shot = new()
         {
             Id = $"camera-{candidate.Id}",
@@ -540,24 +582,23 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
                     ? "selected-player"
                     : "unknown-subject"],
             TargetPoints = keyframes.Select((value, index) =>
-                new CameraTargetPoint(
+            {
+                double progress = SmoothStep(
+                    index / (double)(keyframes.Count - 1));
+                return new CameraTargetPoint(
                     value.TimeSeconds,
-                    SubjectPosition(
-                        candidate,
-                        index / (double)(keyframes.Count - 1),
-                        samples[Math.Clamp(
-                            (int)Math.Round(index /
-                                (double)(keyframes.Count - 1) *
-                                (samples.Length - 1)),
-                            0,
-                            samples.Length - 1)].Position),
-                    candidate.SubjectIds)).ToArray(),
+                    Lerp(startSubject, endSubject, progress),
+                    candidate.SubjectIds);
+            }).ToArray(),
             FovCurve = keyframes.Select(value =>
                 new CameraFovPoint(value.TimeSeconds, value.Fov)).ToArray(),
-            FramingIntent = FramingIntent(family),
-            SafetyVolume = context.Profile.SafeVolumes.FirstOrDefault(value =>
-                keyframes.All(keyframe => value.Contains(keyframe.Position))),
+            FramingIntent = context.DestinationSubjectPosition is not null
+                ? "slow single A-to-B reveal ending on the next highlight location"
+                : FramingIntent(family),
+            MovementDirection = routeDirection,
+            SafetyVolume = safetyVolume,
             PreviewRequired = true,
+            AutomaticCalibration = context.Profile.AutomaticallyCalibrated,
             FallbackChain =
             [
                 CameraShotFamily.StaticTripod,
@@ -620,6 +661,7 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             SafetyVolume = profile.SafeVolumes.FirstOrDefault(value =>
                 value.Contains(keyframe.Position)),
             PreviewRequired = true,
+            AutomaticCalibration = profile.AutomaticallyCalibrated,
             VerifiedPresetId = preset.Id,
             RequiresHighFpsCapture = false,
             FallbackShotId = $"camera-{candidate.Id}-pov",
@@ -734,6 +776,7 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             SafetyVolume = profile.SafeVolumes.FirstOrDefault(value =>
                 keyframes.All(keyframe => value.Contains(keyframe.Position))),
             PreviewRequired = true,
+            AutomaticCalibration = profile.AutomaticallyCalibrated,
             VerifiedPresetId = preset.Id,
             FallbackChain =
             [
@@ -783,6 +826,7 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             BrollCandidateType.TeamMovement or
             BrollCandidateType.TeamSetup => CameraShotFamily.GroupWide,
             BrollCandidateType.PlayerRotation => CameraShotFamily.Orbit,
+            BrollCandidateType.PlayerJump => CameraShotFamily.SideTracking,
             BrollCandidateType.SideMovement => CameraShotFamily.SideTracking,
             BrollCandidateType.RearMovement or
             BrollCandidateType.PostFightExit => CameraShotFamily.RearTracking,
@@ -821,6 +865,73 @@ public sealed class CameraPathPlanner : ICameraPathPlanner
             positions.Average(value => value.X),
             positions.Average(value => value.Y),
             positions.Average(value => value.Z));
+    }
+
+    private static GameplayVector3 CameraEndpoint(
+        GameplayVector3 subject,
+        GameplayVector3 direction,
+        GameplayVector3 side,
+        CameraShotFamily family,
+        CameraPlanningContext context,
+        bool destination)
+    {
+        GameplayVector3 planarOffset = family switch
+        {
+            CameraShotFamily.SideTracking or CameraShotFamily.GroupWide =>
+                Add(
+                    Scale(side, context.CameraDistance *
+                        (family == CameraShotFamily.GroupWide ? 1.25 : 1)),
+                    Scale(direction, destination ? -36 : 20)),
+            CameraShotFamily.FrontTracking =>
+                Scale(direction, destination ? -72 : 72),
+            CameraShotFamily.WeaponDetail => Add(
+                Scale(direction, -48),
+                Scale(side, 20)),
+            _ => Add(
+                Scale(direction, -context.CameraDistance * 0.75),
+                Scale(side, destination ? -28 : 28))
+        };
+        return Add(
+            subject,
+            new GameplayVector3(
+                planarOffset.X,
+                planarOffset.Y,
+                family == CameraShotFamily.WeaponDetail
+                    ? 46
+                    : context.CameraHeight));
+    }
+
+    private static GameplayVector3 Lerp(
+        GameplayVector3 start,
+        GameplayVector3 end,
+        double progress)
+    {
+        double value = Math.Clamp(progress, 0, 1);
+        return new GameplayVector3(
+            start.X + (end.X - start.X) * value,
+            start.Y + (end.Y - start.Y) * value,
+            start.Z + (end.Z - start.Z) * value);
+    }
+
+    private static double SmoothStep(double value)
+    {
+        double progress = Math.Clamp(value, 0, 1);
+        return progress * progress * (3 - 2 * progress);
+    }
+
+    private static SafeCameraVolume EncloseAutomaticPath(
+        IReadOnlyList<CameraKeyframe> keyframes)
+    {
+        const double padding = 8;
+        return new SafeCameraVolume(
+            new GameplayVector3(
+                keyframes.Min(value => value.Position.X) - padding,
+                keyframes.Min(value => value.Position.Y) - padding,
+                keyframes.Min(value => value.Position.Z) - padding),
+            new GameplayVector3(
+                keyframes.Max(value => value.Position.X) + padding,
+                keyframes.Max(value => value.Position.Y) + padding,
+                keyframes.Max(value => value.Position.Z) + padding));
     }
 
     private static string FramingIntent(CameraShotFamily family) =>
@@ -964,6 +1075,7 @@ public sealed class CameraShotQualityAnalyzer : ICameraShotQualityAnalyzer
             if (metrics.SubjectClippingRatio is > 0.02)
                 warnings.Add("CAMERA_PREVIEW_SUBJECT_CLIPPED");
             if (shot.Family == CameraShotFamily.GroupWide &&
+                shot.SubjectIds.Count >= 2 &&
                 metrics.GroupCoverageRatio is < 0.90)
                 warnings.Add("CAMERA_PREVIEW_GROUP_COVERAGE_LOW");
         }
@@ -1155,7 +1267,8 @@ public sealed class CinematicTimeWarpPolicy(
             options.MaximumLocalSpeed >= 1.20;
         int treatment = Math.Abs(highlight.SelectionOrder) % 4;
         bool multikill = highlight.Highlight.KillCount > 1;
-        bool heroMoment = multikill ||
+        bool heroMoment = options.MusicEnergyTransition ||
+            multikill ||
             treatment == 1 ||
             treatment == 3 &&
             highlight.Highlight.BeautyScore >= 60;
@@ -1279,14 +1392,18 @@ public sealed class CinematicTimeWarpPolicy(
                 duration,
                 1);
         }
+        List<string> warnings =
+        [
+            .. alignmentPlan.Warnings,
+            "CINEMATIC_MOTIVATED_SLOW_MOTION"
+        ];
+        if (options.MusicEnergyTransition)
+            warnings.Add("MUSIC_ENERGY_CHANGE_FIRE_SLOW_MOTION");
         return new TimeWarpPlan(
             1,
             segments,
             true,
-            [
-                .. alignmentPlan.Warnings,
-                "CINEMATIC_MOTIVATED_SLOW_MOTION"
-            ]);
+            warnings);
     }
 
     private static void AddStylizedSegment(

@@ -31,6 +31,7 @@ public sealed class NetConsoleDemoController(
     private const string PresentationVerificationEndMarker =
         "AFX_RENDER_PRESENTATION_VERIFY_END";
     private const long MaximumCampathTickDrift = 2;
+    private const long MaximumCalibrationCampathTickDrift = 4;
     private static readonly JsonSerializerOptions ReportJsonOptions =
         new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private sealed record HlaeCameraCommandProbe(
@@ -134,6 +135,19 @@ public sealed class NetConsoleDemoController(
             workspace,
             job.OutputDirectory,
             cancellationToken);
+        HlaeCameraCommandProbe? deathMessageProbe =
+            cameraCommandReport.Commands.FirstOrDefault(value =>
+                string.Equals(
+                    value.Command,
+                    "mirv_deathmsg",
+                    StringComparison.Ordinal));
+        if (deathMessageProbe?.Supported != true)
+        {
+            throw new InvalidOperationException(
+                "DEATHMSG_FILTER_UNAVAILABLE: installed HLAE does not " +
+                "provide the CS2 mirv_deathmsg filter required for a " +
+                "selected-player-only killfeed.");
+        }
         await stateJournal.WriteAsync(
             workspace,
             RenderState.WaitingForCs2,
@@ -172,6 +186,10 @@ public sealed class NetConsoleDemoController(
             $"spec_lock_to_accountid {accountId.ToString(CultureInfo.InvariantCulture)}",
             cancellationToken);
         await VerifySelectedPlayerAsync(connection, steamId64, cancellationToken);
+        await ConfigureSelectedPlayerKillfeedAsync(
+            connection,
+            steamId64,
+            cancellationToken);
         await stateJournal.WriteAsync(
             workspace,
             RenderState.ApplyingCameraPlan,
@@ -231,6 +249,10 @@ public sealed class NetConsoleDemoController(
             cancellationToken);
         if (options.Warmup.ReapplyCaptureProfileAfterWarmup)
             await captureUi.ApplyAsync(job.EffectivePresentationMode, cancellationToken);
+        await ConfigureSelectedPlayerKillfeedAsync(
+            connection,
+            steamId64,
+            cancellationToken);
         await stateJournal.WriteAsync(
             workspace,
             RenderState.VerifyingCaptureProfile,
@@ -330,6 +352,9 @@ public sealed class NetConsoleDemoController(
         // A reused CS2 session still contains the previous clip's addAtTick
         // commands and output path. Reset both before seeking to the next clip.
         await connection.SendAsync("mirv_cmd clear", cancellationToken);
+        await connection.SendAsync("mirv_deathmsg filter clear", cancellationToken);
+        await connection.SendAsync("mirv_deathmsg localPlayer default", cancellationToken);
+        await connection.SendAsync("mirv_deathmsg clear", cancellationToken);
         await connection.SendAsync(
             string.Create(
                 CultureInfo.InvariantCulture,
@@ -344,6 +369,24 @@ public sealed class NetConsoleDemoController(
         await connection.SendAsync(
             $"mirv_streams record name \"{Source2ScriptGenerator.EscapeCfg(workspace.Raw)}\"",
             cancellationToken);
+    }
+
+    private static async Task ConfigureSelectedPlayerKillfeedAsync(
+        NetConsoleConnection connection,
+        ulong steamId64,
+        CancellationToken cancellationToken)
+    {
+        string xuid = steamId64.ToString(CultureInfo.InvariantCulture);
+        await connection.SendAsync("mirv_deathmsg filter clear", cancellationToken);
+        await connection.SendAsync(
+            $"mirv_deathmsg localPlayer x{xuid}",
+            cancellationToken);
+        await connection.SendAsync(
+            $"mirv_deathmsg filter add attackerMatch=!x{xuid} block=1 lastRule=1",
+            cancellationToken);
+        // Seeking and warmup can leave old notices alive. Clear them only after
+        // the selected-player rule is active so recording begins with a clean feed.
+        await connection.SendAsync("mirv_deathmsg clear", cancellationToken);
     }
 
     private async Task ApplyCameraPlanAsync(
@@ -455,7 +498,10 @@ public sealed class NetConsoleDemoController(
                 cancellationToken));
             VerifyCampathOutput(
                 campathOutput,
-                job.Camera.Keyframes);
+                job.Camera.Keyframes,
+                job.Camera.CalibrationSpike
+                    ? MaximumCalibrationCampathTickDrift
+                    : MaximumCampathTickDrift);
             await SeekToWarmupAsync(
                 connection,
                 warmupTick,
@@ -600,7 +646,8 @@ public sealed class NetConsoleDemoController(
 
     private static void VerifyCampathOutput(
         IReadOnlyList<string> output,
-        IReadOnlyList<RenderCameraKeyframe> expected)
+        IReadOnlyList<RenderCameraKeyframe> expected,
+        long maximumTickDrift)
     {
         ParsedCampathKeyframe[] actual = output
             .Select(ParseCampathKeyframe)
@@ -618,7 +665,7 @@ public sealed class NetConsoleDemoController(
             RenderCameraKeyframe expectedValue = expected[index];
             ParsedCampathKeyframe actualValue = actual[index];
             if (Math.Abs(actualValue.Tick - expectedValue.Tick) >
-                    MaximumCampathTickDrift ||
+                    maximumTickDrift ||
                 !Approximately(
                     [
                         actualValue.Position.X,
@@ -638,7 +685,7 @@ public sealed class NetConsoleDemoController(
                 throw new InvalidOperationException(
                     $"CAMERA_CAMPATH_KEYFRAME_MISMATCH at index {index}: " +
                     $"expected={expectedValue}; actual={actualValue}; " +
-                    $"maximumTickDrift={MaximumCampathTickDrift}.");
+                    $"maximumTickDrift={maximumTickDrift}.");
             }
         }
     }
@@ -710,6 +757,9 @@ public sealed class NetConsoleDemoController(
         [
             "cl_showdemooverlay",
             "cl_drawhud",
+            "cl_showtextmsg",
+            "cl_spec_stats",
+            "cl_spec_show_bindings",
             "spec_show_xray",
             "r_drawviewmodel",
             "r_show_build_info",
@@ -746,6 +796,16 @@ public sealed class NetConsoleDemoController(
             values.TryGetValue("cl_showdemooverlay", out bool overlay) && !overlay;
         bool spectatorHidden =
             values.TryGetValue("spec_show_xray", out bool xray) && !xray;
+        bool chatHidden =
+            values.TryGetValue("cl_showtextmsg", out bool textMessages) &&
+            !textMessages;
+        bool spectatorPanelHidden =
+            values.TryGetValue("cl_spec_stats", out bool specStats) &&
+            !specStats &&
+            values.TryGetValue(
+                "cl_spec_show_bindings",
+                out bool specBindings) &&
+            !specBindings;
         bool hudValid =
             values.TryGetValue("cl_drawhud", out bool hud) && hud == pov;
         bool weaponValid =
@@ -757,7 +817,7 @@ public sealed class NetConsoleDemoController(
             !trueViewStatus;
         bool commandStateVerified =
             timelineHidden && spectatorHidden && hudValid && weaponValid &&
-            debugUiHidden;
+            debugUiHidden && chatHidden && spectatorPanelHidden;
 
         List<string> issues = [];
         if (!commandStateVerified)
@@ -809,7 +869,8 @@ public sealed class NetConsoleDemoController(
             "mirv_input fov",
             "mirv_fov",
             "mirv_cmd",
-            "mirv_streams"
+            "mirv_streams",
+            "mirv_deathmsg"
         ];
         List<HlaeCameraCommandProbe> probes = [];
         for (int index = 0; index < commandNames.Length; index++)

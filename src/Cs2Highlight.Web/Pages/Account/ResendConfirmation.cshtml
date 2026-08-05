@@ -1,0 +1,19 @@
+@page "/account/resend-confirmation"
+@model Cs2Highlight.Web.Pages.Account.ResendConfirmationModel
+@{ ViewData["Title"] = "Повторная отправка подтверждения"; }
+<section class="auth-card surface surface--elevated surface-pad">
+  <h1 class="page-title">Подтверждение email</h1>
+  @if (Model.Sent)
+  {
+    <p class="page-lead">Если такой неподтверждённый аккаунт существует, новая ссылка отправлена.</p>
+  }
+  else
+  {
+    <div asp-validation-summary="All" class="validation-summary-errors" role="alert"></div>
+    <form method="post" class="form-stack">
+      <label>Email<input asp-for="Input.Email" autocomplete="email" /></label>
+      <button class="btn btn-primary" type="submit">Отправить новую ссылку</button>
+    </form>
+  }
+  <p class="muted"><a asp-page="/Account/Login">Вернуться ко входу</a></p>
+</section>

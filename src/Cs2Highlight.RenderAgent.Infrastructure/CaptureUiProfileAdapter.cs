@@ -4,7 +4,7 @@ namespace Cs2Highlight.RenderAgent.Infrastructure;
 
 public static class CaptureUiProfileAdapter
 {
-    public const string TemplateVersion = "capture-presentation-reset.v4";
+    public const string TemplateVersion = "capture-presentation-reset.v6";
 
     private static readonly string[] CommonResetCommands =
     [
@@ -12,6 +12,9 @@ public static class CaptureUiProfileAdapter
         "demo_timescale 1",
         "cl_showdemooverlay 0",
         "cl_draw_only_deathnotices 0",
+        "cl_showtextmsg 0",
+        "cl_spec_stats 0",
+        "cl_spec_show_bindings 0",
         "spec_show_xray 0",
         "r_drawviewmodel 1",
         "r_show_build_info 0",
@@ -29,8 +32,12 @@ public static class CaptureUiProfileAdapter
                 "cl_drawhud 1",
                 "r_drawviewmodel 1"
             ],
+            CapturePresentationMode.ThirdPersonAction =>
+            [
+                "cl_drawhud 1",
+                "r_drawviewmodel 0"
+            ],
             CapturePresentationMode.CinematicBroll or
-            CapturePresentationMode.ThirdPersonAction or
             CapturePresentationMode.EstablishingShot =>
             [
                 "cl_drawhud 0",

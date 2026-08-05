@@ -22,11 +22,12 @@ builder.Services.AddRazorPages(options =>
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 {
     options.User.RequireUniqueEmail = true;
-    options.SignIn.RequireConfirmedEmail = true;
-    options.Password.RequiredLength = 10;
-    options.Password.RequireDigit = true;
-    options.Password.RequireUppercase = true;
-    options.Password.RequireNonAlphanumeric = true;
+    options.SignIn.RequireConfirmedEmail = !builder.Environment.IsDevelopment();
+    options.Password.RequiredLength = 8;
+    options.Password.RequireDigit = false;
+    options.Password.RequireLowercase = false;
+    options.Password.RequireUppercase = false;
+    options.Password.RequireNonAlphanumeric = false;
     options.Lockout.MaxFailedAccessAttempts = 5;
     options.Lockout.DefaultLockoutTimeSpan = TimeSpan.FromMinutes(15);
 })
@@ -95,6 +96,7 @@ builder.Services.AddSingleton<Cs2Highlight.Music.ICinematicDurationPolicy, Cs2Hi
 builder.Services.AddSingleton<Cs2Highlight.Music.IMusicExcerptSelector, Cs2Highlight.Music.MusicExcerptSelector>();
 builder.Services.AddSingleton<Cs2Highlight.Music.IBrollCandidateDetector, Cs2Highlight.Music.BrollCandidateDetector>();
 builder.Services.AddSingleton<Cs2Highlight.Music.IMapCameraProfileCatalog, Cs2Highlight.Music.MapCameraProfileCatalog>();
+builder.Services.AddSingleton<Cs2Highlight.Music.IAutomaticMapCameraCalibrator, Cs2Highlight.Music.AutomaticMapCameraCalibrator>();
 builder.Services.AddSingleton<Cs2Highlight.Music.ICameraPathPlanner, Cs2Highlight.Music.CameraPathPlanner>();
 builder.Services.AddSingleton<Cs2Highlight.Music.ICameraShotQualityAnalyzer, Cs2Highlight.Music.CameraShotQualityAnalyzer>();
 builder.Services.AddSingleton<Cs2Highlight.Music.IHighlightPeakMatcher, Cs2Highlight.Music.HighlightPeakMatcher>();
@@ -105,6 +107,7 @@ builder.Services.AddSingleton<Cs2Highlight.Music.IColorNarrativePlanner, Cs2High
 builder.Services.AddSingleton<Cs2Highlight.Music.ICinematicDirector, Cs2Highlight.Music.CinematicDirector>();
 builder.Services.AddSingleton<Cs2Highlight.Music.ICinematicMusicEditPlanAdapter, Cs2Highlight.Music.CinematicMusicEditPlanAdapter>();
 builder.Services.AddSingleton<ICinematicPlanService, CinematicPlanService>();
+builder.Services.AddSingleton<AutomaticCameraCalibrationStore>();
 builder.Services.AddSingleton(new InteractiveRetimingOptions());
 builder.Services.AddSingleton<IInteractiveTimelineDirector, InteractiveTimelineDirector>();
 builder.Services.AddSingleton<GenerationWakeSignal>();
@@ -137,7 +140,10 @@ builder.Services.AddScoped<IPaymentProvider>(services =>
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddScoped<PaymentService>();
 builder.Services.AddSingleton<ITokenService, TokenService>();
-builder.Services.AddSingleton<IEmailSender, DevelopmentEmailSender>();
+if (builder.Environment.IsDevelopment())
+    builder.Services.AddSingleton<IEmailSender, DevelopmentEmailSender>();
+else
+    builder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();
 builder.Services.AddHostedService<GenerationWorker>();
 builder.Services.AddHostedService<GenerationCleanupService>();
 builder.Services.AddHealthChecks().AddCheck<GenerationReadinessHealthCheck>("pipeline");
@@ -211,15 +217,69 @@ await using (AsyncServiceScope scope = app.Services.CreateAsyncScope())
         if (!await roleManager.RoleExistsAsync(role))
             await roleManager.CreateAsync(new IdentityRole(role));
     }
-    foreach (TokenPackage package in new[]
+    TokenPackage[] desiredTokenPackages =
     {
-        new TokenPackage { Code = "single", Name = "1 токен", TokenAmount = 1, PriceAmountMinor = 100, Currency = "RUB", SortOrder = 1 },
-        new TokenPackage { Code = "starter", Name = "5 токенов", TokenAmount = 5, PriceAmountMinor = 450, Currency = "RUB", SortOrder = 2 },
-        new TokenPackage { Code = "creator", Name = "10 токенов", TokenAmount = 10, PriceAmountMinor = 800, Currency = "RUB", SortOrder = 3 }
-    })
+        new TokenPackage { Code = "single", Name = "3 токена", TokenAmount = 3, PriceAmountMinor = 14900, Currency = "RUB", SortOrder = 1 },
+        new TokenPackage { Code = "starter", Name = "7 токенов", TokenAmount = 7, PriceAmountMinor = 29900, Currency = "RUB", SortOrder = 2 },
+        new TokenPackage { Code = "creator", Name = "15 токенов", TokenAmount = 15, PriceAmountMinor = 54900, Currency = "RUB", SortOrder = 3 }
+    };
+    TokenPackage[] storedTokenPackages = await db.TokenPackages.ToArrayAsync();
+    HashSet<string> desiredPackageCodes = desiredTokenPackages
+        .Select(value => value.Code)
+        .ToHashSet(StringComparer.Ordinal);
+    foreach (TokenPackage stored in storedTokenPackages)
+        stored.IsActive = desiredPackageCodes.Contains(stored.Code);
+    foreach (TokenPackage package in desiredTokenPackages)
     {
-        if (!await db.TokenPackages.AnyAsync(value => value.Code == package.Code))
+        TokenPackage? stored = storedTokenPackages.SingleOrDefault(
+            value => value.Code == package.Code);
+        if (stored is null)
+        {
             db.TokenPackages.Add(package);
+            continue;
+        }
+        stored.Name = package.Name;
+        stored.TokenAmount = package.TokenAmount;
+        stored.PriceAmountMinor = package.PriceAmountMinor;
+        stored.Currency = package.Currency;
+        stored.SortOrder = package.SortOrder;
+        stored.IsActive = true;
+    }
+    DateTimeOffset startupRepairTime = DateTimeOffset.UtcNow;
+    GenerationMovieSettings[] settingsMissingRenderLock =
+        await db.GenerationMovieSettings
+            .Include(value => value.Generation)
+            .Where(value =>
+                value.LockedAt == null &&
+                value.Generation.PaymentStatus == PaymentStatus.Succeeded)
+            .ToArrayAsync();
+    foreach (GenerationMovieSettings settings in settingsMissingRenderLock)
+        settings.LockedAt = settings.Generation.PaidAt ?? startupRepairTime;
+    Generation[] interruptedMusicPlanGenerations = await db.Generations
+        .Where(value =>
+            value.Status == GenerationStatus.Failed &&
+            value.ErrorCode == "MUSIC_PLAN_NOT_LOCKED" &&
+            value.PaymentStatus == PaymentStatus.Succeeded)
+        .ToArrayAsync();
+    foreach (Generation generation in interruptedMusicPlanGenerations)
+    {
+        GenerationStateMachine.Transition(
+            generation,
+            GenerationStatus.QueuedForGeneration,
+            startupRepairTime);
+        generation.ErrorCode = null;
+        generation.ErrorMessage = null;
+        generation.CurrentStage = "Queued after music plan lock repair";
+        generation.RetryCount++;
+        db.GenerationEvents.Add(new GenerationEvent
+        {
+            GenerationId = generation.Id,
+            Level = "Warning",
+            Stage = "MusicPlanLockRepair",
+            Message = "Recovered missing movie settings lock after token-flow migration",
+            ProgressPercent = generation.ProgressPercent,
+            CreatedAt = startupRepairTime
+        });
     }
     string? adminEmail = builder.Configuration["Admin:Email"];
     string? adminPassword = builder.Configuration["Admin:Password"];
@@ -325,6 +385,11 @@ app.MapGet("/api/generations/{publicId}", async (
         .ToArrayAsync(cancellationToken);
     bool completed = generation.Status is
         GenerationStatus.Completed or GenerationStatus.CompletedWithWarnings;
+    bool hasCameraOnlyVideo = completed &&
+        await db.GenerationArtifacts.AnyAsync(
+            value => value.GenerationId == generation.Id &&
+                value.Type == ArtifactType.CameraOnlyVideo,
+            cancellationToken);
     string? actionUrl = generation.Status switch
     {
         GenerationStatus.AwaitingPlayerSelection =>
@@ -361,6 +426,9 @@ app.MapGet("/api/generations/{publicId}", async (
         completed,
         actionUrl,
         videoUrl = completed ? $"/generations/{publicId}/video" : null,
+        cameraOnlyVideoUrl = hasCameraOnlyVideo
+            ? $"/generations/{publicId}/video/cameras"
+            : null,
         events
     });
 });
@@ -467,6 +535,41 @@ app.MapGet("/generations/{publicId}/video", async (
         .SingleOrDefaultAsync(cancellationToken);
     if (artifact is null || !File.Exists(artifact.StoredPath)) return Results.NotFound();
     string? fileName = download == true ? $"cs2-highlights-{publicId}.mp4" : null;
+    return Results.File(
+        artifact.StoredPath,
+        "video/mp4",
+        fileName,
+        enableRangeProcessing: true);
+});
+app.MapGet("/generations/{publicId}/video/cameras", async (
+    string publicId,
+    bool? download,
+    IDbContextFactory<GenerationDbContext> factory,
+    HttpContext context,
+    CancellationToken cancellationToken) =>
+{
+    await using GenerationDbContext db =
+        await factory.CreateDbContextAsync(cancellationToken);
+    Generation? owner = await db.Generations.AsNoTracking()
+        .SingleOrDefaultAsync(
+            value => value.PublicId == publicId,
+            cancellationToken);
+    if (owner is null ||
+        !GenerationAccess.CanRead(owner, context.User, app.Environment) ||
+        owner.ExpiresAtUtc is not null &&
+        owner.ExpiresAtUtc <= DateTimeOffset.UtcNow)
+        return Results.NotFound();
+    GenerationArtifact? artifact = await db.GenerationArtifacts
+        .AsNoTracking()
+        .SingleOrDefaultAsync(
+            value => value.GenerationId == owner.Id &&
+                value.Type == ArtifactType.CameraOnlyVideo,
+            cancellationToken);
+    if (artifact is null || !File.Exists(artifact.StoredPath))
+        return Results.NotFound();
+    string? fileName = download == true
+        ? $"cs2-cameras-{publicId}.mp4"
+        : null;
     return Results.File(
         artifact.StoredPath,
         "video/mp4",

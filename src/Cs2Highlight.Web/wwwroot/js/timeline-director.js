@@ -104,7 +104,7 @@ if (root) {
       return true;
     } catch {
       state = state || previous;
-      render();
+      render(null, true);
       return false;
     }
   }
@@ -302,11 +302,12 @@ if (root) {
       </div>`;
   }
 
-  function renderSummary() {
+  function renderSummary(preserveAnnouncement = false) {
     const counts = state.anchors.reduce((result, anchor) => {
       result[anchor.feasibility.toLowerCase()] += 1;
       return result;
     }, { natural: 0, acceptable: 0, risky: 0, invalid: 0 });
+    const failedGaps = state.gaps.filter(gap => gap.state === "Failed");
     root.querySelector("[data-timeline-summary]").textContent =
       `${state.anchors.length} маркеров · ${counts.natural} natural · ${counts.invalid} invalid`;
     root.querySelector("[data-timeline-revision]").textContent = state.revision;
@@ -317,17 +318,21 @@ if (root) {
       button.disabled = state.isLocked;
     });
     root.querySelector("[data-timeline-confirm]").disabled =
-      state.isLocked || counts.invalid > 0 || state.anchors.length === 0;
+      state.isLocked || counts.invalid > 0 || failedGaps.length > 0 ||
+      state.anchors.length === 0;
+    if (preserveAnnouncement) return;
     if (state.isLocked) {
       announce("Timeline locked for rendering.", "success");
     } else if (counts.invalid > 0) {
       announce(`${counts.invalid} маркер(а) требуют исправления. Продолжение заблокировано.`, "error");
+    } else if (failedGaps.length > 0) {
+      announce(`Не удалось спланировать ${failedGaps.length} участок(а). Измените длительность или расстановку.`, "error");
     } else {
       announce("Расстановка выполнима. SafeEnd и post-kill сохранены.", "success");
     }
   }
 
-  function render(previous = null) {
+  function render(previous = null, preserveAnnouncement = false) {
     renderWaveform();
     renderRuler();
     renderSections();
@@ -335,7 +340,7 @@ if (root) {
     renderAnchors();
     renderGaps(previous?.gaps);
     renderInspector();
-    renderSummary();
+    renderSummary(preserveAnnouncement);
   }
 
   function nearestSnap(raw, disabled = false) {
@@ -551,7 +556,7 @@ if (root) {
     }
     if (event.target.closest("[data-timeline-confirm]")) {
       const success = await mutate("/confirm", "POST", {});
-      if (success) window.location.assign(`/generations/${encodeURIComponent(generationId)}/checkout`);
+      if (success) window.location.assign(`/generations/${encodeURIComponent(generationId)}`);
     }
   });
 

@@ -15,7 +15,7 @@ public sealed class ForgotPasswordModel(UserManager<ApplicationUser> users, IEma
     public async Task<IActionResult> OnPostAsync(CancellationToken cancellationToken)
     {
         if (!ModelState.IsValid) return Page();
-        ApplicationUser? user = await users.FindByEmailAsync(Input.Email);
+        ApplicationUser? user = await users.FindByEmailAsync(Input.Email.Trim());
         if (user is not null)
         {
             string token = await users.GeneratePasswordResetTokenAsync(user);

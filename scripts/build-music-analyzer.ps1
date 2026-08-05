@@ -73,6 +73,8 @@ try {
     & $python -m PyInstaller --noconfirm --clean --onefile `
         --name music-analyzer `
         --distpath $output `
+        --workpath (Join-Path $output ".pyinstaller") `
+        --specpath $output `
         --collect-all scipy `
         --collect-all librosa `
         --collect-all numba `

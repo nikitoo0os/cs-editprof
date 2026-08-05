@@ -4,6 +4,7 @@
   ViewData["Title"] = "Профиль";
   bool isPrintstream = Model.UserAccount.ThemePreference is "printstream";
   string initial = (Model.UserAccount.Email ?? "U").Substring(0, 1).ToUpperInvariant();
+  string referralUrl = $"{Request.Scheme}://{Request.Host}/account/register?ref={Model.UserAccount.ReferralCode}";
 }
 
 <section class="profile-hero page-header">
@@ -147,7 +148,14 @@
   </div>
   <div class="referral-share">
     <div><span>Ваш код</span><code>@Model.UserAccount.ReferralCode</code></div>
-    <div class="referral-share__link"><span>Ссылка для приглашения</span><code>@($"{Request.Scheme}://{Request.Host}/account/register?ref={Model.UserAccount.ReferralCode}")</code></div>
+    <div class="referral-share__link"><span>Ссылка для приглашения</span><code>@referralUrl</code></div>
+    <button class="btn btn-primary" type="button" data-copy-referral data-referral-url="@referralUrl">
+      Скопировать ссылку
+    </button>
     <a class="btn btn-secondary" asp-page="/ReferralRules">Условия программы</a>
   </div>
 </section>
+
+@section Scripts {
+  <script type="module" src="/js/referral-copy.js"></script>
+}

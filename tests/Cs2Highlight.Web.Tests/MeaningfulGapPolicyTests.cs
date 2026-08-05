@@ -71,7 +71,7 @@ public sealed class MeaningfulGapPolicyTests
     }
 
     [Fact]
-    public void OverlappingSourceIntervalIsAlsoRejected()
+    public void OverlappingSourceIntervalCanProvideADifferentComposition()
     {
         GapMaterialCandidate overlap = Candidate(
             "overlap",
@@ -92,7 +92,7 @@ public sealed class MeaningfulGapPolicyTests
             2,
             new HashSet<string>(["1:100-200"], StringComparer.Ordinal));
 
-        Assert.Same(unique, decision.Candidate);
+        Assert.Same(overlap, decision.Candidate);
     }
 
     [Fact]

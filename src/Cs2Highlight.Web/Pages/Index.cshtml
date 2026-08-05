@@ -7,6 +7,7 @@
     "FILE_TOO_LARGE" => "Одна из демок превышает допустимый размер.",
     "TOO_MANY_FILES" => "Выбрано слишком много файлов.",
     "ALL_FILES_DUPLICATE" => "Все выбранные демки уже были добавлены.",
+    "TOKEN_BALANCE_INSUFFICIENT" => "Для создания видео нужен один свободный токен. Пополните баланс или дождитесь завершения уже запущенного рендера.",
     _ when Model.Error is not null => "Не удалось загрузить демки. Проверь файлы и попробуй ещё раз.",
     _ => null
   };
@@ -74,6 +75,15 @@
           data-loading-form>
       <partial name="_UploadDropzone"
                model="new UploadDropzoneViewModel(Model.MaximumFiles, Model.MaximumFileSizeBytes)" />
+      <div data-upload-progress hidden aria-live="polite" style="margin-top:18px">
+        <div style="display:flex;justify-content:space-between;gap:12px;margin-bottom:8px">
+          <strong>Загружаем демку</strong>
+          <span data-upload-progress-label>0%</span>
+        </div>
+        <div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div class="progress-value" data-upload-progress-bar style="width:0"></div>
+        </div>
+      </div>
       <button type="submit"
               class="btn btn-primary btn-lg btn-block"
               style="margin-top:18px"
@@ -87,7 +97,7 @@
 
 <section class="surface surface-pad" style="margin-top:18px">
   <h2 class="section-title">Как работают токены</h2>
-  <p class="muted">Один токен создаёт одно видео. Токены покупаются пакетами, списываются после принятия корректной Generation в обработку, а при подтверждённой системной ошибке возвращаются. Готовое видео хранится до 7 дней, промежуточные технические файлы удаляются после генерации.</p>
+  <p class="muted">Один токен создаёт одно видео. Токен списывается автоматически только после того, как готовое видео успешно отрендерено и доступно вам. Если рендер не завершился, токен остаётся на балансе. Готовое видео хранится до 7 дней.</p>
   <p class="muted">Приглашайте друзей и получайте 1 токен за каждого приглашённого пользователя после подтверждения email. <a asp-page="/ReferralRules">Условия реферальной программы</a>.</p>
 </section>
 

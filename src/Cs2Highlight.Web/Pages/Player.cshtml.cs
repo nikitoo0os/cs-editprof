@@ -38,7 +38,7 @@ public sealed class PlayerModel(
     public async Task<IActionResult> OnPostAsync(string publicId, CancellationToken cancellationToken)
     {
         if (SteamId.Length != 17 || !SteamId.All(char.IsAsciiDigit) ||
-            AspectRatio is not ("16:9" or "9:16") ||
+            AspectRatio is not ("16:9" or "9:16" or "4:3") ||
             MinimumScore is < 0 or > 1000)
             return BadRequest();
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
@@ -56,8 +56,13 @@ public sealed class PlayerModel(
         generation.MinimumScore = MinimumScore;
         generation.OutputOrder = OutputOrder;
         generation.AspectRatio = AspectRatio;
-        generation.Width = AspectRatio == "16:9" ? 1920 : 1080;
-        generation.Height = AspectRatio == "16:9" ? 1080 : 1920;
+        (generation.Width, generation.Height) = AspectRatio switch
+        {
+            "16:9" => (1920, 1080),
+            "9:16" => (1080, 1920),
+            "4:3" => (1920, 1440),
+            _ => throw new InvalidOperationException("Unsupported aspect ratio.")
+        };
         generation.Fps = 60;
         GenerationStateMachine.Transition(
             generation, GenerationStatus.AwaitingHighlightSelection, timeProvider.GetUtcNow());

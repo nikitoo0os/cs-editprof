@@ -40,9 +40,9 @@ public sealed record GapMaterialDecision(
 
 public static class MeaningfulGapPolicy
 {
-    public const string Version = "1.0";
-    public const double MinimumOrdinaryShotSeconds = 0.4;
-    public const double MinimumFreeCameraShotSeconds = 0.75;
+    public const string Version = "1.1";
+    public const double MinimumOrdinaryShotSeconds = 1.5;
+    public const double MinimumFreeCameraShotSeconds = 1.5;
     public const double MaximumPovContinuitySeconds = 1.5;
 
     public static GapMaterialDecision Select(
@@ -67,9 +67,7 @@ public static class MeaningfulGapPolicy
 
         GapMaterialCandidate? selected = candidates
             .Where(value =>
-                !SourceIntervalPolicy.OverlapsAny(
-                    value.SourceInterval,
-                    usedSourceIntervals) &&
+                !usedSourceIntervals.Contains(value.SourceInterval) &&
                 value.DurationSeconds >= MinimumOrdinaryShotSeconds &&
                 IsEditoriallyUsable(value))
             .Select(value => new
@@ -153,6 +151,7 @@ public static class MeaningfulGapPolicy
             BrollCandidateType.PlayerRotation or
             BrollCandidateType.SideMovement or
             BrollCandidateType.RearMovement or
+            BrollCandidateType.PlayerJump or
             BrollCandidateType.TeamMovement;
         if (moving && next is not null &&
             candidate.DemoId == next.DemoId &&
@@ -171,6 +170,7 @@ public static class MeaningfulGapPolicy
             BrollCandidateType.PlayerApproach => 3,
             BrollCandidateType.PostFightExit or
             BrollCandidateType.PlayerRotation or
+            BrollCandidateType.PlayerJump or
             BrollCandidateType.RearMovement => 4,
             BrollCandidateType.TeamMovement => 5,
             BrollCandidateType.TeamSetup or

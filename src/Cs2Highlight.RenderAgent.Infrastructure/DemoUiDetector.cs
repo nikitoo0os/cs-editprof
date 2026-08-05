@@ -18,6 +18,7 @@ public sealed record DemoUiDetectionReport(
 
 public static class DemoUiDetector
 {
+    private const double MinimumPlaybackStripBoundaryCoverage = 0.60;
     private static readonly JsonSerializerOptions Json =
         new(JsonSerializerDefaults.Web) { WriteIndented = true };
     public const int AnalysisWidth = 320;
@@ -195,8 +196,11 @@ public static class DemoUiDetector
                 y + 2,
                 height - 2);
             double darkening = above - below;
+            // The demo playback panel introduces a nearly full-width edge.
+            // Gameplay HUD panels, weapon models and map geometry can create
+            // equally dark lower regions, but their boundary is localized.
             bool matched = edge >= 9.0 &&
-                coverage >= 0.42 &&
+                coverage >= MinimumPlaybackStripBoundaryCoverage &&
                 darkening >= 7.0;
             double score = edge + coverage * 10 + darkening * 0.1;
             if ((matched && !foundMatch) ||

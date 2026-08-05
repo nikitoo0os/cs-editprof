@@ -174,6 +174,40 @@ public sealed class ProfessionalCinematicPolicyTests
     }
 
     [Fact]
+    public void DemoUiDetectorDoesNotTreatWideGameplayHudAsPlaybackStrip()
+    {
+        const int width = 64;
+        const int height = 48;
+        byte[] frames = new byte[width * height * 3];
+        for (int frameIndex = 0; frameIndex < 3; frameIndex++)
+        {
+            int frameOffset = frameIndex * width * height;
+            Array.Fill(frames, (byte)135, frameOffset, width * height);
+
+            // A dark lower HUD can cover almost half the picture and create
+            // the same strong, persistent edge that caused the production
+            // false positive. A real demo strip spans most of the width.
+            for (int y = 37; y < height; y++)
+            {
+                Array.Fill(
+                    frames,
+                    (byte)18,
+                    frameOffset + y * width,
+                    29);
+            }
+        }
+
+        DemoUiDetectionReport report = DemoUiDetector.AnalyzeGrayFrames(
+            frames,
+            width,
+            height);
+
+        Assert.True(report.Analyzed);
+        Assert.False(report.DemoPlaybackStripDetected);
+        Assert.Equal(0, report.FramesMatched);
+    }
+
+    [Fact]
     public void DemoUiDetectorFindsStripWhenHudHasAStrongerUnrelatedEdge()
     {
         const int width = 64;

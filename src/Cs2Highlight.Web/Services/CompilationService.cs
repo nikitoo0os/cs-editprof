@@ -26,6 +26,50 @@ public sealed record CompilationRequest(
     FfmpegCapabilities? FfmpegCapabilities = null,
     CinematicMoviePlan? CinematicMoviePlan = null);
 public sealed record CompilationProgress(int Percent, string Stage);
+
+public static class FrameContinuityPolicy
+{
+    public const double MaximumAutoRepairDurationSeconds = 0.25;
+
+    public static double TransitionBoundaryGuardSeconds(int fps) =>
+        2d / Math.Max(1, fps);
+
+    public static double MinimumBlackDefectDurationSeconds(int fps)
+    {
+        int safeFps = Math.Max(1, fps);
+        return Math.Max(0.05, 2.5 / safeFps);
+    }
+
+    public static bool IsBriefRepairableBlackDefect(
+        double startSeconds,
+        double endSeconds,
+        double clipDurationSeconds,
+        int fps)
+    {
+        double frameDuration = 1d / Math.Max(1, fps);
+        double duration = endSeconds - startSeconds;
+        return startSeconds >= frameDuration &&
+            endSeconds <= clipDurationSeconds + frameDuration &&
+            duration >= MinimumBlackDefectDurationSeconds(fps) &&
+            duration <= MaximumAutoRepairDurationSeconds;
+    }
+
+    public static (int First, int Last, int Replacement) RepairFrameRange(
+        double startSeconds,
+        double endSeconds,
+        int fps)
+    {
+        int safeFps = Math.Max(1, fps);
+        int first = Math.Max(
+            1,
+            (int)Math.Round(
+                startSeconds * safeFps,
+                MidpointRounding.AwayFromZero));
+        int last = Math.Max(first, (int)Math.Ceiling(endSeconds * safeFps) - 1);
+        return (first, last, first - 1);
+    }
+}
+
 public sealed record CompilationVideo(int Width, int Height, int Fps, string Codec);
 public sealed record CompilationAudio(string? Codec, int? SampleRate);
 public sealed record CompilationResult(
@@ -533,6 +577,30 @@ public sealed partial class FfmpegHighlightCompilationService(
                 skipped,
                 watch.ElapsedMilliseconds);
 
+        List<BriefBlackFrameRepair> blackFrameRepairs = [];
+        for (int index = 0; index < normalized.Count; index++)
+        {
+            BriefBlackFrameRepair repair = await RepairBriefBlackFramesAsync(
+                normalized[index],
+                index + 1,
+                request.Fps,
+                cancellationToken);
+            blackFrameRepairs.Add(repair);
+        }
+        await File.WriteAllTextAsync(
+            Path.Combine(outputDirectory, "brief-black-frame-repair-report.json"),
+            JsonSerializer.Serialize(new
+            {
+                schemaVersion = "1.0",
+                clipsScanned = blackFrameRepairs.Count,
+                clipsRepaired = blackFrameRepairs.Count(value => value.Repaired),
+                repairedIntervals = blackFrameRepairs.Sum(value => value.RepairedIntervals),
+                failedRepairs = blackFrameRepairs.Count(value => value.Error is not null),
+                clips = blackFrameRepairs.Where(value =>
+                    value.DetectedIntervals > 0 || value.Error is not null).ToArray()
+            }, JsonOptions),
+            cancellationToken);
+
         progress?.Report(new CompilationProgress(75, "Composing gameplay timeline"));
         string temporary = Path.Combine(outputDirectory, "final-highlights.tmp.mp4");
         string final = Path.Combine(outputDirectory, "final-highlights.mp4");
@@ -549,7 +617,9 @@ public sealed partial class FfmpegHighlightCompilationService(
             concatArguments.Add("-i");
             concatArguments.Add(clip);
         }
-        string concatGraph = BuildDecodedConcatGraph(normalized.Count);
+        string concatGraph = BuildDecodedConcatGraph(
+            normalized.Count,
+            request.Fps);
         concatArguments.AddRange(
         [
             "-filter_complex", concatGraph,
@@ -701,7 +771,7 @@ public sealed partial class FfmpegHighlightCompilationService(
                 continuity.BlackFrameCount,
                 continuity.OneFrameSegmentCount,
                 continuity.OneToFiveFrameSegmentCount,
-                minimumTransitionShotDurationSeconds = 0.4,
+                minimumTransitionShotDurationSeconds = 1.5,
                 violations = continuity.Violations.Where(value =>
                     value.Contains(
                         "BOUNDARY",
@@ -772,6 +842,10 @@ public sealed partial class FfmpegHighlightCompilationService(
                     preset = request.MovieSettings.ColorGradePreset,
                     filter = FfmpegMovieFilterBuilder.Color(
                         request.MovieSettings.ColorGradePreset),
+                    styleFinish = request.MovieSettings.MovieStyle ==
+                        MovieStyle.CinematicDirector
+                            ? FfmpegMovieFilterBuilder.CinematicFinish()
+                            : null,
                     lutAssetKey = request.MovieSettings.LutAssetKey,
                     lutSha256 = lutPath is null
                         ? null
@@ -947,17 +1021,40 @@ public sealed partial class FfmpegHighlightCompilationService(
         return result;
     }
 
-    private static string BuildDecodedConcatGraph(int clipCount)
+    private static string BuildDecodedConcatGraph(int clipCount, int fps)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(clipCount, 1);
+        double boundaryGuardSeconds =
+            FrameContinuityPolicy.TransitionBoundaryGuardSeconds(fps);
+        string boundaryGuard = boundaryGuardSeconds.ToString(
+            "0.######",
+            CultureInfo.InvariantCulture);
         StringBuilder graph = new();
         for (int index = 0; index < clipCount; index++)
         {
             graph.Append('[').Append(index)
-                .Append(":v:0]settb=AVTB,setpts=PTS-STARTPTS[v")
+                .Append(":v:0]");
+            if (index > 0)
+            {
+                // HLAE/CS2 can emit one or two stale frames immediately after
+                // a seek or camera-mode switch. Never expose those frames at a
+                // visible edit boundary; replace their time with the last valid
+                // frame so the planned timeline duration remains unchanged.
+                graph.Append("trim=start=").Append(boundaryGuard)
+                    .Append(",setpts=PTS-STARTPTS,tpad=stop_mode=clone:stop_duration=")
+                    .Append(boundaryGuard).Append(',');
+            }
+            graph.Append("settb=AVTB,setpts=PTS-STARTPTS[v")
                 .Append(index).Append("];[")
                 .Append(index)
-                .Append(":a:0]asetpts=PTS-STARTPTS,")
+                .Append(":a:0]");
+            if (index > 0)
+            {
+                graph.Append("atrim=start=").Append(boundaryGuard)
+                    .Append(",asetpts=PTS-STARTPTS,apad=pad_dur=")
+                    .Append(boundaryGuard).Append(',');
+            }
+            graph.Append("asetpts=PTS-STARTPTS,")
                 .Append("aresample=48000:async=1:first_pts=0[a")
                 .Append(index).Append("];");
         }
@@ -1075,8 +1172,11 @@ public sealed partial class FfmpegHighlightCompilationService(
         CancellationToken cancellationToken)
     {
         double frameDuration = 1d / Math.Max(1, request.Fps);
+        double minimumBlackDefectDuration =
+            FrameContinuityPolicy.MinimumBlackDefectDurationSeconds(
+                request.Fps);
         string filter = FormattableString.Invariant(
-            $"blackdetect=d={frameDuration * 0.8:0.######}:pix_th=0.02,freezedetect=n=0.001:d=0.08,signalstats,metadata=print:key=lavfi.signalstats.YAVG");
+            $"blackdetect=d={minimumBlackDefectDuration:0.######}:pix_th=0.02,freezedetect=n=0.001:d=0.08,signalstats,metadata=print:key=lavfi.signalstats.YAVG");
         ProcessResult scan = await RunAsync(
             options.FfmpegPath,
             [
@@ -1154,6 +1254,121 @@ public sealed partial class FfmpegHighlightCompilationService(
             boundaryDefects == 0,
             scan.ExitCode == 0,
             violations);
+    }
+
+    private async Task<BriefBlackFrameRepair> RepairBriefBlackFramesAsync(
+        string path,
+        int clipNumber,
+        int fps,
+        CancellationToken cancellationToken)
+    {
+        double minimumDuration =
+            FrameContinuityPolicy.MinimumBlackDefectDurationSeconds(fps);
+        ProcessResult scan = await RunAsync(
+            options.FfmpegPath,
+            [
+                "-hide_banner", "-nostats", "-i", path,
+                "-an", "-vf",
+                FormattableString.Invariant(
+                    $"blackdetect=d={minimumDuration:0.######}:pix_th=0.02"),
+                "-f", "null", "-"
+            ],
+            cancellationToken);
+        if (scan.ExitCode != 0)
+        {
+            return new BriefBlackFrameRepair(
+                clipNumber, Path.GetFileName(path), 0, 0, false,
+                "BLACK_FRAME_SCAN_FAILED");
+        }
+
+        MediaMetadata metadata = await ProbeAsync(path, cancellationToken);
+        if (metadata.Error is not null || metadata.DurationSeconds <= 0)
+        {
+            return new BriefBlackFrameRepair(
+                clipNumber, Path.GetFileName(path), 0, 0, false,
+                "BLACK_FRAME_REPAIR_PROBE_FAILED");
+        }
+
+        BlackInterval[] detected = Regex.Matches(
+                scan.Error,
+                @"black_start:(?<start>\d+(?:\.\d+)?)\s+black_end:(?<end>\d+(?:\.\d+)?)",
+                RegexOptions.CultureInvariant)
+            .Cast<Match>()
+            .Select(value => new BlackInterval(
+                double.Parse(value.Groups["start"].Value, CultureInfo.InvariantCulture),
+                double.Parse(value.Groups["end"].Value, CultureInfo.InvariantCulture)))
+            .ToArray();
+        BlackInterval[] repairable = detected.Where(value =>
+            FrameContinuityPolicy.IsBriefRepairableBlackDefect(
+                value.StartSeconds,
+                value.EndSeconds,
+                metadata.DurationSeconds,
+                fps)).ToArray();
+        if (repairable.Length == 0)
+        {
+            return new BriefBlackFrameRepair(
+                clipNumber, Path.GetFileName(path), detected.Length, 0, false, null);
+        }
+
+        List<string> filterParts = [];
+        StringBuilder split = new("[0:v]split=");
+        split.Append(repairable.Length + 1).Append("[repair_base]");
+        for (int index = 0; index < repairable.Length; index++)
+            split.Append("[repair_reference_").Append(index).Append(']');
+        filterParts.Add(split.ToString());
+        string repairInput = "repair_base";
+        for (int index = 0; index < repairable.Length; index++)
+        {
+            BlackInterval value = repairable[index];
+            (int first, int last, int replacement) =
+                FrameContinuityPolicy.RepairFrameRange(
+                    value.StartSeconds,
+                    value.EndSeconds,
+                    fps);
+            string repairOutput = $"repair_output_{index}";
+            filterParts.Add(
+                $"[{repairInput}][repair_reference_{index}]" +
+                $"freezeframes=first={first}:last={last}:replace={replacement}" +
+                $"[{repairOutput}]");
+            repairInput = repairOutput;
+        }
+        string filter = string.Join(';', filterParts);
+        string repaired = Path.Combine(
+            Path.GetDirectoryName(path)!,
+            Path.GetFileNameWithoutExtension(path) + ".black-repair.tmp.mp4");
+        if (File.Exists(repaired)) File.Delete(repaired);
+        ProcessResult repair = await RunAsync(
+            options.FfmpegPath,
+            [
+                "-y", "-hide_banner", "-loglevel", "error", "-i", path,
+                "-filter_complex", filter,
+                "-map", $"[{repairInput}]", "-map", "0:a?",
+                "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                "-c:a", "copy", "-movflags", "+faststart", repaired
+            ],
+            cancellationToken);
+        await WriteProcessLogAsync(
+            Path.Combine(
+                Path.GetDirectoryName(path)!,
+                $"clip-{clipNumber:D3}.black-repair.ffmpeg.log"),
+            repair,
+            cancellationToken);
+        if (repair.ExitCode != 0 || !File.Exists(repaired))
+        {
+            if (File.Exists(repaired)) File.Delete(repaired);
+            return new BriefBlackFrameRepair(
+                clipNumber, Path.GetFileName(path), detected.Length, 0, false,
+                "BLACK_FRAME_REPAIR_FAILED");
+        }
+
+        File.Move(repaired, path, true);
+        return new BriefBlackFrameRepair(
+            clipNumber,
+            Path.GetFileName(path),
+            detected.Length,
+            repairable.Length,
+            true,
+            null);
     }
 
     private static double? ParseLast(MatchCollection matches)
@@ -1254,6 +1469,14 @@ public sealed partial class FfmpegHighlightCompilationService(
         bool TransitionBoundaryValid,
         bool StablePts,
         IReadOnlyList<string> Violations);
+    private sealed record BlackInterval(double StartSeconds, double EndSeconds);
+    private sealed record BriefBlackFrameRepair(
+        int ClipNumber,
+        string FileName,
+        int DetectedIntervals,
+        int RepairedIntervals,
+        bool Repaired,
+        string? Error);
     private sealed class MediaMetadata
     {
         public bool HasVideo { get; init; }
@@ -1294,7 +1517,10 @@ public static class FfmpegMovieFilterBuilder
     }
 
     public static string CinematicFinish() =>
-        "eq=contrast=1.04:saturation=1.08:gamma=1.015";
+        "eq=contrast=1.14:saturation=1.22:gamma=0.97:brightness=-0.015," +
+        "colorbalance=bs=.035:gs=.012:rh=.045:gh=.015," +
+        "curves=preset=medium_contrast,vignette=PI/7:eval=frame," +
+        "unsharp=5:5:.35:5:5:0";
 
     public static string AudioMix(
         GenerationMovieSettings settings,

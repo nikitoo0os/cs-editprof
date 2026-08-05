@@ -30,6 +30,10 @@ public sealed class GenerationModel(
         Generation? generation = await db.Generations.AsNoTracking()
             .SingleOrDefaultAsync(value => value.PublicId == publicId, cancellationToken);
         if (generation is null || !GenerationAccess.CanRead(generation, User, environment)) return NotFound();
+        if (generation.Status == GenerationStatus.AwaitingPlayerSelection)
+            return RedirectToPage("/Player", new { publicId });
+        if (generation.Status == GenerationStatus.AwaitingMovieConfiguration)
+            return RedirectToPage("/Music", new { publicId });
         Generation = generation;
         DemoCount = await db.GenerationDemos.CountAsync(value => value.GenerationId == generation.Id, cancellationToken);
         PlayerCount = await db.GenerationPlayers.CountAsync(value => value.GenerationId == generation.Id, cancellationToken);
@@ -98,7 +102,8 @@ public sealed class GenerationModel(
         bool musicAnalysisRetry =
             generation.ErrorCode?.StartsWith(
                 "MUSIC_",
-                StringComparison.Ordinal) == true;
+                StringComparison.Ordinal) == true &&
+            generation.ErrorCode != "MUSIC_PLAN_NOT_LOCKED";
         if (generation.Status != GenerationStatus.Failed ||
             generation.SelectedSteamId is null ||
             (!musicAnalysisRetry &&

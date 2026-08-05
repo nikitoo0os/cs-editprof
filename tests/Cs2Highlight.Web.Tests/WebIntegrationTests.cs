@@ -5,12 +5,14 @@ using Cs2Highlight.Analysis;
 using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 
 namespace Cs2Highlight.Web.Tests;
 
@@ -18,6 +20,75 @@ public sealed class WebIntegrationTests : IDisposable
 {
     private readonly string root = Path.Combine(Path.GetTempPath(), $"web-integration-{Guid.NewGuid():N}");
     private WebApplicationFactory<Program>? factory;
+
+    [Fact]
+    public async Task ProductionLikeEnvironmentUsesFriendlyPasswordPolicyAndRequiresConfirmation()
+    {
+        WebApplicationFactory<Program> app = CreateFactory();
+        IdentityOptions options = app.Services.GetRequiredService<IOptions<IdentityOptions>>().Value;
+
+        Assert.Equal(8, options.Password.RequiredLength);
+        Assert.False(options.Password.RequireDigit);
+        Assert.False(options.Password.RequireLowercase);
+        Assert.False(options.Password.RequireUppercase);
+        Assert.False(options.Password.RequireNonAlphanumeric);
+        Assert.True(options.SignIn.RequireConfirmedEmail);
+        using IServiceScope scope = app.Services.CreateScope();
+        UserManager<ApplicationUser> users =
+            scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        SignInManager<ApplicationUser> signIn =
+            scope.ServiceProvider.GetRequiredService<SignInManager<ApplicationUser>>();
+        ApplicationUser user = new()
+        {
+            UserName = "unconfirmed@example.test",
+            Email = "unconfirmed@example.test"
+        };
+        IdentityResult created = await users.CreateAsync(user, "abcdefgh");
+        Microsoft.AspNetCore.Identity.SignInResult result =
+            await signIn.CheckPasswordSignInAsync(user, "abcdefgh", false);
+
+        Assert.True(created.Succeeded);
+        Assert.True(result.IsNotAllowed);
+    }
+
+    [Fact]
+    public async Task DevelopmentEnvironmentDoesNotRequireEmailConfirmation()
+    {
+        string databasePath = Path.Combine(root, "development-auth.db");
+        using WebApplicationFactory<Program> app = new WebApplicationFactory<Program>()
+            .WithWebHostBuilder(builder =>
+            {
+                builder.UseEnvironment("Development");
+                builder.ConfigureAppConfiguration((_, configuration) =>
+                    configuration.AddInMemoryCollection(new Dictionary<string, string?>
+                    {
+                        ["ConnectionStrings:GenerationDb"] =
+                            $"Data Source={databasePath};Pooling=False",
+                        ["Storage:Root"] = Path.Combine(root, "development-storage"),
+                        ["Uploads:MinimumFreeDiskSpaceBytes"] = "0"
+                    }));
+                builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
+            });
+        IdentityOptions options = app.Services.GetRequiredService<IOptions<IdentityOptions>>().Value;
+
+        Assert.False(options.SignIn.RequireConfirmedEmail);
+        using IServiceScope scope = app.Services.CreateScope();
+        UserManager<ApplicationUser> users =
+            scope.ServiceProvider.GetRequiredService<UserManager<ApplicationUser>>();
+        SignInManager<ApplicationUser> signIn =
+            scope.ServiceProvider.GetRequiredService<SignInManager<ApplicationUser>>();
+        ApplicationUser user = new()
+        {
+            UserName = "local@example.test",
+            Email = "local@example.test"
+        };
+        IdentityResult created = await users.CreateAsync(user, "abcdefgh");
+        Microsoft.AspNetCore.Identity.SignInResult result =
+            await signIn.CheckPasswordSignInAsync(user, "abcdefgh", false);
+
+        Assert.True(created.Succeeded);
+        Assert.True(result.Succeeded);
+    }
 
     [Fact]
     public async Task HomeAndLivenessAreAvailable()
@@ -29,6 +100,8 @@ public sealed class WebIntegrationTests : IDisposable
         string delivery = await client.GetStringAsync("/delivery");
         string offer = await client.GetStringAsync("/offer");
         string contacts = await client.GetStringAsync("/contacts");
+        string login = await client.GetStringAsync("/account/login");
+        string resendConfirmation = await client.GetStringAsync("/account/resend-confirmation");
         HttpResponseMessage health = await client.GetAsync("/health/live");
 
         Assert.Contains("Загрузить и найти моменты", home);
@@ -38,6 +111,8 @@ public sealed class WebIntegrationTests : IDisposable
         Assert.Contains("Доставка и получение товара", delivery);
         Assert.Contains("Публичная оферта", offer);
         Assert.Contains("Контакты и реквизиты", contacts);
+        Assert.Contains("Не пришло подтверждение?", login);
+        Assert.Contains("Отправить новую ссылку", resendConfirmation);
         Assert.Equal(HttpStatusCode.OK, health.StatusCode);
     }
 
@@ -113,6 +188,60 @@ public sealed class WebIntegrationTests : IDisposable
         Assert.Equal("video/mp4", response.Content.Headers.ContentType?.MediaType);
         Assert.Equal(10, bytes.Length);
         Assert.DoesNotContain(root, response.Headers.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task CameraOnlyVideoSupportsRangeAndIsAdvertisedByStatusApi()
+    {
+        WebApplicationFactory<Program> app = CreateFactory();
+        string publicId = Guid.NewGuid().ToString("N");
+        string video = Path.Combine(root, "camera-only.mp4");
+        Directory.CreateDirectory(root);
+        await File.WriteAllBytesAsync(
+            video,
+            Enumerable.Range(0, 100).Select(value => (byte)value).ToArray());
+        using (IServiceScope scope = app.Services.CreateScope())
+        {
+            IDbContextFactory<GenerationDbContext> dbFactory =
+                scope.ServiceProvider
+                    .GetRequiredService<IDbContextFactory<GenerationDbContext>>();
+            await using GenerationDbContext db =
+                await dbFactory.CreateDbContextAsync();
+            Generation generation = new()
+            {
+                PublicId = publicId,
+                Status = GenerationStatus.Completed,
+                CurrentStage = "Completed",
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
+            generation.Artifacts.Add(new GenerationArtifact
+            {
+                Type = ArtifactType.CameraOnlyVideo,
+                FileName = "camera-only.mp4",
+                StoredPath = video,
+                ContentType = "video/mp4",
+                FileSizeBytes = 100,
+                CreatedAt = DateTimeOffset.UtcNow
+            });
+            db.Add(generation);
+            await db.SaveChangesAsync();
+        }
+        using HttpClient client = app.CreateClient();
+        using HttpRequestMessage request = new(
+            HttpMethod.Get,
+            $"/generations/{publicId}/video/cameras");
+        request.Headers.Range = new RangeHeaderValue(10, 19);
+
+        HttpResponseMessage response = await client.SendAsync(request);
+        string status = await client.GetStringAsync(
+            $"/api/generations/{publicId}");
+
+        Assert.Equal(HttpStatusCode.PartialContent, response.StatusCode);
+        Assert.Contains(
+            $"/generations/{publicId}/video/cameras",
+            status,
+            StringComparison.Ordinal);
     }
 
     [Fact]

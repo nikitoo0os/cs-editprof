@@ -18,7 +18,6 @@ public sealed class IndexModel(
     PaymentOptions paymentOptions,
     TimeProvider timeProvider,
     UserManager<ApplicationUser> userManager,
-    ITokenService tokens,
     GenerationMetrics metrics) : PageModel
 {
     [BindProperty] public List<IFormFile> DemoFiles { get; set; } = [];
@@ -47,6 +46,8 @@ public sealed class IndexModel(
         };
         try
         {
+            if (user.TokenBalance < 1)
+                throw new InvalidOperationException("TOKEN_BALANCE_INSUFFICIENT");
             GenerationStateMachine.Transition(generation, GenerationStatus.Uploading, now);
             IReadOnlyList<StoredUpload> stored = await uploads.SaveAsync(
                 generation.PublicId, DemoFiles, cancellationToken);
@@ -83,8 +84,6 @@ public sealed class IndexModel(
             GenerationStateMachine.Transition(generation, GenerationStatus.Uploaded, now);
             generation.ProgressPercent = 10;
             GenerationStateMachine.Transition(generation, GenerationStatus.QueuedForAnalysis, now);
-            await db.SaveChangesAsync(cancellationToken);
-            await tokens.DebitAsync(db, user.Id, generation.Id, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             metrics.GenerationCreated.Add(1);

@@ -26,6 +26,8 @@ public static class UiText
 
         return code switch
         {
+            "TOKEN_BALANCE_INSUFFICIENT" =>
+                "На балансе нет свободного токена. Пополните баланс или дождитесь завершения уже запущенного видео.",
             "MUSIC_FILE_REQUIRED" => "Выберите музыкальный файл.",
             "MUSIC_RIGHTS_CONFIRMATION_REQUIRED" =>
                 "Подтвердите право использовать этот трек.",

@@ -12,7 +12,7 @@ public sealed class ResetPasswordModel(UserManager<ApplicationUser> users) : Pag
     [BindProperty(SupportsGet = true)] public string? UserId { get; set; }
     [BindProperty(SupportsGet = true)] public string? Token { get; set; }
     public bool Completed { get; private set; }
-    public sealed class InputModel { [Required, StringLength(100, MinimumLength = 10), DataType(DataType.Password)] public string Password { get; set; } = string.Empty; [Required, DataType(DataType.Password), Compare(nameof(Password))] public string ConfirmPassword { get; set; } = string.Empty; }
+    public sealed class InputModel { [Required, StringLength(100, MinimumLength = 8), DataType(DataType.Password)] public string Password { get; set; } = string.Empty; [Required, DataType(DataType.Password), Compare(nameof(Password))] public string ConfirmPassword { get; set; } = string.Empty; }
     public async Task<IActionResult> OnPostAsync(CancellationToken cancellationToken)
     {
         if (!ModelState.IsValid || string.IsNullOrWhiteSpace(UserId) || string.IsNullOrWhiteSpace(Token)) return Page();

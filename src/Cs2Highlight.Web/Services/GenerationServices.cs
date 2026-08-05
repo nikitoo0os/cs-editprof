@@ -39,6 +39,8 @@ public sealed class PipelineOptions
 public sealed class CinematicCameraRuntimeOptions
 {
     public bool Enabled { get; set; }
+    public bool AutomaticCalibrationEnabled { get; set; } = true;
+    public string CalibrationRoot { get; set; } = "storage/camera-calibration";
     public string HlaeVersion { get; set; } = string.Empty;
     public string VerificationId { get; set; } = string.Empty;
     public string[] VerifiedMaps { get; set; } = [];

@@ -27,16 +27,26 @@ public sealed class RenderOutputWatcher(RenderEnvironmentOptions options, TimePr
                 .FirstOrDefault();
             if (candidate is not null)
             {
-                long size = new FileInfo(candidate).Length;
+                string capturedAudio = ResolveCapturedAudioPath(candidate);
+                long videoSize = new FileInfo(candidate).Length;
+                long audioSize = File.Exists(capturedAudio)
+                    ? new FileInfo(capturedAudio).Length
+                    : 0;
+                long size = videoSize + audioSize;
                 if (size != previousSize)
                 {
                     previousSize = size;
                     stableSince = timeProvider.GetUtcNow();
                 }
-                else if (size >= options.MinimumOutputBytes &&
+                else if (videoSize >= options.MinimumOutputBytes &&
+                         audioSize > 44 &&
                          timeProvider.GetUtcNow() - stableSince >= TimeSpan.FromSeconds(options.OutputStableSeconds))
                 {
-                    MediaProbeResult probe = await ProbeAsync(candidate, job.Video, cancellationToken);
+                    MediaProbeResult probe = await ProbeAsync(
+                        candidate,
+                        job.Video,
+                        requireAudio: false,
+                        cancellationToken);
                     if (!probe.Success)
                     {
                         return (false, candidate, size, probe.Error);
@@ -113,14 +123,120 @@ public sealed class RenderOutputWatcher(RenderEnvironmentOptions options, TimePr
 
                     Directory.CreateDirectory(job.OutputDirectory);
                     string destination = Path.Combine(job.OutputDirectory, "raw-highlight.mp4");
-                    File.Copy(candidate, destination, overwrite: false);
-                    return (true, destination, size, null);
+                    string muxLog = Path.Combine(
+                        job.OutputDirectory,
+                        "gameplay-audio-mux.ffmpeg.log");
+                    string? muxError = await MuxGameplayAudioAsync(
+                        candidate,
+                        capturedAudio,
+                        destination,
+                        muxLog,
+                        cancellationToken);
+                    if (muxError is not null)
+                        return (false, candidate, videoSize, muxError);
+                    MediaProbeResult muxedProbe = await ProbeAsync(
+                        destination,
+                        job.Video,
+                        requireAudio: true,
+                        cancellationToken);
+                    if (!muxedProbe.Success)
+                    {
+                        return (
+                            false,
+                            destination,
+                            new FileInfo(destination).Length,
+                            muxedProbe.Error);
+                    }
+                    long destinationSize = new FileInfo(destination).Length;
+                    return (true, destination, destinationSize, null);
                 }
             }
             await Task.Delay(TimeSpan.FromMilliseconds(250), timeProvider, cancellationToken);
         }
-        return (false, candidate, previousSize < 0 ? 0 : previousSize,
-            "No stable non-empty MP4 rendered media file appeared before timeout.");
+        string error = candidate is not null &&
+            (!File.Exists(ResolveCapturedAudioPath(candidate)) ||
+             new FileInfo(ResolveCapturedAudioPath(candidate)).Length <= 44)
+                ? "GAMEPLAY_AUDIO_MISSING: HLAE did not produce audio.wav next to the rendered video."
+                : "No stable non-empty video and gameplay-audio recording appeared before timeout.";
+        return (false, candidate, previousSize < 0 ? 0 : previousSize, error);
+    }
+
+    public static string ResolveCapturedAudioPath(string videoPath) =>
+        Path.Combine(
+            Path.GetDirectoryName(Path.GetFullPath(videoPath))!,
+            "audio.wav");
+
+    private async Task<string?> MuxGameplayAudioAsync(
+        string videoPath,
+        string audioPath,
+        string destination,
+        string logPath,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(options.FfmpegExecutablePath) ||
+            !File.Exists(options.FfmpegExecutablePath))
+        {
+            return "GAMEPLAY_AUDIO_MUX_FAILED: FFmpeg is not configured.";
+        }
+        string temporary = destination + ".mux.tmp.mp4";
+        if (File.Exists(temporary)) File.Delete(temporary);
+        ProcessStartInfo start = new()
+        {
+            FileName = Path.GetFullPath(options.FfmpegExecutablePath),
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        foreach (string argument in new[]
+        {
+            "-y", "-hide_banner", "-loglevel", "error",
+            "-i", videoPath,
+            "-i", audioPath,
+            "-map", "0:v:0",
+            "-map", "1:a:0",
+            "-c:v", "copy",
+            "-af", "aresample=48000:async=1:first_pts=0,apad",
+            "-c:a", "aac",
+            "-ar", "48000",
+            "-ac", "2",
+            "-b:a", "192k",
+            "-shortest",
+            "-movflags", "+faststart",
+            temporary
+        })
+            start.ArgumentList.Add(argument);
+        using Process process = new() { StartInfo = start };
+        if (!process.Start())
+            return "GAMEPLAY_AUDIO_MUX_FAILED: FFmpeg did not start.";
+        Task<string> stdout = process.StandardOutput.ReadToEndAsync(
+            cancellationToken);
+        Task<string> stderr = process.StandardError.ReadToEndAsync(
+            cancellationToken);
+        try
+        {
+            await process.WaitForExitAsync(cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            throw;
+        }
+        string output = await stdout;
+        string error = await stderr;
+        await File.WriteAllTextAsync(
+            logPath,
+            $"exitCode={process.ExitCode}{Environment.NewLine}" +
+            $"stdout:{Environment.NewLine}{output}{Environment.NewLine}" +
+            $"stderr:{Environment.NewLine}{error}",
+            cancellationToken);
+        if (process.ExitCode != 0 || !File.Exists(temporary))
+        {
+            if (File.Exists(temporary)) File.Delete(temporary);
+            return $"GAMEPLAY_AUDIO_MUX_FAILED: {error.Trim()}";
+        }
+        File.Move(temporary, destination, overwrite: false);
+        return null;
     }
 
     private async Task<ClipStartQualityResult> AnalyzeClipStartAsync(
@@ -207,6 +323,7 @@ public sealed class RenderOutputWatcher(RenderEnvironmentOptions options, TimePr
     private async Task<MediaProbeResult> ProbeAsync(
         string path,
         VideoSettings expected,
+        bool requireAudio,
         CancellationToken cancellationToken)
     {
         ProcessStartInfo startInfo = new()
@@ -257,7 +374,10 @@ public sealed class RenderOutputWatcher(RenderEnvironmentOptions options, TimePr
 
         try
         {
-            string? validationError = ValidateProbeJson(stdout, expected);
+            string? validationError = ValidateProbeJson(
+                stdout,
+                expected,
+                requireAudio);
             return new MediaProbeResult(validationError is null, validationError);
         }
         catch (Exception exception) when (
@@ -267,7 +387,10 @@ public sealed class RenderOutputWatcher(RenderEnvironmentOptions options, TimePr
         }
     }
 
-    public static string? ValidateProbeJson(string json, VideoSettings expected)
+    public static string? ValidateProbeJson(
+        string json,
+        VideoSettings expected,
+        bool requireAudio = false)
     {
         using JsonDocument document = JsonDocument.Parse(json);
         JsonElement root = document.RootElement;
@@ -291,6 +414,14 @@ public sealed class RenderOutputWatcher(RenderEnvironmentOptions options, TimePr
         if (width != expected.Width || height != expected.Height)
         {
             return $"Rendered dimensions are {width}x{height}; expected {expected.Width}x{expected.Height}.";
+        }
+        if (requireAudio && !root.GetProperty("streams")
+                .EnumerateArray()
+                .Any(stream =>
+                    stream.TryGetProperty("codec_type", out JsonElement type) &&
+                    type.GetString() == "audio"))
+        {
+            return "GAMEPLAY_AUDIO_MISSING: muxed render has no audio stream.";
         }
         return null;
     }

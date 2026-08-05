@@ -115,6 +115,11 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
         Assert.DoesNotContain(commands, command =>
             command.StartsWith("spec_player ", StringComparison.Ordinal));
         Assert.Contains("mirv_streams record start", commands);
+        Assert.Contains("cl_showtextmsg 0", commands);
+        Assert.Contains("cl_spec_stats 0", commands);
+        Assert.Contains(
+            "mirv_deathmsg filter add attackerMatch=!x76561198000000001 block=1 lastRule=1",
+            commands);
         Assert.Contains("demo_resume", commands);
         Assert.True(commands.Count(command => command == "cl_drawhud 1") >= 5);
         Assert.True(commands.Count(command => command == "cl_showdemooverlay 0") >= 5);
@@ -365,6 +370,11 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             {
                 await writer.WriteLineAsync(command["echo ".Length..]);
             }
+            if (command == "mirv_deathmsg")
+            {
+                await writer.WriteLineAsync(
+                    "mirv_deathmsg filter [...] - Filter death messages.");
+            }
             if (command.StartsWith(
                     "echo AFX_RENDER_CAMPATH_ADD_",
                     StringComparison.Ordinal))
@@ -474,7 +484,9 @@ public sealed class NetConsoleDemoControllerTests : IDisposable
             {
                 await writer.WriteLineAsync("AFX_RENDER_CAPTURE_PROFILE_APPLIED");
             }
-            if (command is "cl_showdemooverlay" or "spec_show_xray" or
+            if (command is "cl_showdemooverlay" or "cl_showtextmsg" or
+                "cl_spec_stats" or "cl_spec_show_bindings" or
+                "spec_show_xray" or
                 "r_show_build_info" or "cl_trueview_show_status")
             {
                 await writer.WriteLineAsync($"\"{command}\" = \"false\"");

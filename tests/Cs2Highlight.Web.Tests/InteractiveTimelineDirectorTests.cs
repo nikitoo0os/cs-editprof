@@ -44,7 +44,8 @@ public sealed class InteractiveTimelineDirectorTests :
             new GenerationStorage(new StorageOptions
             {
                 Root = storageRoot
-            }));
+            }),
+            new GenerationWakeSignal());
     }
 
     [Fact]
@@ -268,6 +269,10 @@ public sealed class InteractiveTimelineDirectorTests :
                 db,
                 CancellationToken.None);
             await db.SaveChangesAsync();
+            Assert.NotNull(await db.GenerationMovieSettings
+                .Where(value => value.GenerationId == generationId)
+                .Select(value => value.LockedAt)
+                .SingleAsync());
         }
 
         InteractiveTimelineView locked =
@@ -315,9 +320,16 @@ public sealed class InteractiveTimelineDirectorTests :
                 20,
                 ConcurrencyToken: firstAdded.ConcurrencyToken),
             CancellationToken.None);
-        Assert.All(arranged.Gaps, gap => Assert.Equal(
+        Assert.All(
+            arranged.Gaps.Where(value => value.Role !=
+                nameof(TimelineGapRole.Outro)),
+            gap => Assert.Equal(
+                nameof(TimelineGapState.Failed),
+                gap.State));
+        Assert.Equal(
             nameof(TimelineGapState.Planned),
-            gap.State));
+            arranged.Gaps.Single(value => value.Role ==
+                nameof(TimelineGapRole.Outro)).State);
         UserKillAnchor first = arranged.Anchors.Single(value =>
             value.HighlightId == "highlight-triple");
         UserKillAnchor second = arranged.Anchors.Single(value =>
@@ -348,10 +360,6 @@ public sealed class InteractiveTimelineDirectorTests :
         Assert.NotEqual(before[betweenId].Json, after[betweenId].Json);
         Assert.Equal(before[outroId].Id, after[outroId].Id);
         Assert.Equal(before[outroId].UpdatedAt, after[outroId].UpdatedAt);
-        using JsonDocument reused = JsonDocument.Parse(after[outroId].Json);
-        Assert.True(reused.RootElement
-            .GetProperty("reusedSuccessfulPlan")
-            .GetBoolean());
         Assert.True(moved.Gaps.Single(value => value.Id == outroId).Reused);
     }
 
@@ -418,7 +426,10 @@ public sealed class InteractiveTimelineDirectorTests :
                 .OrderBy(value => value.CandidateId)
                 .ToArrayAsync();
             List<CinematicSequenceSegment> cameraPrototypes = [];
-            foreach (GenerationBrollCandidate candidate in candidates)
+            // Only the final candidate has a renderable free-camera plan. The
+            // local editor must prefer it over an earlier, otherwise
+            // higher-ranked candidate that would silently fall back to POV.
+            foreach (GenerationBrollCandidate candidate in candidates.TakeLast(1))
             {
                 CameraKeyframe[] keyframes =
                 [
@@ -496,7 +507,8 @@ public sealed class InteractiveTimelineDirectorTests :
                         SafetyVolume = new SafeCameraVolume(
                             new GameplayVector3(-1, -1, 0),
                             new GameplayVector3(256, 1, 128)),
-                        PreviewRequired = true
+                        PreviewRequired = true,
+                        AutomaticCalibration = true
                     },
                     TimeWarp = new TimeWarpPlan(1, [], false, []),
                     Effects = []
@@ -552,7 +564,6 @@ public sealed class InteractiveTimelineDirectorTests :
             view.Gaps.Where(value =>
                 value.Camera == nameof(CameraShotFamily.SideTracking)));
         Assert.Equal("Preview pending", freeCamera.CameraVerification);
-        Assert.False(freeCamera.CameraFallback);
         await using GenerationDbContext verification =
             await factory.CreateDbContextAsync();
         LocalTimelineRegionPlan[] regions = (await verification
@@ -566,10 +577,14 @@ public sealed class InteractiveTimelineDirectorTests :
             .SelectMany(value => value.CameraShots)
             .First(value =>
                 value.Family == CameraShotFamily.SideTracking);
+        Assert.Contains("broll-07", scheduled.Id, StringComparison.Ordinal);
         Assert.True(scheduled.PreviewRequired);
         Assert.Contains("CAMERA_PREVIEW_PENDING", scheduled.Warnings);
         Assert.Equal(2, scheduled.TargetPoints.Count);
         Assert.NotNull(scheduled.SafetyVolume);
+        Assert.True(scheduled.AutomaticCalibration);
+        Assert.All(scheduled.Keyframes, value =>
+            Assert.InRange(value.TimeSeconds, 0, scheduled.TargetDurationSeconds));
     }
 
     [Fact]
@@ -624,6 +639,24 @@ public sealed class InteractiveTimelineDirectorTests :
             second.OutputStartSeconds +
             TimeWarpMath.MapSourceTime(second.TimeWarp, 1),
             6);
+    }
+
+    [Fact]
+    public void OutroResidualIsAbsorbedBySlowingTheFinalBroll()
+    {
+        CinematicSequenceSegment[] normalized =
+            InteractiveTimelineDirector.NormalizeCinematicContinuity(
+                [Segment("outro", null, 0, 3.938)],
+                new Dictionary<string, LocalHighlightSegmentPlan>(),
+                new Dictionary<string, GenerationTimelineAnchor>(),
+                4.4);
+
+        CinematicSequenceSegment outro = Assert.Single(normalized);
+        Assert.Equal(4.4, outro.OutputEndSeconds, 6);
+        Assert.Equal(3.938 / 4.4, outro.TimeWarp.BaseSpeedFactor, 6);
+        Assert.Contains(
+            "OUTRO_FREECAM_DURATION_ABSORPTION",
+            outro.TimeWarp.Warnings);
     }
 
     public async Task DisposeAsync() =>
@@ -693,6 +726,11 @@ public sealed class InteractiveTimelineDirectorTests :
             SampleRate = 48_000,
             Channels = 2,
             RightsConfirmed = true,
+            CreatedAt = now
+        };
+        generation.MovieSettings = new GenerationMovieSettings
+        {
+            MovieStyle = MovieStyle.CinematicDirector,
             CreatedAt = now
         };
         generation.Highlights.AddRange(

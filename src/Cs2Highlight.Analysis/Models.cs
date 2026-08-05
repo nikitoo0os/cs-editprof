@@ -170,6 +170,9 @@ public sealed record KillDescriptor(
     public int? KillerHealth { get; init; }
     public double? DistanceMeters { get; init; }
     public int? ShotsSinceLastKill { get; init; }
+    public GameplayVector3? ShooterPosition { get; init; }
+    public GameplayVector3? VictimPosition { get; init; }
+    public GameplayVector3? HitPosition { get; init; }
 }
 
 public enum WeaponCategory { Rifle, Sniper, Pistol, Smg, Heavy, Knife, Equipment, Unknown }

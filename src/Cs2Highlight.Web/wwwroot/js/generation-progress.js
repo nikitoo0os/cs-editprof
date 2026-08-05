@@ -82,9 +82,15 @@ if (root) {
     progressView: root.querySelector("#generation-progress-view"),
     video: root.querySelector("#video-result"),
     error: root.querySelector("#generation-error"),
-    events: root.querySelector("#event-feed")
+    events: root.querySelector("#event-feed"),
+    cameraOnlyAction: root.querySelector("[data-camera-only-action]")
   };
   const stageCards = [...root.querySelectorAll("[data-stage-key]")];
+  const automaticPages = new Set([
+    "AwaitingPlayerSelection",
+    "AwaitingMovieConfiguration"
+  ]);
+  let navigating = false;
 
   const actionLabel = status =>
     status === "AwaitingPlayerSelection"
@@ -121,6 +127,11 @@ if (root) {
       link.href = state.actionUrl;
       link.textContent = actionLabel(state.status);
       elements.action.append(link);
+      if (!navigating && automaticPages.has(state.status)) {
+        navigating = true;
+        window.location.assign(state.actionUrl);
+        return;
+      }
     }
 
     if (state.completed) {
@@ -128,6 +139,12 @@ if (root) {
       elements.video.hidden = false;
       elements.progressView.hidden = true;
       if (wasHidden) showToast("Ваш мувик готов", "success", 6000);
+    }
+    if (elements.cameraOnlyAction) {
+      elements.cameraOnlyAction.hidden = !state.cameraOnlyVideoUrl;
+      if (state.cameraOnlyVideoUrl) {
+        elements.cameraOnlyAction.href = `${state.cameraOnlyVideoUrl}?download=true`;
+      }
     }
     if (state.errorCode) {
       elements.error.hidden = false;

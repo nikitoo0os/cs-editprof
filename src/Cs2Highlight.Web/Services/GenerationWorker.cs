@@ -22,6 +22,7 @@ public sealed partial class GenerationWorker(
     ICinematicMusicEditPlanAdapter cinematicMusicEditPlanAdapter,
     IMapCameraProfileCatalog mapCameraProfiles,
     CinematicCameraRuntimeOptions cameraRuntime,
+    AutomaticCameraCalibrationStore automaticCalibrationStore,
     IEffectPlanner effectPlanner,
     IDynamicEffectPlanner dynamicEffectPlanner,
     ICinematicDynamicEffectAdapter cinematicEffectAdapter,
@@ -561,6 +562,18 @@ public sealed partial class GenerationWorker(
                 JsonOptions) ??
                 throw new InvalidOperationException(
                     "CINEMATIC_LOCKED_PLAN_INVALID");
+            CinematicSequenceSegment[] invalidBroll = cinematicPlan.Segments
+                .Where(value => value.BrollCandidateId is not null &&
+                    (value.Camera.Type == CameraShotType.PlayerPov ||
+                     value.Camera.Family == CameraShotFamily.PlayerPov ||
+                     value.OutputEndSeconds - value.OutputStartSeconds < 1.5))
+                .ToArray();
+            if (invalidBroll.Length > 0)
+            {
+                throw new InvalidOperationException(
+                    "CINEMATIC_FILM_CONTRACT_INVALID_BROLL:" +
+                    string.Join(',', invalidBroll.Select(value => value.Id)));
+            }
             string[] lockedBrollIds = cinematicPlan.Segments
                 .Where(value => value.BrollCandidateId is not null)
                 .Select(value => value.BrollCandidateId!)
@@ -617,6 +630,8 @@ public sealed partial class GenerationWorker(
             ? GenerationStatus.RenderingHighlights
             : GenerationStatus.RenderingClips;
         Dictionary<string, string> rendered = new(StringComparer.Ordinal);
+        Dictionary<string, (CinematicSequenceSegment Segment, string Path)>
+            cameraOnlySources = new(StringComparer.Ordinal);
         Dictionary<string, string> renderJobPaths =
             new(StringComparer.Ordinal);
         IReadOnlyList<CameraPreviewResult> persistedCameraFallbacks = [];
@@ -697,10 +712,8 @@ public sealed partial class GenerationWorker(
                             CameraShotType.PlayerPov)
                     {
                         string mapName = demo.MapName ?? string.Empty;
-                        MapCameraProfile profile =
-                            mapCameraProfiles.Find(mapName) ??
-                            throw new InvalidOperationException(
-                                $"CINEMATIC_CAMERA_MAP_PROFILE_MISSING:{mapName}");
+                        MapCameraProfile? profile =
+                            mapCameraProfiles.Find(mapName);
                         job = job with
                         {
                             CaptureUi = Cs2Highlight.RenderAgent.Application
@@ -710,9 +723,22 @@ public sealed partial class GenerationWorker(
                             ContainsFirstPersonWeaponFire = false,
                             Camera = BuildRenderCameraPlan(
                                 cinematicSource.Camera,
-                                profile,
+                                mapName,
+                                profile?.ManuallyVerified == true,
                                 job,
                                 cameraRuntime)
+                        };
+                    }
+                    else if (cinematicSource is not null)
+                    {
+                        job = job with
+                        {
+                            CaptureUi = Cs2Highlight.RenderAgent.Application
+                                .CaptureUiProfile.Gameplay,
+                            PresentationMode = Cs2Highlight.RenderAgent.Application
+                                .CapturePresentationMode.PovCombat,
+                            Camera = Cs2Highlight.RenderAgent.Application
+                                .RenderCameraPlan.PlayerPov
                         };
                     }
                     await store.SaveAsync(
@@ -746,15 +772,18 @@ public sealed partial class GenerationWorker(
         }
         if (cinematicPlan is not null)
         {
-            PersistedCameraFallbackReuse persisted =
-                await ReusePersistedCameraFallbacksAsync(
-                    snapshot.Id,
-                    cinematicPlan,
-                    rendered,
-                    cancellationToken);
-            cinematicPlan = persisted.Plan;
-            persistedCameraFallbacks = persisted.Results;
+            foreach (CinematicSequenceSegment segment in cinematicPlan.Segments
+                         .Where(value => value.Camera.Family !=
+                             CameraShotFamily.PlayerPov))
+            {
+                string sourceId = segment.HighlightId ??
+                    segment.BrollCandidateId ?? segment.Id;
+                if (rendered.TryGetValue(sourceId, out string? path))
+                    cameraOnlySources[segment.Id] = (segment, path);
+            }
         }
+        // Cinematic Director never reuses historical POV substitutions for
+        // B-roll. A route must pass the current camera preview gate.
         if (cinematicPlan is not null && cinematicPlan.Segments.Any(value =>
                 value.Camera.Family != CameraShotFamily.PlayerPov))
         {
@@ -823,6 +852,19 @@ public sealed partial class GenerationWorker(
                         Attempt = 1,
                         Warnings = []
                     });
+                    if (accepted.AutomaticCalibration)
+                    {
+                        string calibrationMap =
+                            accepted.Signature?.MapName ?? string.Empty;
+                        if (!string.IsNullOrWhiteSpace(calibrationMap))
+                        {
+                            await automaticCalibrationStore.MergeAcceptedAsync(
+                                calibrationMap,
+                                cameraRuntime.HlaeVersion,
+                                [accepted],
+                                cancellationToken);
+                        }
+                    }
                     continue;
                 }
                 if (!renderJobPaths.TryGetValue(
@@ -830,79 +872,81 @@ public sealed partial class GenerationWorker(
                         out string? renderJobPath))
                 {
                     throw new InvalidOperationException(
-                        $"CAMERA_FALLBACK_RENDER_JOB_MISSING:{sourceId}");
+                        $"CINEMATIC_FREECAM_PREVIEW_FAILED:{sourceId}:" +
+                        string.Join(',', warnings));
                 }
-                JsonBatchStateStore fallbackStore = new();
+                JsonBatchStateStore tripodStore = new();
                 Cs2Highlight.RenderAgent.Application.RenderJob original =
-                    await fallbackStore.LoadAsync<
+                    await tripodStore.LoadAsync<
                         Cs2Highlight.RenderAgent.Application.RenderJob>(
                         renderJobPath,
                         cancellationToken);
-                string fallbackDirectory = Path.Combine(
+                (CameraShotPlan tripodShot,
+                    Cs2Highlight.RenderAgent.Application.RenderCameraPlan
+                        subjectCamera) = SubjectLockedFallback(
+                            source.Camera,
+                            original,
+                            warnings,
+                            cameraRuntime.HlaeVersion);
+                string tripodDirectory = Path.Combine(
                     original.OutputDirectory,
-                    "pov-fallback");
-                Directory.CreateDirectory(fallbackDirectory);
-                Cs2Highlight.RenderAgent.Application.RenderJob fallbackJob =
+                    "subject-route-fallback-v2");
+                Directory.CreateDirectory(tripodDirectory);
+                Cs2Highlight.RenderAgent.Application.RenderJob tripodJob =
                     original with
                     {
-                        JobId = original.JobId + "-pov-fallback",
-                        OutputDirectory = fallbackDirectory,
-                        CaptureUi = Cs2Highlight.RenderAgent.Application
-                            .CaptureUiProfile.Gameplay,
-                        PresentationMode = Cs2Highlight.RenderAgent.Application
-                            .CapturePresentationMode.PovCombat,
-                        Camera = Cs2Highlight.RenderAgent.Application
-                            .RenderCameraPlan.PlayerPov
+                        JobId = original.JobId +
+                            "-subject-route-fallback-v2",
+                        OutputDirectory = tripodDirectory,
+                        Camera = subjectCamera
                     };
-                string fallbackJobPath = Path.Combine(
-                    fallbackDirectory,
+                string tripodJobPath = Path.Combine(
+                    tripodDirectory,
                     "render-job.json");
-                await fallbackStore.SaveAsync(
-                    fallbackJobPath,
-                    fallbackJob,
+                await tripodStore.SaveAsync(
+                    tripodJobPath,
+                    tripodJob,
                     cancellationToken);
-                ProcessRenderAgentClient client = new(
+                ProcessRenderAgentClient tripodClient = new(
                     PipelinePathResolver.Resolve(
                         pipelineOptions.RenderAgentPath) ??
                     throw new InvalidOperationException(
                         $"RENDER_AGENT_NOT_FOUND: {pipelineOptions.RenderAgentPath}"));
-                RenderInvocationResult fallback = await client.RenderAsync(
-                    fallbackJobPath,
+                RenderInvocationResult tripod = await tripodClient.RenderAsync(
+                    tripodJobPath,
                     1,
                     cancellationToken);
-                if (fallback.ExitCode != 0 ||
-                    fallback.Result?.OutputFile is null)
+                if (tripod.ExitCode != 0 ||
+                    tripod.Result?.OutputFile is null)
                 {
                     throw new InvalidOperationException(
-                        $"CAMERA_POV_FALLBACK_FAILED:{sourceId}:" +
-                        fallback.Error?.Message);
+                        $"CINEMATIC_TRIPOD_FALLBACK_FAILED:{sourceId}:" +
+                        tripod.Error?.Message);
                 }
-                CameraShotPlan previewedSource = source.Camera with
+                CameraPreviewMetrics tripodMetrics =
+                    await previewAnalyzer.AnalyzeAsync(
+                        tripod.Result.OutputFile,
+                        tripodShot,
+                        cancellationToken);
+                IReadOnlyList<string> tripodWarnings =
+                    qualityAnalyzer.Validate(tripodShot, tripodMetrics);
+                if (tripodWarnings.Count > 0)
                 {
-                    Warnings = source.Camera.Warnings
-                        .Where(value => value != "CAMERA_PREVIEW_PENDING")
-                        .ToArray()
-                };
-                CameraShotPlan effective = PovFallback(
-                    previewedSource,
-                    warnings.Concat(
-                    [
-                        "ALTERNATIVE_TRAJECTORY_UNAVAILABLE",
-                        "ALTERNATIVE_CAMERA_FAMILY_UNAVAILABLE",
-                        "VERIFIED_TRIPOD_FALLBACK_UNAVAILABLE",
-                        "POV_FALLBACK_RENDERED"
-                    ]).ToArray());
-                rendered[sourceId] = fallback.Result.OutputFile;
-                effectiveCameras[source.Id] = effective;
+                    throw new InvalidOperationException(
+                        $"CINEMATIC_FREECAM_PREVIEW_FAILED:{sourceId}:" +
+                        string.Join(',', warnings.Concat(tripodWarnings)));
+                }
+                rendered[sourceId] = tripod.Result.OutputFile;
+                effectiveCameras[source.Id] = tripodShot;
                 previews.Add(new CameraPreviewResult
                 {
                     CameraShotId = source.Camera.Id,
-                    Status = CameraPreviewStatus.PovFallback,
-                    PreviewPath = fallback.Result.OutputFile,
-                    Metrics = metrics,
-                    EffectiveShot = effective,
+                    Status = CameraPreviewStatus.Passed,
+                    PreviewPath = tripod.Result.OutputFile,
+                    Metrics = tripodMetrics,
+                    EffectiveShot = tripodShot,
                     Attempt = 2,
-                    Warnings = effective.Warnings
+                    Warnings = tripodShot.Warnings
                 });
             }
             await SetStatusAsync(
@@ -936,7 +980,7 @@ public sealed partial class GenerationWorker(
                 publicId,
                 GenerationStatus.RenderingCinematicShots,
                 89,
-                "Camera previews accepted or replaced by rendered POV fallbacks",
+                "Camera previews accepted without POV substitutions",
                 cancellationToken);
             await SetStatusAsync(
                 publicId,
@@ -1257,6 +1301,56 @@ public sealed partial class GenerationWorker(
             await SetStatusAsync(
                 publicId, GenerationStatus.ComposingVideo, 97,
                 "Final composition completed", cancellationToken);
+        CompilationResult? cameraOnlyCompilation = null;
+        if (cinematicPlan is not null && cameraOnlySources.Count > 0)
+        {
+            CinematicSequenceSegment[] cameraSegments = cameraOnlySources
+                .Values
+                .Select(value => value.Segment)
+                .OrderBy(value => value.OutputStartSeconds)
+                .ThenBy(value => value.Id, StringComparer.Ordinal)
+                .ToArray();
+            CinematicMoviePlan cameraOnlyPlan =
+                CameraOnlyVariantPlanner.Create(cinematicPlan, cameraSegments);
+            string[] cameraClips = cameraSegments
+                .Select(value => cameraOnlySources[value.Id].Path)
+                .ToArray();
+            MusicEditPlan? sourceMusicPlan = musicContext?.Plan;
+            MusicEditPlan? cameraMusicPlan = sourceMusicPlan is null
+                ? null
+                : sourceMusicPlan with
+                {
+                    Segments = [],
+                    Warnings = sourceMusicPlan.Warnings.Concat(
+                        ["CAMERA_ONLY_VARIANT"])
+                        .Distinct(StringComparer.Ordinal)
+                        .ToArray()
+                };
+            CompilationResult candidate =
+                await compilationService.ComposeAsync(
+                    new CompilationRequest(
+                        cameraClips,
+                        storage.EnsureDirectory(
+                            publicId,
+                            "output",
+                            "camera-only"),
+                        snapshot.Width,
+                        snapshot.Height,
+                        snapshot.Fps,
+                        MusicEditPlan: cameraMusicPlan,
+                        MusicPath: musicContext?.MusicPath,
+                        MovieSettings: musicContext?.Settings,
+                        FfmpegCapabilities: capabilities,
+                        CinematicMoviePlan: cameraOnlyPlan),
+                    progress: null,
+                    cancellationToken);
+            if (candidate.Success &&
+                candidate.OutputFile is not null &&
+                candidate.IncludedClips == cameraOnlyPlan.Segments.Count)
+            {
+                cameraOnlyCompilation = candidate;
+            }
+        }
         await SetStatusAsync(
             publicId,
             cinematicDirector
@@ -1272,6 +1366,7 @@ public sealed partial class GenerationWorker(
             selected.Count,
             renderedSelection.Length,
             compilation,
+            cameraOnlyCompilation,
             cancellationToken);
     }
 
@@ -1803,6 +1898,7 @@ public sealed partial class GenerationWorker(
         int planned,
         int included,
         CompilationResult compilation,
+        CompilationResult? cameraOnlyCompilation,
         CancellationToken cancellationToken)
     {
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
@@ -1815,24 +1911,6 @@ public sealed partial class GenerationWorker(
         GenerationStatus status = included < planned
             ? GenerationStatus.CompletedWithWarnings
             : GenerationStatus.Completed;
-        GenerationStateMachine.Transition(generation, status, now);
-        generation.ProgressPercent = 100;
-        generation.GenerationCompletedAt = now;
-        generation.ExpiresAtUtc = now.AddDays(Math.Max(1, retentionOptions.CompletedGenerationDays));
-        generation.CleanupStatus = CleanupStatus.Pending;
-        generation.ProcessingDurationMilliseconds = generation.GenerationStartedAt is null
-            ? 0
-            : Math.Max(0, (long)(now - generation.GenerationStartedAt.Value).TotalMilliseconds);
-        metrics.GenerationCompleted.Add(1);
-        metrics.GenerationDurationSeconds.Record(generation.ProcessingDurationMilliseconds / 1000d);
-        db.GenerationEvents.Add(new GenerationEvent
-        {
-            GenerationId = generation.Id,
-            Stage = status.ToString(),
-            Message = "Completed",
-            ProgressPercent = 100,
-            CreatedAt = now
-        });
         GenerationArtifact artifact = new()
         {
             GenerationId = generation.Id,
@@ -1844,8 +1922,20 @@ public sealed partial class GenerationWorker(
             CreatedAt = now
         };
         db.GenerationArtifacts.Add(artifact);
+        if (cameraOnlyCompilation?.OutputFile is not null)
+        {
+            db.GenerationArtifacts.Add(new GenerationArtifact
+            {
+                GenerationId = generation.Id,
+                Type = ArtifactType.CameraOnlyVideo,
+                FileName = "camera-only.mp4",
+                StoredPath = cameraOnlyCompilation.OutputFile,
+                ContentType = "video/mp4",
+                FileSizeBytes = cameraOnlyCompilation.FileSizeBytes,
+                CreatedAt = now
+            });
+        }
         await db.SaveChangesAsync(cancellationToken);
-        generation.FinalVideoArtifactId = artifact.Id;
         string reportPath = Path.Combine(storage.EnsureDirectory(publicId, "output"), "generation-report.json");
         int validDemos = generation.Demos.Count(value =>
             value.AnalysisStatus == DemoAnalysisStatus.Succeeded);
@@ -2048,7 +2138,37 @@ public sealed partial class GenerationWorker(
                 cinematicAcceptanceReportPath, cancellationToken);
         await AddArtifactAsync(
             db, generation.Id, ArtifactType.GenerationReport, reportPath, cancellationToken);
+        await using Microsoft.EntityFrameworkCore.Storage.IDbContextTransaction transaction =
+            await db.Database.BeginTransactionAsync(cancellationToken);
+        if (generation.UserId is null)
+            throw new InvalidOperationException("GENERATION_OWNER_MISSING");
+        await tokenService.DebitAsync(
+            db, generation.UserId, generation.Id, cancellationToken);
+        GenerationStateMachine.Transition(generation, status, now);
+        generation.ProgressPercent = 100;
+        generation.GenerationCompletedAt = now;
+        generation.ExpiresAtUtc = now.AddDays(
+            Math.Max(1, retentionOptions.CompletedGenerationDays));
+        generation.CleanupStatus = CleanupStatus.Pending;
+        generation.ProcessingDurationMilliseconds = generation.GenerationStartedAt is null
+            ? 0
+            : Math.Max(
+                0,
+                (long)(now - generation.GenerationStartedAt.Value).TotalMilliseconds);
+        generation.FinalVideoArtifactId = artifact.Id;
+        db.GenerationEvents.Add(new GenerationEvent
+        {
+            GenerationId = generation.Id,
+            Stage = status.ToString(),
+            Message = "Completed and token debited",
+            ProgressPercent = 100,
+            CreatedAt = now
+        });
         await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        metrics.GenerationCompleted.Add(1);
+        metrics.GenerationDurationSeconds.Record(
+            generation.ProcessingDurationMilliseconds / 1000d);
         await PublishAsync(publicId, status, 100, "Completed", cancellationToken);
     }
 
@@ -2242,21 +2362,23 @@ public sealed partial class GenerationWorker(
     private static Cs2Highlight.RenderAgent.Application.RenderCameraPlan
         BuildRenderCameraPlan(
             CameraShotPlan camera,
-            MapCameraProfile profile,
+            string mapName,
+            bool manuallyVerifiedProfile,
             Cs2Highlight.RenderAgent.Application.RenderJob job,
             CinematicCameraRuntimeOptions runtime)
     {
-        if (!profile.ManuallyVerified ||
+        bool automaticCalibration = camera.AutomaticCalibration &&
+            runtime.AutomaticCalibrationEnabled;
+        if ((!manuallyVerifiedProfile && !automaticCalibration) ||
             !runtime.Enabled ||
             string.IsNullOrWhiteSpace(runtime.HlaeVersion) ||
-            string.IsNullOrWhiteSpace(runtime.VerificationId))
+            (manuallyVerifiedProfile &&
+             string.IsNullOrWhiteSpace(runtime.VerificationId)))
         {
             throw new InvalidOperationException(
                 "CINEMATIC_CAMERA_RUNTIME_UNVERIFIED");
         }
-        SafeCameraVolume? safeVolume = profile.SafeVolumes.FirstOrDefault(
-            volume => camera.Keyframes.All(keyframe =>
-                volume.Contains(keyframe.Position)));
+        SafeCameraVolume? safeVolume = camera.SafetyVolume;
         if (safeVolume is null)
         {
             throw new InvalidOperationException(
@@ -2292,7 +2414,7 @@ public sealed partial class GenerationWorker(
             Mode = keyframes.Length == 1
                 ? Cs2Highlight.RenderAgent.Application.RenderCameraMode.Static
                 : Cs2Highlight.RenderAgent.Application.RenderCameraMode.Campath,
-            MapName = profile.MapName,
+            MapName = mapName,
             Keyframes = keyframes,
             SafeVolume =
                 new Cs2Highlight.RenderAgent.Application.RenderCameraBounds(
@@ -2304,11 +2426,148 @@ public sealed partial class GenerationWorker(
                         safeVolume.Maximum.X,
                         safeVolume.Maximum.Y,
                         safeVolume.Maximum.Z)),
-            ManualSpikeVerified = true,
-            CalibrationSpike = false,
-            VerificationId = runtime.VerificationId,
+            ManualSpikeVerified = manuallyVerifiedProfile &&
+                !automaticCalibration,
+            CalibrationSpike = automaticCalibration,
+            VerificationId = automaticCalibration
+                ? $"auto-{mapName}-{camera.Id}"
+                : runtime.VerificationId,
             HlaeVersionPrefix = runtime.HlaeVersion
         };
+    }
+
+    private static (CameraShotPlan Shot,
+        Cs2Highlight.RenderAgent.Application.RenderCameraPlan RenderPlan)
+        SubjectLockedFallback(
+            CameraShotPlan source,
+            Cs2Highlight.RenderAgent.Application.RenderJob job,
+            IReadOnlyList<string> rejectedWarnings,
+            string hlaeVersion)
+    {
+        CameraTargetPoint[] targets = source.TargetPoints
+            .OrderBy(value => value.TimeSeconds)
+            .ToArray();
+        if (targets.Length < 2)
+        {
+            throw new InvalidOperationException(
+                $"CINEMATIC_SUBJECT_ROUTE_TARGETS_MISSING:{source.Id}");
+        }
+        GameplayVector3 first = targets[0].Position;
+        GameplayVector3 last = targets[^1].Position;
+        double dx = last.X - first.X;
+        double dy = last.Y - first.Y;
+        double length = Math.Sqrt(dx * dx + dy * dy);
+        double sideX = length > 0.001 ? -dy / length : 0;
+        double sideY = length > 0.001 ? dx / length : 1;
+        CameraKeyframe[] keyframes = targets.Select(value =>
+        {
+            GameplayVector3 position = new(
+                value.Position.X + sideX * 112,
+                value.Position.Y + sideY * 112,
+                value.Position.Z + 68);
+            return new CameraKeyframe
+            {
+                TimeSeconds = value.TimeSeconds,
+                Position = position,
+                Rotation = CameraLookAt(
+                    position,
+                    new GameplayVector3(
+                        value.Position.X,
+                        value.Position.Y,
+                        value.Position.Z + 48)),
+                Fov = 82
+            };
+        }).ToArray();
+        SafeCameraVolume volume = new(
+            new GameplayVector3(
+                keyframes.Min(value => value.Position.X) - 48,
+                keyframes.Min(value => value.Position.Y) - 48,
+                keyframes.Min(value => value.Position.Z) - 48),
+            new GameplayVector3(
+                keyframes.Max(value => value.Position.X) + 48,
+                keyframes.Max(value => value.Position.Y) + 48,
+                keyframes.Max(value => value.Position.Z) + 48));
+        CameraShotPlan shot = CameraShotSignatureBuilder.Attach(
+            source with
+            {
+                Id = source.Id + "-subject-route-fallback",
+                Type = CameraShotType.SideTracking,
+                Family = CameraShotFamily.SideTracking,
+                Keyframes = keyframes,
+                FovCurve = keyframes.Select(value =>
+                    new CameraFovPoint(value.TimeSeconds, value.Fov)).ToArray(),
+                FovStart = 82,
+                FovEnd = 82,
+                FramingIntent =
+                    "automatically calibrated subject-locked side route",
+                SafetyVolume = volume,
+                AutomaticCalibration = true,
+                VerifiedPresetId = null,
+                Warnings = source.Warnings
+                    .Where(value => value != "CAMERA_PREVIEW_PENDING")
+                    .Concat(rejectedWarnings.Select(value =>
+                        $"ROUTE_REJECTED:{value}"))
+                    .Append("AUTOMATIC_SUBJECT_ROUTE_ALTERNATIVE")
+                    .Distinct(StringComparer.Ordinal)
+                    .ToArray()
+            },
+            source.Signature?.MapName ?? string.Empty);
+        int tickRate = job.Segment.TickRate ?? 64;
+        Cs2Highlight.RenderAgent.Application.RenderCameraKeyframe[] render =
+            keyframes.Select(value =>
+                new Cs2Highlight.RenderAgent.Application.RenderCameraKeyframe(
+                    Math.Clamp(
+                        source.StartTick + (long)Math.Round(
+                            value.TimeSeconds * tickRate,
+                            MidpointRounding.AwayFromZero),
+                        job.Segment.StartTick,
+                        job.Segment.EndTick),
+                    new Cs2Highlight.RenderAgent.Application.RenderVector3(
+                        value.Position.X,
+                        value.Position.Y,
+                        value.Position.Z),
+                    new Cs2Highlight.RenderAgent.Application.RenderVector3(
+                        value.Rotation.X,
+                        value.Rotation.Y,
+                        value.Rotation.Z),
+                    value.Fov)).ToArray();
+        return (
+            shot,
+            new Cs2Highlight.RenderAgent.Application.RenderCameraPlan
+            {
+                Mode = Cs2Highlight.RenderAgent.Application
+                    .RenderCameraMode.Campath,
+                MapName = source.Signature?.MapName ?? string.Empty,
+                Keyframes = render,
+                SafeVolume = new Cs2Highlight.RenderAgent.Application
+                    .RenderCameraBounds(
+                        new Cs2Highlight.RenderAgent.Application.RenderVector3(
+                            volume.Minimum.X,
+                            volume.Minimum.Y,
+                            volume.Minimum.Z),
+                        new Cs2Highlight.RenderAgent.Application.RenderVector3(
+                            volume.Maximum.X,
+                            volume.Maximum.Y,
+                            volume.Maximum.Z)),
+                ManualSpikeVerified = false,
+                CalibrationSpike = true,
+                VerificationId = "auto-subject-" + source.Id,
+                HlaeVersionPrefix = hlaeVersion
+            });
+    }
+
+    private static GameplayVector3 CameraLookAt(
+        GameplayVector3 camera,
+        GameplayVector3 target)
+    {
+        double x = target.X - camera.X;
+        double y = target.Y - camera.Y;
+        double z = target.Z - camera.Z;
+        double horizontal = Math.Sqrt(x * x + y * y);
+        return new GameplayVector3(
+            -Math.Atan2(z, Math.Max(0.000001, horizontal)) * 180 / Math.PI,
+            Math.Atan2(y, x) * 180 / Math.PI,
+            0);
     }
 
     private static CameraShotPlan PovFallback(
@@ -2610,7 +2869,8 @@ public sealed partial class GenerationWorker(
         artifact.Type = type;
         artifact.FileName = Path.GetFileName(full);
         artifact.FileSizeBytes = new FileInfo(full).Length;
-        artifact.ContentType = type == ArtifactType.FinalVideo
+        artifact.ContentType = type is ArtifactType.FinalVideo or
+            ArtifactType.CameraOnlyVideo
             ? "video/mp4"
             : "application/json";
     }

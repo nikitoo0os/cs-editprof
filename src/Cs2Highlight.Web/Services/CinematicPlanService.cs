@@ -32,6 +32,8 @@ public sealed partial class CinematicPlanService(
     IBrollCandidateDetector brollDetector,
     ICinematicDirector director,
     IMapCameraProfileCatalog mapProfiles,
+    IAutomaticMapCameraCalibrator automaticCameraCalibrator,
+    AutomaticCameraCalibrationStore automaticCalibrationStore,
     ICinematicDurationPolicy durationPolicy,
     GenerationStorage storage,
     CinematicCameraRuntimeOptions cameraRuntime,
@@ -111,6 +113,15 @@ public sealed partial class CinematicPlanService(
         int highlights,
         string warnings);
 
+    [LoggerMessage(
+        EventId = 8107,
+        Level = LogLevel.Warning,
+        Message = "[Generation:{GenerationId}] Failed to persist cinematic continuity diagnostics")]
+    private static partial void LogContinuityDiagnosticsFailure(
+        ILogger logger,
+        Exception exception,
+        string generationId);
+
     public async Task<CinematicLockedPlan> CreateAndLockAsync(
         GenerationDbContext db,
         Generation generation,
@@ -173,7 +184,7 @@ public sealed partial class CinematicPlanService(
         MovieDurationOptions durationOptions = new()
         {
             Selection = settings.CinematicDuration,
-            MaximumBrollToHighlightRatio = 0.25,
+            MaximumBrollToHighlightRatio = 1.0,
             MaximumIntroSeconds = 4,
             MaximumOutroSeconds = 0.75,
             MaximumMovieDurationSeconds = 210
@@ -204,6 +215,12 @@ public sealed partial class CinematicPlanService(
                 excerpt.UsablePeakCount < excerpt.RequiredPeakCount
                     ? "CINEMATIC_INSUFFICIENT_HIGH_ENERGY_PEAKS"
                     : "CINEMATIC_MUSIC_EXCERPT_UNAVAILABLE");
+        if (settings.CinematicDuration != MovieDurationSelection.Auto &&
+            excerpt.DurationSeconds + 0.05 < budget.TargetSeconds)
+        {
+            throw new InvalidOperationException(
+                "CINEMATIC_REQUESTED_DURATION_UNAVAILABLE");
+        }
 
         Advance(
             db,
@@ -230,6 +247,8 @@ public sealed partial class CinematicPlanService(
             33,
             "Detecting safe gameplay B-roll candidates");
         List<BrollCandidate> broll = [];
+        Dictionary<string, List<GameplayTimelineFrame>> calibrationFrames =
+            new(StringComparer.OrdinalIgnoreCase);
         int frameCount = 0;
         foreach (GenerationDemo demo in demos)
         {
@@ -244,6 +263,14 @@ public sealed partial class CinematicPlanService(
                 path,
                 cancellationToken);
             frameCount += analysis.Timeline.Count;
+            if (!calibrationFrames.TryGetValue(
+                    analysis.Demo.MapName,
+                    out List<GameplayTimelineFrame>? mapFrames))
+            {
+                mapFrames = [];
+                calibrationFrames[analysis.Demo.MapName] = mapFrames;
+            }
+            mapFrames.AddRange(analysis.Timeline);
             GameplayInterval[] excluded = selectedRows
                 .Where(value => value.GenerationDemoId == demo.Id)
                 .Select(value => new GameplayInterval(
@@ -294,23 +321,57 @@ public sealed partial class CinematicPlanService(
         MapCameraProfile? profile = settings.AutomaticCinematicCameras
             ? mapProfiles.Find(mapName)
             : null;
+        AutomaticCameraCalibrationResult? automaticCalibration = null;
+        if (settings.AutomaticCinematicCameras &&
+            cameraRuntime.Enabled &&
+            cameraRuntime.AutomaticCalibrationEnabled &&
+            calibrationFrames.TryGetValue(
+                mapName,
+                out List<GameplayTimelineFrame>? mapTimeline) &&
+            mapTimeline.Count > 0)
+        {
+            int calibrationTickRate = demos
+                .Where(value => string.Equals(
+                    value.MapName,
+                    mapName,
+                    StringComparison.OrdinalIgnoreCase))
+                .Select(value => value.TickRate)
+                .FirstOrDefault(value => value is > 0) ?? 64;
+            MapCameraProfile? acceptedProfile =
+                await automaticCalibrationStore.LoadAsync(
+                    mapName,
+                    cameraRuntime.HlaeVersion,
+                    cancellationToken);
+            acceptedProfile = MergeCalibrationProfiles(
+                profile,
+                acceptedProfile);
+            automaticCalibration = automaticCameraCalibrator.Calibrate(
+                mapName,
+                mapTimeline,
+                calibrationTickRate,
+                acceptedProfile);
+            if (automaticCalibration.Profile.AutomaticallyCalibrated)
+                profile = automaticCalibration.Profile;
+        }
+        bool profileAvailable = profile is not null &&
+            (profile.ManuallyVerified || profile.AutomaticallyCalibrated) &&
+            profile.SafeVolumes.Count > 0;
         HlaeCameraCapabilities capabilities = new()
         {
-            Available = cameraRuntime.Enabled &&
-                cameraRuntime.VerifiedMaps.Contains(
-                    mapName,
-                    StringComparer.OrdinalIgnoreCase),
+            Available = cameraRuntime.Enabled && profileAvailable,
             Version = cameraRuntime.HlaeVersion,
             SupportsCampath = cameraRuntime.Enabled,
             SupportsInput = cameraRuntime.Enabled,
             SupportsFov = cameraRuntime.Enabled,
             SupportsHighFpsCapture = cameraRuntime.Enabled,
             ManualSpikeVerified = cameraRuntime.Enabled &&
-                !string.IsNullOrWhiteSpace(cameraRuntime.VerificationId),
+                !string.IsNullOrWhiteSpace(cameraRuntime.HlaeVersion),
             Warnings =
             [
-                settings.AutomaticCinematicCameras &&
-                cameraRuntime.Enabled
+                automaticCalibration is not null
+                    ? $"HLAE_CAMERA_AUTOMATIC_CALIBRATION:{mapName}"
+                    : settings.AutomaticCinematicCameras &&
+                      cameraRuntime.Enabled
                     ? $"HLAE_CAMERA_VERIFIED:{cameraRuntime.VerificationId}"
                     : "AUTOMATIC_CINEMATIC_CAMERAS_DISABLED"
             ]
@@ -343,7 +404,8 @@ public sealed partial class CinematicPlanService(
                     settings.CinematicEditIntensity,
                     settings.EffectIntensity),
                 ColorGrade = settings.ColorGradePreset,
-                CompactTimelineWhenMaterialIsInsufficient = true
+                CompactTimelineWhenMaterialIsInsufficient =
+                    settings.CinematicDuration == MovieDurationSelection.Auto
             });
         if (plan.HighlightMatches.Count != highlights.Count)
         {
@@ -375,8 +437,16 @@ public sealed partial class CinematicPlanService(
                     pair.First.OutputEndSeconds -
                     pair.Second.OutputStartSeconds) > 0.05);
         if (discontinuous)
+        {
+            await PersistContinuityFailureAsync(
+                generation,
+                plan,
+                orderedSegments,
+                broll,
+                cancellationToken);
             throw new InvalidOperationException(
                 "CINEMATIC_BROLL_INSUFFICIENT_FOR_CONTIGUOUS_TIMELINE");
+        }
         CinematicAlignmentReport alignment =
             CinematicAlignmentReportBuilder.FromPlan(
                 plan,
@@ -391,6 +461,13 @@ public sealed partial class CinematicPlanService(
         if (plan.TargetDurationSeconds > budget.MaximumTotalSeconds + 0.001)
             throw new InvalidOperationException(
                 "CINEMATIC_DURATION_LIMIT_EXCEEDED");
+        if (settings.CinematicDuration != MovieDurationSelection.Auto &&
+            Math.Abs(plan.TargetDurationSeconds - budget.TargetSeconds) >
+                0.05)
+        {
+            throw new InvalidOperationException(
+                "CINEMATIC_REQUESTED_DURATION_NOT_PRESERVED");
+        }
 
         DateTimeOffset now = timeProvider.GetUtcNow();
         foreach (MusicSection section in narrative.Sections)
@@ -519,6 +596,15 @@ public sealed partial class CinematicPlanService(
             capabilitiesPath,
             capabilities,
             cancellationToken);
+        if (automaticCalibration is not null)
+        {
+            await WriteAtomicallyAsync(
+                Path.Combine(
+                    directory,
+                    "automatic-camera-calibration.json"),
+                automaticCalibration.Report,
+                cancellationToken);
+        }
         string cameraCandidatesPath = Path.Combine(
             directory,
             "camera-shot-candidates.json");
@@ -569,7 +655,10 @@ public sealed partial class CinematicPlanService(
         string[] repeatedIntervals = intervals
             .Select((value, index) => new { value, index })
             .Where(current => intervals.Take(current.index).Any(previous =>
-                SourceIntervalPolicy.Overlaps(previous, current.value)))
+                string.Equals(
+                    previous,
+                    current.value,
+                    StringComparison.Ordinal)))
             .Select(value => value.value)
             .Distinct(StringComparer.Ordinal)
             .OrderBy(value => value, StringComparer.Ordinal)
@@ -710,6 +799,79 @@ public sealed partial class CinematicPlanService(
         }
     }
 
+    private async Task PersistContinuityFailureAsync(
+        Generation generation,
+        CinematicMoviePlan plan,
+        CinematicSequenceSegment[] orderedSegments,
+        List<BrollCandidate> broll,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            object[] boundaries = orderedSegments
+                .Zip(orderedSegments.Skip(1))
+                .Select(pair => new
+                {
+                    previousSegmentId = pair.First.Id,
+                    previousEndSeconds = pair.First.OutputEndSeconds,
+                    nextSegmentId = pair.Second.Id,
+                    nextStartSeconds = pair.Second.OutputStartSeconds,
+                    deltaSeconds = pair.Second.OutputStartSeconds -
+                        pair.First.OutputEndSeconds
+                })
+                .Where(value => Math.Abs(value.deltaSeconds) > 0.05)
+                .Cast<object>()
+                .ToArray();
+            string directory = storage.EnsureDirectory(
+                generation.PublicId,
+                "plan");
+            await WriteAtomicallyAsync(
+                Path.Combine(
+                    directory,
+                    "cinematic-continuity-failure.json"),
+                new
+                {
+                    schemaVersion = "1.0",
+                    generatedAtUtc = timeProvider.GetUtcNow(),
+                    plan.TargetDurationSeconds,
+                    leadingGapSeconds = orderedSegments.Length == 0
+                        ? plan.TargetDurationSeconds
+                        : orderedSegments[0].OutputStartSeconds,
+                    trailingGapSeconds = orderedSegments.Length == 0
+                        ? plan.TargetDurationSeconds
+                        : plan.TargetDurationSeconds -
+                            orderedSegments[^1].OutputEndSeconds,
+                    boundaries,
+                    plan.Warnings,
+                    brollCandidateCount = broll.Count,
+                    brollAvailableSeconds = broll.Sum(value =>
+                        value.DurationSeconds),
+                    segments = orderedSegments.Select(value => new
+                    {
+                        value.Id,
+                        value.OutputStartSeconds,
+                        value.OutputEndSeconds,
+                        value.HighlightId,
+                        value.BrollCandidateId,
+                        cameraType = value.Camera.Type.ToString(),
+                        cameraFamily = value.Camera.Family.ToString()
+                    })
+                },
+                cancellationToken);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            LogContinuityDiagnosticsFailure(
+                logger,
+                exception,
+                generation.PublicId);
+        }
+    }
+
     private void Advance(
         GenerationDbContext db,
         Generation generation,
@@ -773,6 +935,33 @@ public sealed partial class CinematicPlanService(
                             : 2,
             PreferCameraMotionOverFilterEffects = true
         };
+
+    private static MapCameraProfile? MergeCalibrationProfiles(
+        MapCameraProfile? builtIn,
+        MapCameraProfile? automatic)
+    {
+        if (builtIn is null)
+            return automatic;
+        if (automatic is null)
+            return builtIn;
+        return new MapCameraProfile
+        {
+            MapName = builtIn.MapName,
+            SafeVolumes = builtIn.SafeVolumes
+                .Concat(automatic.SafeVolumes)
+                .ToArray(),
+            EstablishingShots = builtIn.EstablishingShots
+                .Concat(automatic.EstablishingShots)
+                .GroupBy(value => value.Id, StringComparer.Ordinal)
+                .Select(value => value.First())
+                .ToArray(),
+            RestrictedVolumes = builtIn.RestrictedVolumes
+                .Concat(automatic.RestrictedVolumes)
+                .ToArray(),
+            ManuallyVerified = builtIn.ManuallyVerified,
+            AutomaticallyCalibrated = automatic.AutomaticallyCalibrated
+        };
+    }
 
     private static async Task<T> ReadJsonAsync<T>(
         string path,

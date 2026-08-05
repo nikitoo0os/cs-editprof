@@ -9,6 +9,62 @@ namespace Cs2Highlight.Web.Tests;
 
 public sealed class Stage8CinematicWebTests
 {
+    [Theory]
+    [InlineData(60, 0.03333333333333333)]
+    [InlineData(30, 0.06666666666666667)]
+    public void TransitionBoundaryGuardRemovesExactlyTwoFrames(
+        int fps,
+        double expectedSeconds)
+    {
+        Assert.Equal(
+            expectedSeconds,
+            FrameContinuityPolicy.TransitionBoundaryGuardSeconds(fps),
+            12);
+    }
+
+    [Theory]
+    [InlineData(30, 0.08333333333333333)]
+    [InlineData(60, 0.05)]
+    [InlineData(120, 0.05)]
+    public void BlackFrameContinuityRequiresAMultiFrameDefect(
+        int fps,
+        double expectedSeconds)
+    {
+        double actual =
+            FrameContinuityPolicy.MinimumBlackDefectDurationSeconds(fps);
+
+        Assert.Equal(expectedSeconds, actual, 6);
+        Assert.True(actual > 1d / fps);
+    }
+
+    [Theory]
+    [InlineData(2.533333, 2.6, 2.8, 60, true)]
+    [InlineData(0, 0.1, 2.8, 60, false)]
+    [InlineData(1, 1.4, 2.8, 60, false)]
+    public void OnlyBriefInternalBlackDefectsAreAutoRepairable(
+        double start,
+        double end,
+        double clipDuration,
+        int fps,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            FrameContinuityPolicy.IsBriefRepairableBlackDefect(
+                start, end, clipDuration, fps));
+    }
+
+    [Fact]
+    public void BlackDefectRepairFreezesTheLastGoodFrame()
+    {
+        (int first, int last, int replacement) =
+            FrameContinuityPolicy.RepairFrameRange(2.533333, 2.6, 60);
+
+        Assert.Equal(152, first);
+        Assert.Equal(155, last);
+        Assert.Equal(151, replacement);
+    }
+
     [Fact]
     public void StateMachineAcceptsCinematicDirectorRenderPath()
     {
@@ -131,7 +187,7 @@ public sealed class Stage8CinematicWebTests
                 cinematic,
                 EffectIntensity.Balanced);
 
-        Assert.Equal(2, result.Effects.Count);
+        Assert.True(result.Effects.Count >= 4);
         EffectCue effect = Assert.Single(result.Effects.Where(value =>
             value.Type == VideoEffectType.SmoothZoom));
         Assert.Equal(
@@ -141,6 +197,14 @@ public sealed class Stage8CinematicWebTests
         Assert.Contains(
             result.Effects,
             value => value.Type == VideoEffectType.HitStop);
+        Assert.Contains(
+            result.Effects,
+            value =>
+                value.Type == VideoEffectType.PunchZoom &&
+                value.SourceKillEventId == "h1");
+        Assert.Contains(
+            result.Effects,
+            value => value.Type == VideoEffectType.FlashAccent);
     }
 
     [Fact]
@@ -171,7 +235,7 @@ public sealed class Stage8CinematicWebTests
                 cinematic,
                 EffectIntensity.Strong);
 
-        Assert.Equal(2, result.Effects.Count);
+        Assert.True(result.Effects.Count >= 5);
         Assert.Contains(
             result.Effects,
             value =>
@@ -182,6 +246,14 @@ public sealed class Stage8CinematicWebTests
             value =>
                 value.Type == VideoEffectType.MicroShake &&
                 value.Role == EffectRole.Accent);
+        Assert.Contains(
+            result.Effects,
+            value => value.Type is
+                VideoEffectType.DirectionalMotionBlur or
+                VideoEffectType.ZoomBlur);
+        Assert.Contains(
+            result.Effects,
+            value => value.Type == VideoEffectType.FlashAccent);
     }
 
     [Fact]
@@ -306,9 +378,10 @@ public sealed class Stage8CinematicWebTests
     {
         string finish = FfmpegMovieFilterBuilder.CinematicFinish();
 
-        Assert.Equal(
-            "eq=contrast=1.04:saturation=1.08:gamma=1.015",
-            finish);
+        Assert.Contains("contrast=1.14", finish);
+        Assert.Contains("saturation=1.22", finish);
+        Assert.Contains("colorbalance=", finish);
+        Assert.Contains("vignette=", finish);
         Assert.DoesNotContain("crop=", finish);
         Assert.DoesNotContain("pad=", finish);
     }

@@ -243,7 +243,10 @@ public sealed class RuleBasedHighlightDetector : IHighlightDetector
             LastEnemyKill = kill.LastEnemyKill == true,
             KillerHealth = kill.KillerHealth,
             DistanceMeters = kill.DistanceMeters,
-            ShotsSinceLastKill = kill.ShotsSinceLastKill
+            ShotsSinceLastKill = kill.ShotsSinceLastKill,
+            ShooterPosition = kill.ShooterPosition,
+            VictimPosition = kill.VictimPosition,
+            HitPosition = kill.HitPosition
         };
     }
 

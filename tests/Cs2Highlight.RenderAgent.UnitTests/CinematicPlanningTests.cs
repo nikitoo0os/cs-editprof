@@ -99,7 +99,7 @@ public sealed class CinematicPlanningTests
     }
 
     [Fact]
-    public void ExplicitDurationNeverOverridesShortGameplayCap()
+    public void ExplicitDurationIsAnExactTargetEvenForShortGameplay()
     {
         MovieDurationBudget budget = new CinematicDurationPolicy().Calculate(
             [Highlight("solo", HighlightType.SoloKill, 6, 20)],
@@ -108,7 +108,28 @@ public sealed class CinematicPlanningTests
                 Selection = MovieDurationSelection.Seconds30
             });
 
-        Assert.Equal(12, budget.MaximumTotalSeconds);
+        Assert.Equal(30, budget.MaximumTotalSeconds);
+        Assert.Equal(30, budget.TargetSeconds);
+        Assert.Equal(24, budget.MaximumBrollSeconds);
+    }
+
+    [Fact]
+    public void ExplicitFortyFiveSecondExcerptIsNotReplacedByShortSectionWindow()
+    {
+        MusicExcerptPlan excerpt = new MusicExcerptSelector(
+            new CinematicDurationPolicy()).Select(
+            ExcerptNarrative(duration: 60),
+            [
+                Highlight("h1", HighlightType.DoubleKill, 4, 30),
+                Highlight("h2", HighlightType.Ace, 4, 80)
+            ],
+            new MovieDurationOptions
+            {
+                Selection = MovieDurationSelection.Seconds45
+            });
+
+        Assert.True(excerpt.IsValid);
+        Assert.Equal(45, excerpt.DurationSeconds, 6);
     }
 
     [Fact]
@@ -296,6 +317,38 @@ public sealed class CinematicPlanningTests
         Assert.True(candidate.CinematicScore > 0);
     }
 
+    [Fact]
+    public void BrollDetectorMarksPlayerJumpAndItsFocusTick()
+    {
+        GameplayTimelineFrame[] frames = GameplayFrames(
+                null,
+                alive: true,
+                freeze: false,
+                nearKill: false,
+                speed: 150)
+            .Select((frame, index) => frame with
+            {
+                Player = frame.Player with
+                {
+                    Position = frame.Player.Position with
+                    {
+                        Z = 64 + (index <= 3 ? index * 10 : (6 - index) * 10)
+                    },
+                    Velocity = frame.Player.Velocity with
+                    {
+                        Z = index == 2 ? 180 : index == 4 ? -160 : 0
+                    }
+                }
+            })
+            .ToArray();
+
+        BrollCandidate candidate = Assert.Single(
+            new BrollCandidateDetector().Detect(BrollContext(frames)));
+
+        Assert.Equal(BrollCandidateType.PlayerJump, candidate.Type);
+        Assert.Equal(frames[2].Tick, candidate.FocusTick);
+    }
+
     [Theory]
     [InlineData(false, false, false, 120)]
     [InlineData(true, true, false, 120)]
@@ -361,6 +414,44 @@ public sealed class CinematicPlanningTests
     }
 
     [Fact]
+    public void CameraRouteIsSlowSinglePathEndingAtNextHighlight()
+    {
+        BrollCandidate candidate = Broll();
+        GameplayVector3 destination = new(900, 240, 64);
+        CameraPlanningContext context = VerifiedCameraContext() with
+        {
+            DestinationSubjectPosition = destination,
+            MaximumCameraSpeedUnitsPerSecond = 80
+        };
+
+        CameraShotPlan plan = new CameraPathPlanner().Create(
+            candidate,
+            context);
+
+        Assert.NotEqual(CameraShotType.PlayerPov, plan.Type);
+        Assert.Equal(destination, plan.TargetPoints[^1].Position);
+        Assert.Contains(
+            "CAMERA_ROUTE_B_ANCHORED_TO_NEXT_HIGHLIGHT",
+            plan.Warnings);
+        double routeDistance = plan.Keyframes[0].Position.DistanceTo(
+            plan.Keyframes[^1].Position);
+        Assert.InRange(
+            routeDistance,
+            0,
+            candidate.DurationSeconds *
+                context.MaximumCameraSpeedUnitsPerSecond + 0.001);
+        GameplayVector3 start = plan.Keyframes[0].Position;
+        GameplayVector3 end = plan.Keyframes[^1].Position;
+        foreach (CameraKeyframe keyframe in plan.Keyframes.Skip(1).SkipLast(1))
+        {
+            double cross =
+                (keyframe.Position.X - start.X) * (end.Y - start.Y) -
+                (keyframe.Position.Y - start.Y) * (end.X - start.X);
+            Assert.InRange(Math.Abs(cross), 0, 0.001);
+        }
+    }
+
+    [Fact]
     public void Dust2CatalogContainsVerifiedStage81Campath()
     {
         MapCameraProfile? profile =
@@ -376,6 +467,98 @@ public sealed class CinematicPlanningTests
             keyframe => Assert.Contains(
                 profile.SafeVolumes,
                 volume => volume.Contains(keyframe.Position)));
+    }
+
+    [Fact]
+    public void AutomaticCalibratorBuildsTrajectoryVolumesForUnknownMap()
+    {
+        GameplayTimelineFrame[] frames = GameplayFrames(
+            null,
+            alive: true,
+            freeze: false,
+            nearKill: false,
+            speed: 120);
+
+        AutomaticCameraCalibrationResult result =
+            new AutomaticMapCameraCalibrator().Calibrate(
+                "de_newmap",
+                frames,
+                64);
+
+        Assert.True(result.Profile.AutomaticallyCalibrated);
+        Assert.False(result.Profile.ManuallyVerified);
+        Assert.NotEmpty(result.Profile.SafeVolumes);
+        Assert.Equal(
+            result.Profile.SafeVolumes.Count,
+            result.Profile.EstablishingShots.Count);
+        Assert.All(
+            frames,
+            frame => Assert.Contains(
+                result.Profile.SafeVolumes,
+                volume => volume.Contains(frame.Player.Position)));
+    }
+
+    [Fact]
+    public void AutomaticProfileProducesCalibrationSpikeCameraPlan()
+    {
+        GameplayTimelineFrame[] frames = GameplayFrames(
+            null,
+            alive: true,
+            freeze: false,
+            nearKill: false,
+            speed: 120);
+        MapCameraProfile profile = new AutomaticMapCameraCalibrator()
+            .Calibrate("de_newmap", frames, 64)
+            .Profile;
+        BrollCandidate candidate = Broll() with
+        {
+            Trajectory = new PlayerTrajectory(
+                frames.Select(value => new PlayerTransformSample(
+                    value.Tick,
+                    value.Player.Position,
+                    value.Player.ViewAngles)).ToArray()),
+            StartTick = frames[0].Tick,
+            EndTick = frames[^1].Tick,
+            DurationSeconds = (frames[^1].Tick - frames[0].Tick) / 64d
+        };
+        CameraPlanningContext context = VerifiedCameraContext() with
+        {
+            MapName = "de_newmap",
+            Profile = profile
+        };
+
+        CameraShotPlan plan = new CameraPathPlanner().Create(
+            candidate,
+            context);
+
+        Assert.NotEqual(CameraShotType.PlayerPov, plan.Type);
+        Assert.True(plan.AutomaticCalibration);
+        Assert.NotNull(plan.SafetyVolume);
+        Assert.All(
+            plan.Keyframes,
+            keyframe => Assert.True(
+                plan.SafetyVolume!.Contains(keyframe.Position)));
+    }
+
+    [Fact]
+    public void AutomaticCalibratorRejectsUnobservedSpace()
+    {
+        GameplayTimelineFrame[] frames = GameplayFrames(
+            null,
+            alive: false,
+            freeze: false,
+            nearKill: false,
+            speed: 120);
+
+        AutomaticCameraCalibrationResult result =
+            new AutomaticMapCameraCalibrator().Calibrate(
+                "de_newmap",
+                frames,
+                64);
+
+        Assert.False(result.Profile.AutomaticallyCalibrated);
+        Assert.Empty(result.Profile.SafeVolumes);
+        Assert.Empty(result.Profile.EstablishingShots);
     }
 
     [Fact]
@@ -495,6 +678,38 @@ public sealed class CinematicPlanningTests
         Assert.Contains("CAMERA_PREVIEW_BLACK_FRAMES", warnings);
         Assert.Contains("CAMERA_PREVIEW_ABRUPT_JUMP", warnings);
         Assert.Contains("CAMERA_CAMPATH_KEYFRAME_COUNT_INVALID", warnings);
+    }
+
+    [Fact]
+    public void GroupWideWithSingleTrackedSubjectDoesNotRequireGroupCoverage()
+    {
+        CameraShotPlan shot = CameraPathPlanner.Pov(Broll(), []) with
+        {
+            Type = CameraShotType.GroupWide,
+            Family = CameraShotFamily.GroupWide,
+            SubjectIds = ["player-1"]
+        };
+        CameraPreviewMetrics metrics = new(
+            2,
+            0.5,
+            0,
+            0.2,
+            0.2,
+            0,
+            0.1,
+            true)
+        {
+            SubjectVisibleRatio = 1,
+            SubjectCenterDistance = 0.1,
+            SubjectLossDurationSeconds = 0,
+            SubjectClippingRatio = 0,
+            GroupCoverageRatio = 0
+        };
+
+        IReadOnlyList<string> warnings =
+            new CameraShotQualityAnalyzer().Validate(shot, metrics);
+
+        Assert.DoesNotContain("CAMERA_PREVIEW_GROUP_COVERAGE_LOW", warnings);
     }
 
     [Fact]
@@ -639,10 +854,9 @@ public sealed class CinematicPlanningTests
             .Last();
         Assert.True(firstHighlight.OutputStartSeconds > 0);
         Assert.Equal("h2", lastHighlight.HighlightId);
-        Assert.Equal(
-            lastHighlight.OutputEndSeconds,
-            plan.TargetDurationSeconds,
-            6);
+        Assert.Equal(16, plan.TargetDurationSeconds, 6);
+        Assert.True(
+            plan.TargetDurationSeconds >= lastHighlight.OutputEndSeconds);
         Assert.DoesNotContain(
             plan.Segments,
             value =>
@@ -654,6 +868,221 @@ public sealed class CinematicPlanningTests
                 value.OutputEndSeconds <=
                     firstHighlight.OutputStartSeconds + 0.000001),
             value => Assert.Null(value.HighlightId));
+        Assert.All(
+            plan.Segments.Where(value => value.BrollCandidateId is not null),
+            value => Assert.True(
+                value.OutputEndSeconds - value.OutputStartSeconds >= 1.5));
+    }
+
+    [Fact]
+    public void DirectorUsesMusicMotivatedSlowMotionOnlyOnHighlightFireWindow()
+    {
+        MusicNarrative narrative = ExcerptNarrative() with
+        {
+            Frames = Enumerable.Range(0, 81)
+                .Select(index => Frame(
+                    Math.Max(0, 1 - index / 70d),
+                    0.5,
+                    0.95,
+                    0.2,
+                    0.3,
+                    0.2,
+                    0.2) with
+                {
+                    TimeSeconds = index * 0.25
+                })
+                .ToArray()
+        };
+
+        CinematicMoviePlan plan = Director().Create(
+            narrative,
+            ValidExcerpt(),
+            [
+                Highlight("h1", HighlightType.DoubleKill, 4, 30),
+                Highlight("h2", HighlightType.Ace, 4, 80)
+            ],
+            [Broll()],
+            DirectorOptions());
+
+        CinematicSequenceSegment broll = Assert.Single(plan.Segments.Where(
+            value => value.BrollCandidateId is not null));
+        Assert.False(broll.TimeWarp.UsesLocalRamp);
+        Assert.DoesNotContain(
+            "MUSIC_ENERGY_CHANGE_FIRE_SLOW_MOTION",
+            broll.TimeWarp.Warnings);
+        CinematicSequenceSegment highlight = Assert.Single(
+            plan.Segments.Where(value => value.HighlightId == "h1"));
+        Assert.True(highlight.TimeWarp.UsesLocalRamp);
+        Assert.Contains(
+            "MUSIC_ENERGY_CHANGE_FIRE_SLOW_MOTION",
+            highlight.TimeWarp.Warnings);
+        Assert.Contains(highlight.TimeWarp.Segments, value => value.Speed < 1);
+    }
+
+    [Fact]
+    public void ExplicitFortyFiveSecondDirectorFillsLongGapsWithBroll()
+    {
+        MusicSection[] sections =
+        [
+            DetailedSection("intro-45", MusicSectionType.Intro, 0, 6, 0.2),
+            DetailedSection("build-45", MusicSectionType.BuildUp, 6, 10, 0.5),
+            DetailedSection("drop-45", MusicSectionType.Drop, 10, 40, 0.9),
+            DetailedSection("outro-45", MusicSectionType.Outro, 40, 45, 0.2)
+        ];
+        MusicalPeak[] peaks =
+        [
+            DropPeak("drop-45", 15, 1),
+            DropPeak("drop-45", 35, 0.9)
+        ];
+        MusicNarrative narrative = new()
+        {
+            DurationSeconds = 60,
+            Sections = sections,
+            Peaks = peaks,
+            Frames = [],
+            Warnings = []
+        };
+        MusicExcerptPlan excerpt = new()
+        {
+            StartSeconds = 0,
+            EndSeconds = 45,
+            SectionIds = sections.Select(value => value.Id).ToArray(),
+            Peaks = peaks,
+            RequiredPeakCount = 2,
+            UsablePeakCount = 2,
+            Score = 100,
+            IsValid = true,
+            ScoreBreakdown = new Dictionary<string, double>(),
+            Warnings = []
+        };
+        BrollCandidate[] broll = Enumerable.Range(0, 20)
+            .Select(index => Broll() with
+            {
+                Id = $"broll-long-{index:D2}",
+                StartTick = index * 256,
+                EndTick = index * 256 + 192
+            })
+            .ToArray();
+
+        CinematicMoviePlan plan = Director().Create(
+            narrative,
+            excerpt,
+            [
+                Highlight("h1", HighlightType.DoubleKill, 4, 30),
+                Highlight("h2", HighlightType.Ace, 4, 80)
+            ],
+            broll,
+            DirectorOptions() with
+            {
+                Duration = new MovieDurationOptions
+                {
+                    Selection = MovieDurationSelection.Seconds45
+                }
+            });
+
+        CinematicSequenceSegment[] ordered = plan.Segments
+            .OrderBy(value => value.OutputStartSeconds)
+            .ToArray();
+        Assert.Equal(45, plan.TargetDurationSeconds, 6);
+        Assert.Equal(0, ordered[0].OutputStartSeconds, 6);
+        Assert.Equal(45, ordered[^1].OutputEndSeconds, 6);
+        Assert.DoesNotContain(
+            plan.Warnings,
+            value => value.StartsWith(
+                "CINEMATIC_TIMELINE_GAP:",
+                StringComparison.Ordinal));
+        Assert.True(ordered.Count(value =>
+            value.BrollCandidateId is not null) >= 8);
+        Assert.All(
+            ordered.Where(value => value.BrollCandidateId is not null),
+            value =>
+            {
+                Assert.NotEqual(CameraShotType.PlayerPov, value.Camera.Type);
+                Assert.NotEqual(
+                    CameraShotFamily.PlayerPov,
+                    value.Camera.Family);
+                Assert.True(
+                    value.OutputEndSeconds - value.OutputStartSeconds >= 1.5);
+            });
+    }
+
+    [Fact]
+    public void ExplicitDirectorDistributesKillsAcrossTheWholeMovie()
+    {
+        MusicSection section = DetailedSection(
+            "drop-spread",
+            MusicSectionType.Drop,
+            0,
+            45,
+            0.9);
+        MusicalPeak[] peaks = Enumerable.Range(0, 39)
+            .Select(index => new MusicalPeak
+            {
+                Id = $"spread-peak-{index:D2}",
+                Type = MusicalPeakType.BassImpact,
+                TimeSeconds = 4 + index,
+                Strength = 1 - index * 0.01,
+                Confidence = 0.9,
+                SectionId = section.Id
+            })
+            .ToArray();
+        MusicNarrative narrative = new()
+        {
+            DurationSeconds = 45,
+            Sections = [section],
+            Peaks = peaks,
+            Frames = [],
+            Warnings = []
+        };
+        MusicExcerptPlan excerpt = new()
+        {
+            StartSeconds = 0,
+            EndSeconds = 45,
+            SectionIds = [section.Id],
+            Peaks = peaks,
+            RequiredPeakCount = 8,
+            UsablePeakCount = peaks.Length,
+            Score = 100,
+            IsValid = true,
+            ScoreBreakdown = new Dictionary<string, double>(),
+            Warnings = []
+        };
+
+        CinematicMoviePlan plan = Director().Create(
+            narrative,
+            excerpt,
+            Enumerable.Range(0, 8)
+                .Select(index => Highlight(
+                    $"spread-h{index}",
+                    HighlightType.SoloKill,
+                    2,
+                    30 - index))
+                .ToArray(),
+            Enumerable.Range(0, 24)
+                .Select(index => Broll() with
+                {
+                    Id = $"spread-broll-{index:D2}",
+                    StartTick = index * 256,
+                    EndTick = index * 256 + 192
+                })
+                .ToArray(),
+            DirectorOptions() with
+            {
+                Duration = new MovieDurationOptions
+                {
+                    Selection = MovieDurationSelection.Seconds45
+                }
+            });
+
+        double[] kills = plan.HighlightMatches
+            .OrderBy(value => value.PlannedKillSeconds)
+            .Select(value => value.PlannedKillSeconds)
+            .ToArray();
+        Assert.Equal(8, kills.Length);
+        Assert.InRange(kills[0], 3, 8);
+        Assert.InRange(kills[^1], 36, 42);
+        Assert.All(kills.Zip(kills.Skip(1)), pair =>
+            Assert.InRange(pair.Second - pair.First, 3, 8));
     }
 
     [Fact]

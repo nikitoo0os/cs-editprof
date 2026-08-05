@@ -39,6 +39,21 @@ schedules the stop command at `endTick` and
 gracefully quits the isolated CS2 process. The application refuses to run when
 `AutomationVerified=false`.
 
+Each HLAE take is accepted only when both `video.mp4` and the adjacent
+`audio.wav` are stable. The Render Agent muxes the tick-synchronized PCM game
+audio into `raw-highlight.mp4` as AAC 48 kHz stereo while copying the H.264
+video stream unchanged. Missing or empty gameplay audio fails the render with
+`GAMEPLAY_AUDIO_MISSING` instead of silently substituting an empty track.
+
+For maps without a manually verified camera profile, the cinematic planner can
+derive an automatic calibration profile from alive, non-freeze player
+trajectories in the uploaded demo. Coverage is divided into overlapping map
+cells, generated shots run as explicit calibration spikes, and every non-POV
+result still passes the normal rendered-preview quality gate. Failed previews
+are replaced by rendered POV fallbacks. Successful automatic volumes are
+cached under `storage/camera-calibration`, keyed by map name and HLAE version,
+so later demos expand and reuse the accepted coverage.
+
 ## Requirements
 
 - Windows 10/11 interactive desktop session
@@ -62,16 +77,32 @@ dotnet test -c Release --no-build
 ## Web quickstart
 
 On a clean Windows machine, the supported entry point is the quickstart.ps1
-script. It restores, builds the solution and frontend, runs migrations, and
-starts the Web host with SQLite, Identity, SignalR, the test payment provider
-and local workers.
+script. It restores dependencies, builds the frontend, `demo-parser.exe`,
+`music-analyzer.exe`, and all .NET executables in Release configuration, then
+runs migrations and starts the Web host with SQLite, Identity, SignalR, the
+test payment provider and local workers. The analyzer build uses Python 3.11
+and requires Go in addition to the .NET and Node.js toolchains. Quick Start
+downloads the pinned FFmpeg 8.1.2 Windows essentials build into `artifacts`
+on first use, verifies its SHA-256 checksum, and reuses it on later starts.
+Later starts also reuse current Node dependencies, generated CSS, packaged
+analyzer executables and .NET Release outputs. Only components with newer
+inputs are rebuilt; pass `-Rebuild` to force a complete rebuild.
+In `RenderMachine` mode it also installs the pinned portable HLAE 2.191.1
+package into `artifacts`, verifies its checksum, and places the local FFmpeg
+binaries in HLAE's expected `ffmpeg/bin` directory.
 
-Use quickstart.ps1 with Development mode for a machine without Steam, CS2 or
-HLAE. Use RenderMachine mode only on a Windows desktop with Steam,
-CS2, HLAE/AfxHookSource2, FFmpeg and FFprobe configured. The script also
+Use quickstart.ps1 with Development mode for a machine without Steam or CS2.
+Use RenderMachine mode only on a Windows desktop with Steam and CS2 installed
+and a verified `src/Cs2Highlight.RenderAgent/appsettings.local.json`. HLAE,
+AfxHookSource2, FFmpeg and FFprobe are supplied locally by Quick Start. The script also
 supports -Status, -Stop, -QuickClose, -Doctor, and the confirmation-protected
 -ResetDevelopmentData action. It stores only a PID/state file and logs under
 storage and logs, and never overwrites appsettings.local.json.
+
+The Web host listens on all local interfaces at port 5000. Quick Start prints
+the available LAN URLs, for example `http://192.168.0.104:5000`. If the Windows
+private-network firewall is enabled, run Quick Start once from an Administrator
+PowerShell so it can add the subnet-scoped inbound TCP 5000 rule.
 
 For a host started manually with `dotnet run`, use
 `.\quickstart.ps1 -QuickClose` to close only this project's web host.
@@ -81,6 +112,13 @@ example Payments__SecretKey. Start from appsettings.local.example.json and
 .env.example. Before publishing, fill the configurable legal details and have
 the legal templates reviewed by a qualified lawyer for the applicable
 jurisdiction and business form.
+
+Development quickstart accepts accounts without email confirmation and writes
+confirmation/reset links to `logs/web.log`. Production keeps confirmation
+mandatory and sends mail through SMTP. Configure `Email__Smtp__Host`,
+`Email__Smtp__Port`, `Email__Smtp__UserName`, `Email__Smtp__Password`, and
+`Email__Smtp__FromAddress` in the production environment. Passwords must be at
+least eight characters; character-class composition rules are not imposed.
 
 The web application uses owner-scoped Identity generations, separate consent
 records, an auditable and idempotent token ledger, referral rewards after
@@ -187,8 +225,11 @@ dotnet test .\tests\Cs2Highlight.Web.Tests -c Release `
   --filter "Category=Stage8Ffmpeg"
 ```
 
-See [Stage 8 real E2E](docs/STAGE8_E2E.md) and
-[Stage 10 cinematic re-direction](docs/STAGE10_CINEMATIC_REDIRECTION.md). The
+See [Stage 8 real E2E](docs/STAGE8_E2E.md),
+[Stage 10 cinematic re-direction](docs/STAGE10_CINEMATIC_REDIRECTION.md), and
+the mandatory
+[Cinematic Director film contract](docs/CINEMATIC_DIRECTOR_FILM_CONTRACT.md).
+The
 generated JSON plans and acceptance reports are not substitutes for viewing and
 probing the real MP4.
 

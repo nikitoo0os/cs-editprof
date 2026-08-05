@@ -7,7 +7,7 @@
   <form method="post" class="form-stack">
     <input type="hidden" asp-for="ReturnUrl" /><input type="hidden" asp-for="Ref" />
     <label>Email<input asp-for="Input.Email" autocomplete="email" /></label>
-    <label>Пароль<input asp-for="Input.Password" autocomplete="new-password" /></label>
+    <label>Пароль<input asp-for="Input.Password" autocomplete="new-password" /><span class="muted">Минимум 8 символов</span></label>
     <label>Повторите пароль<input asp-for="Input.ConfirmPassword" autocomplete="new-password" /></label>
     <label class="checkbox-row"><input asp-for="Input.PrivacyAccepted" /> Я принимаю <a asp-page="/Privacy">политику конфиденциальности</a> (версия @Model.PrivacyVersion).</label>
     <label class="checkbox-row"><input asp-for="Input.PersonalDataAccepted" /> Я даю отдельное согласие на <a asp-page="/PersonalData">обработку персональных данных</a> (версия @Model.PersonalDataVersion).</label>

@@ -15,7 +15,7 @@ public interface ICinematicDynamicEffectAdapter
 public sealed class CinematicDynamicEffectAdapter(
     IEffectSeedProvider seeds) : ICinematicDynamicEffectAdapter
 {
-    public const string PlannerVersion = "10.0";
+    public const string PlannerVersion = "10.1";
 
     public DynamicEffectPlan Create(
         string generationId,
@@ -45,6 +45,16 @@ public sealed class CinematicDynamicEffectAdapter(
                 seed + index,
                 index))
             .ToList();
+        foreach (EffectCue impact in KillImpactCues(
+                     highlight,
+                     segment,
+                     match,
+                     intensity,
+                     seed + effects.Count))
+        {
+            if (effects.All(value => value.Type != impact.Type))
+                effects.Add(impact);
+        }
         EffectCue? transition = TransitionCue(
             highlight,
             segment,
@@ -118,10 +128,118 @@ public sealed class CinematicDynamicEffectAdapter(
             Priority = 100,
             Seed = seed,
             Parameters = Parameters(type, directive.Intensity, seed),
+            SourceKillEventId = match.HighlightId,
             SourceMusicalAnchorId = match.Peak.Id,
             Reason = directive.Reason.ToString(),
             RenderCost = EffectRenderCost.Low
         };
+    }
+
+    private static EffectCue[] KillImpactCues(
+        GenerationHighlight highlight,
+        CinematicSequenceSegment segment,
+        HighlightPeakMatch match,
+        EffectIntensity intensity,
+        int seed)
+    {
+        if (intensity == EffectIntensity.Minimal)
+            return [];
+        double duration = Math.Max(
+            0.001,
+            segment.OutputEndSeconds - segment.OutputStartSeconds);
+        double kill = Math.Clamp(
+            match.PlannedKillSeconds - segment.OutputStartSeconds,
+            0,
+            duration);
+        bool strong = intensity == EffectIntensity.Strong;
+        List<EffectCue> cues = [];
+        cues.Add(ImpactCue(
+            highlight,
+            match,
+            VideoEffectType.PunchZoom,
+            EffectRole.Primary,
+            Window(kill, 0.10, 0.16, duration),
+            strong ? 0.72 : 0.54,
+            seed));
+        if (strong)
+        {
+            VideoEffectType blur = Math.Abs(seed) % 2 == 0
+                ? VideoEffectType.DirectionalMotionBlur
+                : VideoEffectType.ZoomBlur;
+            cues.Add(ImpactCue(
+                highlight,
+                match,
+                blur,
+                EffectRole.Accent,
+                Window(kill, 0.14, 0.05, duration),
+                0.48,
+                seed + 1));
+        }
+        cues.Add(ImpactCue(
+            highlight,
+            match,
+            VideoEffectType.FlashAccent,
+            EffectRole.Accent,
+            Window(kill, 0.015, 0.09, duration),
+            strong ? 0.48 : 0.32,
+            seed + 2));
+        if (strong && segment.Role == CinematicSequenceRole.PeakHighlight)
+        {
+            cues.Add(ImpactCue(
+                highlight,
+                match,
+                VideoEffectType.HitStop,
+                EffectRole.Primary,
+                Window(kill, 0.012, 0.08, duration),
+                0.62,
+                seed + 3));
+        }
+        return cues
+            .Where(value => value.EndSeconds - value.StartSeconds >= 0.04)
+            .ToArray();
+    }
+
+    private static EffectCue ImpactCue(
+        GenerationHighlight highlight,
+        HighlightPeakMatch match,
+        VideoEffectType type,
+        EffectRole role,
+        (double Start, double End) window,
+        double intensity,
+        int seed) => new()
+        {
+            Id = $"cinematic-{highlight.HighlightId}-kill-{type}",
+            Type = type,
+            Category = Category(type),
+            Role = role,
+            StartSeconds = window.Start,
+            EndSeconds = window.End,
+            Intensity = intensity,
+            Priority = role == EffectRole.Primary ? 110 : 90,
+            Seed = seed,
+            Parameters = Parameters(type, intensity, seed),
+            SourceKillEventId = highlight.HighlightId,
+            SourceMusicalAnchorId = match.Peak.Id,
+            Reason = type == VideoEffectType.HitStop
+                ? MotivatedEffectReason.FinalKill.ToString()
+                : MotivatedEffectReason.MusicPeak.ToString(),
+            RenderCost = type is VideoEffectType.DirectionalMotionBlur or
+                VideoEffectType.ZoomBlur
+                    ? EffectRenderCost.Medium
+                    : EffectRenderCost.Low
+        };
+
+    private static (double Start, double End) Window(
+        double center,
+        double before,
+        double after,
+        double duration)
+    {
+        double start = Math.Clamp(center - before, 0, duration);
+        double end = Math.Clamp(center + after, 0, duration);
+        if (end - start >= 0.04)
+            return (start, end);
+        return (Math.Max(0, end - 0.04), end);
     }
 
     private static VideoEffectCategory Category(VideoEffectType type) =>

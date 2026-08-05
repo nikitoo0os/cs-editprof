@@ -134,6 +134,26 @@ public sealed class RenderJobValidatorTests : IDisposable
     }
 
     [Fact]
+    public void PlayerPovWithHiddenHudIsRejectedEvenWithoutWeaponFire()
+    {
+        RenderJob job = ValidJob() with
+        {
+            PresentationMode = CapturePresentationMode.CinematicBroll,
+            ContainsFirstPersonWeaponFire = false,
+            Camera = RenderCameraPlan.PlayerPov
+        };
+
+        ValidationReport result =
+            RenderJobValidator.Validate(job, new RenderEnvironmentOptions());
+
+        Assert.Contains(
+            result.Errors,
+            error => error.StartsWith(
+                "POV_CAMERA_REQUIRES_HUD",
+                StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void CalibrationStaticCameraInsideSafeVolumeIsAccepted()
     {
         RenderJob job = ValidJob() with

@@ -133,6 +133,7 @@ public enum BrollCandidateType
     PostFightExit,
     TeamMovement,
     TeamSetup,
+    PlayerJump,
     PovContinuity,
     EnvironmentShot
 }
@@ -151,6 +152,7 @@ public sealed record BrollCandidate
     public required double ActionDensity { get; init; }
     public required PlayerTrajectory Trajectory { get; init; }
     public required IReadOnlyList<string> Tags { get; init; }
+    public long? FocusTick { get; init; }
     public IReadOnlyList<string> SubjectIds { get; init; } = [];
     public IReadOnlyDictionary<string, PlayerTrajectory> SubjectTrajectories
         { get; init; } = new Dictionary<string, PlayerTrajectory>(
@@ -269,6 +271,7 @@ public sealed record CameraShotPlan
     public IReadOnlyList<CameraShotFamily> FallbackChain { get; init; } =
         [CameraShotFamily.PlayerPov];
     public CameraShotSignature? Signature { get; init; }
+    public bool AutomaticCalibration { get; init; }
 }
 
 public sealed record SafeCameraVolume(
@@ -296,6 +299,7 @@ public sealed record MapCameraProfile
     public required IReadOnlyList<EstablishingCameraPreset> EstablishingShots { get; init; }
     public required IReadOnlyList<RestrictedCameraVolume> RestrictedVolumes { get; init; }
     public bool ManuallyVerified { get; init; }
+    public bool AutomaticallyCalibrated { get; init; }
 }
 
 public sealed record HlaeCameraCapabilities
@@ -319,6 +323,8 @@ public sealed record CameraPlanningContext
     public double CameraHeight { get; init; } = 28;
     public double MinimumFov { get; init; } = 70;
     public double MaximumFov { get; init; } = 100;
+    public GameplayVector3? DestinationSubjectPosition { get; init; }
+    public double MaximumCameraSpeedUnitsPerSecond { get; init; } = 120;
 }
 
 public sealed class CinematicCaptureOptions
@@ -525,7 +531,7 @@ public sealed record CinematicAlignmentReport
     public required IReadOnlyList<string> Warnings { get; init; }
 }
 
-public sealed class CinematicTimeWarpOptions
+public sealed record CinematicTimeWarpOptions
 {
     public double MinimumBaseSpeed { get; init; } = 0.88;
     public double MaximumBaseSpeed { get; init; } = 1.12;
@@ -533,6 +539,7 @@ public sealed class CinematicTimeWarpOptions
     public double MaximumLocalSpeed { get; init; } = 1.30;
     public double MaximumRampDurationSeconds { get; init; } = 1.5;
     public double MaximumPostKillAcceleration { get; init; } = 1.05;
+    public bool MusicEnergyTransition { get; init; }
 }
 
 public sealed class CinematicEffectPolicy

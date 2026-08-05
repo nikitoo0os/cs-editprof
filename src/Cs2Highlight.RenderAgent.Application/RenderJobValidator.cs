@@ -122,6 +122,12 @@ public static partial class RenderJobValidator
         {
             if (camera.Keyframes.Count > 0)
                 errors.Add("PlayerPov camera must not contain keyframes.");
+            if (job.EffectivePresentationMode !=
+                CapturePresentationMode.PovCombat)
+            {
+                errors.Add(
+                    "POV_CAMERA_REQUIRES_HUD: PlayerPov camera must use the PovCombat presentation mode.");
+            }
             return;
         }
 

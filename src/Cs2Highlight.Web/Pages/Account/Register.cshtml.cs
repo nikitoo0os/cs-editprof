@@ -26,7 +26,7 @@ public sealed class RegisterModel(
     public sealed class InputModel
     {
         [Required, EmailAddress] public string Email { get; set; } = string.Empty;
-        [Required, StringLength(100, MinimumLength = 10), DataType(DataType.Password)] public string Password { get; set; } = string.Empty;
+        [Required, StringLength(100, MinimumLength = 8), DataType(DataType.Password)] public string Password { get; set; } = string.Empty;
         [Required, DataType(DataType.Password), Compare(nameof(Password))] public string ConfirmPassword { get; set; } = string.Empty;
         public bool PrivacyAccepted { get; set; }
         public bool PersonalDataAccepted { get; set; }
