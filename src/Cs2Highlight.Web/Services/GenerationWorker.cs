@@ -916,16 +916,28 @@ public sealed partial class GenerationWorker(
                     tripodJobPath,
                     1,
                     cancellationToken);
-                if (tripod.ExitCode != 0 ||
-                    tripod.Result?.OutputFile is null)
+                string? tripodOutputPath = tripod.Result?.OutputFile;
+                bool tripodOutputReady = tripod.Result?.Success == true &&
+                    tripodOutputPath is not null &&
+                    File.Exists(tripodOutputPath) &&
+                    new FileInfo(tripodOutputPath).Length > 0;
+                if (!tripodOutputReady)
                 {
+                    string errorCode = tripod.Error?.Code ??
+                        tripod.Result?.Error?.Code ?? "TRIPOD_RENDER_FAILED";
+                    string errorMessage = tripod.Error?.Message ??
+                        tripod.Result?.Error?.Message ??
+                        "Render Agent returned no valid output file.";
                     throw new InvalidOperationException(
                         $"CINEMATIC_TRIPOD_FALLBACK_FAILED:{sourceId}:" +
-                        tripod.Error?.Message);
+                        $"code={errorCode};message={errorMessage};" +
+                        $"exitCode={tripod.ExitCode};" +
+                        $"renderResult={tripod.RenderResultPath};" +
+                        $"job={tripodJobPath}");
                 }
                 CameraPreviewMetrics tripodMetrics =
                     await previewAnalyzer.AnalyzeAsync(
-                        tripod.Result.OutputFile,
+                        tripodOutputPath!,
                         tripodShot,
                         cancellationToken);
                 IReadOnlyList<string> tripodWarnings =
@@ -936,13 +948,13 @@ public sealed partial class GenerationWorker(
                         $"CINEMATIC_FREECAM_PREVIEW_FAILED:{sourceId}:" +
                         string.Join(',', warnings.Concat(tripodWarnings)));
                 }
-                rendered[sourceId] = tripod.Result.OutputFile;
+                rendered[sourceId] = tripodOutputPath!;
                 effectiveCameras[source.Id] = tripodShot;
                 previews.Add(new CameraPreviewResult
                 {
                     CameraShotId = source.Camera.Id,
                     Status = CameraPreviewStatus.Passed,
-                    PreviewPath = tripod.Result.OutputFile,
+                    PreviewPath = tripodOutputPath!,
                     Metrics = tripodMetrics,
                     EffectiveShot = tripodShot,
                     Attempt = 2,
