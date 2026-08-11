@@ -10,9 +10,13 @@ using Microsoft.EntityFrameworkCore;
 namespace Cs2Highlight.Web.Pages;
 
 [Authorize]
-public sealed class PurchaseModel(IDbContextFactory<GenerationDbContext> dbFactory, ITokenService tokens, TimeProvider timeProvider) : PageModel
+public sealed class PurchaseModel(
+    IDbContextFactory<GenerationDbContext> dbFactory,
+    TokenPaymentService payments,
+    PaymentOptions paymentOptions) : PageModel
 {
     public IReadOnlyList<TokenPackage> Packages { get; private set; } = [];
+    public bool IsTestPayment => !paymentOptions.UsesYooKassa;
 
     public async Task OnGetAsync(CancellationToken cancellationToken)
     {
@@ -23,29 +27,34 @@ public sealed class PurchaseModel(IDbContextFactory<GenerationDbContext> dbFacto
             .ToArrayAsync(cancellationToken);
     }
 
-    public async Task<IActionResult> OnPostBuyAsync(string code, CancellationToken cancellationToken)
+    public async Task<IActionResult> OnPostBuyAsync(
+        string code,
+        CancellationToken cancellationToken)
     {
         string userId = User.FindFirstValue(ClaimTypes.NameIdentifier) ??
             throw new InvalidOperationException("AUTHENTICATED_USER_NOT_FOUND");
-        await using GenerationDbContext db =
-            await dbFactory.CreateDbContextAsync(cancellationToken);
-        TokenPackage? package = await db.TokenPackages.SingleOrDefaultAsync(
-            value => value.Code == code && value.IsActive, cancellationToken);
-        if (package is null) return NotFound();
-        DateTimeOffset now = timeProvider.GetUtcNow();
-        TokenPurchase purchase = new()
+        try
         {
-            UserId = userId, TokenPackageId = package.Id, Provider = "Test",
-            ProviderPaymentId = $"test_tokens_{Guid.NewGuid():N}",
-            IdempotencyKey = $"token-purchase:{userId}:{Guid.NewGuid():N}",
-            AmountMinor = package.PriceAmountMinor, Currency = package.Currency,
-            Status = TokenPurchaseStatus.Succeeded, CreatedAtUtc = now, PaidAtUtc = now
-        };
-        db.TokenPurchases.Add(purchase);
-        await db.SaveChangesAsync(cancellationToken);
-        await tokens.CreditAsync(userId, package.TokenAmount,
-            TokenTransactionType.Purchase, $"purchase:{purchase.Id}",
-            $"Покупка: {package.Name}", purchase.Id, null, cancellationToken);
-        return RedirectToPage("/Profile");
+            TokenPaymentLaunch launch = await payments.CreateAsync(
+                userId,
+                code,
+                BuildReturnUrl("purchase/payment-return"),
+                cancellationToken);
+            return Redirect(launch.ConfirmationUrl);
+        }
+        catch (InvalidOperationException exception)
+        {
+            ModelState.AddModelError(string.Empty, exception.Message);
+            await OnGetAsync(cancellationToken);
+            return Page();
+        }
+    }
+
+    private string BuildReturnUrl(string path)
+    {
+        string baseUrl = paymentOptions.ReturnUrlBase.TrimEnd('/');
+        if (Uri.TryCreate(baseUrl, UriKind.Absolute, out Uri? configured))
+            return $"{configured.AbsoluteUri.TrimEnd('/')}/{path.TrimStart('/')}";
+        return $"{Request.Scheme}://{Request.Host}/{path.TrimStart('/')}";
     }
 }

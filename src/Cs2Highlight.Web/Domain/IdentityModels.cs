@@ -105,6 +105,7 @@ public sealed class TokenPurchase
     public TokenPackage TokenPackage { get; set; } = null!;
     [MaxLength(32)] public string Provider { get; set; } = "Test";
     [MaxLength(128)] public string? ProviderPaymentId { get; set; }
+    [MaxLength(1024)] public string? ConfirmationUrl { get; set; }
     [MaxLength(128)] public string IdempotencyKey { get; set; } = string.Empty;
     public long AmountMinor { get; set; }
     [MaxLength(3)] public string Currency { get; set; } = "RUB";

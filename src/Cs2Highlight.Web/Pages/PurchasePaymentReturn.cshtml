@@ -1,0 +1,22 @@
+@page "/purchase/payment-return"
+@model Cs2Highlight.Web.Pages.PurchasePaymentReturnModel
+@using Cs2Highlight.Web.Domain
+@{
+  ViewData["Title"] = "Статус оплаты";
+}
+<section class="surface surface--elevated surface-pad legal-narrow" style="text-align:center">
+  @if (Model.Status is TokenPurchaseStatus.Cancelled or TokenPurchaseStatus.Failed)
+  {
+    <span class="badge badge-warning">Оплата не завершена</span>
+    <h1 class="page-title legal-result-title">Платёж отменён</h1>
+    <p class="page-lead legal-result-lead">Деньги не списаны. Вернитесь к пакетам и попробуйте ещё раз.</p>
+    <a class="btn btn-primary btn-lg" asp-page="/Purchase">Вернуться к пакетам</a>
+  }
+  else
+  {
+    <span class="badge badge-brand">Проверяем платёж</span>
+    <h1 class="page-title legal-result-title">Проверяем оплату</h1>
+    <p class="page-lead legal-result-lead">После подтверждения ЮKassa токены автоматически появятся в вашем профиле.</p>
+    <a class="btn btn-primary btn-lg" asp-page="/PurchasePaymentReturn" asp-route-purchaseId="@Model.PurchaseId">Проверить ещё раз</a>
+  }
+</section>

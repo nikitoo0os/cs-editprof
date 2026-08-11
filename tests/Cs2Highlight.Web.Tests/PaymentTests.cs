@@ -72,6 +72,62 @@ public sealed class PaymentTests : IAsyncLifetime, IDisposable
             (await verification.Generations.SingleAsync()).Status);
     }
 
+    [Fact]
+    public async Task TokenPackagePaymentCreditsOnceAndIsWebhookIdempotent()
+    {
+        const string userId = "token-purchase-user";
+        const string packageCode = "creator";
+        await using (GenerationDbContext db = await factory.CreateDbContextAsync())
+        {
+            db.Users.Add(new ApplicationUser
+            {
+                Id = userId,
+                UserName = "buyer@example.test",
+                NormalizedUserName = "BUYER@EXAMPLE.TEST",
+                Email = "buyer@example.test",
+                NormalizedEmail = "BUYER@EXAMPLE.TEST",
+                ReferralCode = "BUYER123"
+            });
+            db.TokenPackages.Add(new TokenPackage
+            {
+                Code = packageCode,
+                Name = "15 токенов",
+                TokenAmount = 15,
+                PriceAmountMinor = 54900,
+                Currency = "RUB"
+            });
+            await db.SaveChangesAsync();
+        }
+
+        TokenPaymentService service = new(
+            factory,
+            new TestPaymentProvider(),
+            new TokenService(factory, TimeProvider.System, new GenerationMetrics()),
+            TimeProvider.System);
+
+        TokenPaymentLaunch first = await service.CreateAsync(
+            userId, packageCode, "https://example.test/purchase/payment-return", CancellationToken.None);
+        TokenPaymentLaunch second = await service.CreateAsync(
+            userId, packageCode, "https://example.test/purchase/payment-return", CancellationToken.None);
+
+        Assert.Equal(first.Purchase.Id, second.Purchase.Id);
+        Assert.Contains($"purchaseId={first.Purchase.Id}", first.ConfirmationUrl);
+
+        await service.ConfirmTestAsync(first.Purchase.Id, userId, true, CancellationToken.None);
+        Assert.True(await service.RefreshByProviderPaymentIdAsync(
+            first.Purchase.ProviderPaymentId!, CancellationToken.None));
+
+        await using GenerationDbContext verification = await factory.CreateDbContextAsync();
+        Assert.Equal(15, await verification.Users
+            .Where(value => value.Id == userId)
+            .Select(value => value.TokenBalance)
+            .SingleAsync());
+        Assert.Equal(TokenPurchaseStatus.Succeeded,
+            (await verification.TokenPurchases.SingleAsync()).Status);
+        Assert.Equal(1, await verification.TokenTransactions
+            .CountAsync(value => value.UserId == userId));
+    }
+
     public async Task DisposeAsync() => await connection.DisposeAsync();
     public void Dispose() => connection.Dispose();
 

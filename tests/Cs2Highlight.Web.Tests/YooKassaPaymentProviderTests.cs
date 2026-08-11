@@ -25,6 +25,7 @@ public sealed class YooKassaPaymentProviderTests
             Assert.Contains("\"currency\":\"RUB\"", body);
             Assert.Contains("\"type\":\"redirect\"", body);
             Assert.Contains("https://merchant.example/return", body);
+            Assert.Contains("\"order_id\":\"order\"", body);
             return Json(HttpStatusCode.OK, """
                 {
                   "id": "23d93cac-000f-5000-8000-126628f15141",
