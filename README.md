@@ -383,19 +383,24 @@ environment variables:
     "Provider": "YooKassa",
     "PriceAmountMinor": 100,
     "Currency": "RUB",
-    "ShopId": "your-shop-id",
+    "ShopId": "1421630",
     "SecretKey": "your-secret-key",
-    "ReturnUrlBase": "https://your-domain.example"
+    "ReturnUrlBase": "https://cshighlighter.pro",
+    "ApiBaseUrl": "https://api.yookassa.ru/v3/"
   }
 }
 ```
 
 The amount is stored in minor currency units (`100` = `1.00 RUB`). Configure
 the HTTP notification URL in the YooKassa dashboard as
-`https://your-domain.example/api/payments/yookassa` and subscribe to
+`https://cshighlighter.pro/api/payments/yookassa` and subscribe to
 `payment.succeeded` and `payment.canceled`. The endpoint verifies the current
-payment status through the YooKassa API before queuing a render. Fill the
-`Commerce` section before publishing the offer and accepting real payments.
+payment status through the YooKassa API before crediting a token package. Only
+the token packages on `/purchase` are paid through YooKassa; the committed
+configuration still keeps the local `Test` provider enabled until the server
+environment supplies `Payments__Provider=YooKassa` and
+`Payments__SecretKey`. Fill the `Commerce` section before publishing the offer
+and accepting real payments.
 
 Build the parser and solution, verify the render-agent environment, then start:
 

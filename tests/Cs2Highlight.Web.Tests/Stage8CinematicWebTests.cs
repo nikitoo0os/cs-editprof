@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text.Json;
 using Cs2Highlight.Analysis;
 using Cs2Highlight.Music;
 using Cs2Highlight.Web.Domain;
@@ -566,9 +567,13 @@ public sealed class Stage8CinematicWebTests
                     Camera = cinematic.Segments[0].Camera with
                     {
                         Id = "intro-camera",
+                        Type = CameraShotType.StaticTripod,
+                        Family = CameraShotFamily.StaticTripod,
                         TargetDurationSeconds = 2,
-                        EndTick = 128
+                        EndTick = 128,
+                        FramingIntent = "preview-verified static tripod establishing shot"
                     },
+                    Effects = [],
                     TimeWarp = new TimeWarpPlan(
                         1,
                         [new TimeWarpSegment(0, 2, 1)],
@@ -653,6 +658,22 @@ public sealed class Stage8CinematicWebTests
             output,
             "result",
             "dynamic-effect-result.json")));
+        string contractReportPath = Path.Combine(
+            output,
+            "result",
+            "cinematic-contract-render-report.json");
+        using JsonDocument contractReport = JsonDocument.Parse(
+            await File.ReadAllTextAsync(contractReportPath));
+        JsonElement reportRoot = contractReport.RootElement;
+        Assert.True(reportRoot.GetProperty("passed").GetBoolean());
+        JsonElement audioReport = reportRoot.GetProperty("audio");
+        Assert.Empty(audioReport.GetProperty("violations").EnumerateArray());
+        Assert.NotEmpty(
+            audioReport.GetProperty("audioSafetyPassAttempts").EnumerateArray());
+        Assert.InRange(
+            audioReport.GetProperty("measuredIntegratedLoudnessLufs").GetDouble(),
+            -14.5,
+            -13.5);
     }
 
     private static MusicEditPlan EditPlan() => new(
@@ -729,7 +750,7 @@ public sealed class Stage8CinematicWebTests
         return new CinematicMoviePlan
         {
             SchemaVersion = "1.0",
-            PlannerVersion = "8.0",
+            PlannerVersion = "10.8",
             GenerationId = "generation",
             MusicExcerpt = new MusicExcerptPlan
             {

@@ -33,7 +33,8 @@ public sealed record PaymentRequest(
     string Currency,
     string IdempotencyKey,
     string ReturnUrl,
-    string Description);
+    string Description,
+    string? LocalConfirmationUrl = null);
 
 public enum ProviderPaymentStatus { Pending, Succeeded, Canceled }
 
@@ -78,7 +79,7 @@ public sealed class TestPaymentProvider : IPaymentProvider
         }
 
         string id = $"test_{request.IdempotencyKey}";
-        string confirmationUrl =
+        string confirmationUrl = request.LocalConfirmationUrl ??
             $"/generations/{Uri.EscapeDataString(request.GenerationPublicId)}/test-payment";
         return Task.FromResult(new PaymentSessionResult(
             true, id, confirmationUrl, null));
@@ -139,7 +140,7 @@ public sealed partial class YooKassaPaymentProvider(
                 return_url = request.ReturnUrl
             },
             description = request.Description[..Math.Min(request.Description.Length, 128)],
-            metadata = new { generation_id = request.GenerationPublicId }
+            metadata = new { order_id = request.GenerationPublicId }
         };
 
         using HttpRequestMessage message = new(HttpMethod.Post, "payments");
@@ -275,6 +276,205 @@ public sealed partial class YooKassaPaymentProvider(
         [property: JsonPropertyName("confirmation_url")] string? ConfirmationUrl);
 
     private sealed record YooKassaErrorResponse(string? Code);
+}
+
+public sealed record TokenPaymentLaunch(
+    TokenPurchase Purchase,
+    string ConfirmationUrl);
+
+public sealed class TokenPaymentService(
+    IDbContextFactory<GenerationDbContext> dbFactory,
+    IPaymentProvider provider,
+    ITokenService tokens,
+    TimeProvider timeProvider)
+{
+    public async Task<TokenPaymentLaunch> CreateAsync(
+        string userId,
+        string packageCode,
+        string returnUrl,
+        CancellationToken cancellationToken)
+    {
+        await using GenerationDbContext db =
+            await dbFactory.CreateDbContextAsync(cancellationToken);
+        TokenPackage package = await db.TokenPackages.SingleOrDefaultAsync(
+                value => value.Code == packageCode && value.IsActive,
+                cancellationToken) ??
+            throw new InvalidOperationException("TOKEN_PACKAGE_NOT_FOUND");
+        TokenPurchase? purchase = await db.TokenPurchases
+            .Where(value =>
+                value.UserId == userId &&
+                value.TokenPackageId == package.Id &&
+                value.Status == TokenPurchaseStatus.Pending)
+            // SQLite cannot translate ORDER BY DateTimeOffset. The identity
+            // key is monotonic for purchases and gives the same newest-first
+            // behavior without provider-specific date SQL.
+            .OrderByDescending(value => value.Id)
+            .FirstOrDefaultAsync(cancellationToken);
+        DateTimeOffset now = timeProvider.GetUtcNow();
+        if (purchase is null)
+        {
+            purchase = new TokenPurchase
+            {
+                UserId = userId,
+                TokenPackageId = package.Id,
+                Provider = provider.Name,
+                // YooKassa limits Idempotence-Key to 64 characters. The user is
+                // already part of the purchase row, so do not embed the user id.
+                IdempotencyKey = $"token-purchase:{Guid.NewGuid():N}",
+                AmountMinor = package.PriceAmountMinor,
+                Currency = package.Currency,
+                Status = TokenPurchaseStatus.Pending,
+                CreatedAtUtc = now
+            };
+            db.TokenPurchases.Add(purchase);
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        else if (!string.IsNullOrWhiteSpace(purchase.ConfirmationUrl))
+        {
+            return new(purchase, purchase.ConfirmationUrl);
+        }
+
+        PaymentSessionResult session = await provider.CreateSessionAsync(
+            new PaymentRequest(
+                $"token-purchase-{purchase.Id}",
+                purchase.AmountMinor,
+                purchase.Currency,
+                purchase.IdempotencyKey,
+                AddPurchaseId(returnUrl, purchase.Id),
+                $"CSHighlighter: пакет токенов {package.Name}",
+                $"/purchase/test-payment?purchaseId={purchase.Id}"),
+            cancellationToken);
+        if (!session.Success || string.IsNullOrWhiteSpace(session.ConfirmationUrl))
+        {
+            purchase.Status = TokenPurchaseStatus.Failed;
+            purchase.FailureCode = session.ErrorCode ?? "PAYMENT_CREATE_FAILED";
+            await db.SaveChangesAsync(cancellationToken);
+            throw new InvalidOperationException(purchase.FailureCode);
+        }
+
+        purchase.Provider = provider.Name;
+        purchase.ProviderPaymentId = session.ProviderPaymentId;
+        purchase.ConfirmationUrl = session.ConfirmationUrl;
+        purchase.Status = TokenPurchaseStatus.Pending;
+        await db.SaveChangesAsync(cancellationToken);
+        return new(purchase, session.ConfirmationUrl);
+    }
+
+    private static string AddPurchaseId(string returnUrl, long purchaseId) =>
+        returnUrl + (returnUrl.Contains('?', StringComparison.Ordinal) ? '&' : '?') +
+        $"purchaseId={purchaseId}";
+
+    public async Task<TokenPurchaseStatus> RefreshAsync(
+        long purchaseId,
+        string userId,
+        CancellationToken cancellationToken)
+    {
+        await using GenerationDbContext db =
+            await dbFactory.CreateDbContextAsync(cancellationToken);
+        TokenPurchase purchase = await db.TokenPurchases
+                .Include(value => value.TokenPackage)
+                .SingleOrDefaultAsync(
+                    value => value.Id == purchaseId && value.UserId == userId,
+                    cancellationToken) ??
+            throw new InvalidOperationException("TOKEN_PURCHASE_NOT_FOUND");
+        return await RefreshAsync(db, purchase, cancellationToken);
+    }
+
+    public async Task<bool> RefreshByProviderPaymentIdAsync(
+        string providerPaymentId,
+        CancellationToken cancellationToken)
+    {
+        await using GenerationDbContext db =
+            await dbFactory.CreateDbContextAsync(cancellationToken);
+        TokenPurchase? purchase = await db.TokenPurchases
+            .Include(value => value.TokenPackage)
+            .SingleOrDefaultAsync(
+                value => value.ProviderPaymentId == providerPaymentId,
+                cancellationToken);
+        if (purchase is null)
+            return false;
+        await RefreshAsync(db, purchase, cancellationToken);
+        return true;
+    }
+
+    public async Task ConfirmTestAsync(
+        long purchaseId,
+        string userId,
+        bool approve,
+        CancellationToken cancellationToken)
+    {
+        if (!provider.Name.Equals("Test", StringComparison.Ordinal))
+            throw new InvalidOperationException("TEST_PAYMENT_DISABLED");
+        await using GenerationDbContext db =
+            await dbFactory.CreateDbContextAsync(cancellationToken);
+        TokenPurchase purchase = await db.TokenPurchases
+                .Include(value => value.TokenPackage)
+                .SingleOrDefaultAsync(
+                    value => value.Id == purchaseId && value.UserId == userId,
+                    cancellationToken) ??
+            throw new InvalidOperationException("TOKEN_PURCHASE_NOT_FOUND");
+        if (!approve)
+        {
+            purchase.Status = TokenPurchaseStatus.Cancelled;
+            purchase.FailureCode = "TEST_PAYMENT_DECLINED";
+            await db.SaveChangesAsync(cancellationToken);
+            return;
+        }
+        await RefreshAsync(db, purchase, cancellationToken);
+    }
+
+    private async Task<TokenPurchaseStatus> RefreshAsync(
+        GenerationDbContext db,
+        TokenPurchase purchase,
+        CancellationToken cancellationToken)
+    {
+        if (purchase.Status == TokenPurchaseStatus.Succeeded)
+        {
+            await tokens.CreditAsync(
+                purchase.UserId,
+                purchase.TokenPackage.TokenAmount,
+                TokenTransactionType.Purchase,
+                $"purchase:{purchase.Id}",
+                $"Покупка: {purchase.TokenPackage.Name}",
+                purchase.Id,
+                null,
+                cancellationToken);
+            return purchase.Status;
+        }
+        if (string.IsNullOrWhiteSpace(purchase.ProviderPaymentId))
+            throw new InvalidOperationException("PAYMENT_ID_MISSING");
+
+        PaymentStatusResult status = await provider.GetStatusAsync(
+            purchase.ProviderPaymentId,
+            cancellationToken);
+        if (!status.Success)
+            throw new InvalidOperationException(
+                status.ErrorCode ?? "PAYMENT_STATUS_FAILED");
+        if (status.Status == ProviderPaymentStatus.Pending)
+            return purchase.Status;
+        if (status.Status == ProviderPaymentStatus.Canceled)
+        {
+            purchase.Status = TokenPurchaseStatus.Cancelled;
+            purchase.FailureCode = "PAYMENT_CANCELED";
+            await db.SaveChangesAsync(cancellationToken);
+            return purchase.Status;
+        }
+
+        await tokens.CreditAsync(
+            purchase.UserId,
+            purchase.TokenPackage.TokenAmount,
+            TokenTransactionType.Purchase,
+            $"purchase:{purchase.Id}",
+            $"Покупка: {purchase.TokenPackage.Name}",
+            purchase.Id,
+            null,
+            cancellationToken);
+        purchase.Status = TokenPurchaseStatus.Succeeded;
+        purchase.PaidAtUtc = timeProvider.GetUtcNow();
+        purchase.FailureCode = null;
+        await db.SaveChangesAsync(cancellationToken);
+        return purchase.Status;
+    }
 }
 
 public sealed record YooKassaNotificationPayload(string? Id);

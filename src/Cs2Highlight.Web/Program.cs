@@ -139,6 +139,7 @@ builder.Services.AddScoped<IPaymentProvider>(services =>
         : services.GetRequiredService<TestPaymentProvider>());
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddScoped<PaymentService>();
+builder.Services.AddScoped<TokenPaymentService>();
 builder.Services.AddSingleton<ITokenService, TokenService>();
 if (builder.Environment.IsDevelopment())
     builder.Services.AddSingleton<IEmailSender, DevelopmentEmailSender>();
@@ -329,6 +330,7 @@ app.MapTimelineDirectorApi();
 app.MapPost("/api/payments/yookassa", async (
     YooKassaNotification notification,
     PaymentService payments,
+    TokenPaymentService tokenPayments,
     CancellationToken cancellationToken) =>
 {
     string? providerPaymentId = notification.Payload?.Id;
@@ -340,8 +342,11 @@ app.MapPost("/api/payments/yookassa", async (
 
     // The notification body is never trusted as proof of payment. The service
     // requests the current payment state directly from YooKassa before updating the order.
-    await payments.RefreshByProviderPaymentIdAsync(
+    bool generationPayment = await payments.RefreshByProviderPaymentIdAsync(
         providerPaymentId, cancellationToken);
+    if (!generationPayment)
+        await tokenPayments.RefreshByProviderPaymentIdAsync(
+            providerPaymentId, cancellationToken);
     return Results.Ok();
 });
 app.MapHealthChecks("/health/live", new() { Predicate = _ => false });
