@@ -12,14 +12,7 @@
       <h1 class="page-title">Всё готово к генерации</h1>
       <p class="page-lead">Проверь параметры. После оплаты начнётся запись и финальный монтаж.</p>
     </div>
-    @if (Model.IsTestPayment)
-    {
-      <span class="badge badge-warning">Тестовая оплата</span>
-    }
-    else
-    {
-      <span class="badge badge-success">Оплата через ЮKassa</span>
-    }
+    <span class="badge badge-success">Оплата через ЮKassa</span>
   </header>
 
   <div class="section-grid-sidebar">
@@ -125,18 +118,9 @@
           Оплатить @Model.DisplayPrice
         </button>
       </form>
-      @if (Model.IsTestPayment)
-      {
-        <p class="muted" style="margin:14px 0 0;font-size:11px;line-height:1.5">
-          Денежные средства не списываются: включён локальный тестовый провайдер.
-        </p>
-      }
-      else
-      {
-        <p class="muted" style="margin:14px 0 0;font-size:11px;line-height:1.5">
-          Вы будете перенаправлены на защищённую страницу ЮKassa. Данные карты не передаются CSHighlighter.
-        </p>
-      }
+      <p class="muted" style="margin:14px 0 0;font-size:11px;line-height:1.5">
+        Вы будете перенаправлены на защищённую страницу ЮKassa. Данные карты не передаются CSHighlighter.
+      </p>
     </aside>
   </div>
 </section>
