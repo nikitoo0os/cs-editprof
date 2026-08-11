@@ -12,7 +12,7 @@ namespace Cs2Highlight.Web.Services;
 
 public sealed class PaymentOptions
 {
-    public string Provider { get; set; } = "Test";
+    public string Provider { get; set; } = "YooKassa";
     public long PriceAmountMinor { get; set; } = 100;
     public string Currency { get; set; } = "RUB";
     public string ShopId { get; set; } = string.Empty;
@@ -23,8 +23,6 @@ public sealed class PaymentOptions
     public bool UsesYooKassa =>
         Provider.Equals("YooKassa", StringComparison.OrdinalIgnoreCase);
 
-    public string DisplayPrice =>
-        $"{(PriceAmountMinor / 100m).ToString("0.00", CultureInfo.GetCultureInfo("ru-RU"))} ₽";
 }
 
 public sealed record PaymentRequest(
@@ -33,8 +31,7 @@ public sealed record PaymentRequest(
     string Currency,
     string IdempotencyKey,
     string ReturnUrl,
-    string Description,
-    string? LocalConfirmationUrl = null);
+    string Description);
 
 public enum ProviderPaymentStatus { Pending, Succeeded, Canceled }
 
@@ -61,42 +58,6 @@ public interface IPaymentProvider
     Task<PaymentStatusResult> GetStatusAsync(
         string providerPaymentId,
         CancellationToken cancellationToken);
-}
-
-public sealed class TestPaymentProvider : IPaymentProvider
-{
-    public string Name => "Test";
-
-    public Task<PaymentSessionResult> CreateSessionAsync(
-        PaymentRequest request,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        if (request.AmountMinor <= 0 || request.Currency.Length != 3)
-        {
-            return Task.FromResult(new PaymentSessionResult(
-                false, string.Empty, null, "INVALID_PRICE"));
-        }
-
-        string id = $"test_{request.IdempotencyKey}";
-        string confirmationUrl = request.LocalConfirmationUrl ??
-            $"/generations/{Uri.EscapeDataString(request.GenerationPublicId)}/test-payment";
-        return Task.FromResult(new PaymentSessionResult(
-            true, id, confirmationUrl, null));
-    }
-
-    public Task<PaymentStatusResult> GetStatusAsync(
-        string providerPaymentId,
-        CancellationToken cancellationToken)
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        bool exists = providerPaymentId.StartsWith("test_", StringComparison.Ordinal);
-        return Task.FromResult(new PaymentStatusResult(
-            exists,
-            providerPaymentId,
-            exists ? ProviderPaymentStatus.Succeeded : ProviderPaymentStatus.Pending,
-            exists ? null : "PAYMENT_NOT_FOUND"));
-    }
 }
 
 public sealed partial class YooKassaPaymentProvider(
@@ -341,8 +302,7 @@ public sealed class TokenPaymentService(
                 purchase.Currency,
                 purchase.IdempotencyKey,
                 AddPurchaseId(returnUrl, purchase.Id),
-                $"CSHighlighter: пакет токенов {package.Name}",
-                $"/purchase/test-payment?purchaseId={purchase.Id}"),
+                $"CSHighlighter: пакет токенов {package.Name}"),
             cancellationToken);
         if (!session.Success || string.IsNullOrWhiteSpace(session.ConfirmationUrl))
         {
@@ -395,32 +355,6 @@ public sealed class TokenPaymentService(
             return false;
         await RefreshAsync(db, purchase, cancellationToken);
         return true;
-    }
-
-    public async Task ConfirmTestAsync(
-        long purchaseId,
-        string userId,
-        bool approve,
-        CancellationToken cancellationToken)
-    {
-        if (!provider.Name.Equals("Test", StringComparison.Ordinal))
-            throw new InvalidOperationException("TEST_PAYMENT_DISABLED");
-        await using GenerationDbContext db =
-            await dbFactory.CreateDbContextAsync(cancellationToken);
-        TokenPurchase purchase = await db.TokenPurchases
-                .Include(value => value.TokenPackage)
-                .SingleOrDefaultAsync(
-                    value => value.Id == purchaseId && value.UserId == userId,
-                    cancellationToken) ??
-            throw new InvalidOperationException("TOKEN_PURCHASE_NOT_FOUND");
-        if (!approve)
-        {
-            purchase.Status = TokenPurchaseStatus.Cancelled;
-            purchase.FailureCode = "TEST_PAYMENT_DECLINED";
-            await db.SaveChangesAsync(cancellationToken);
-            return;
-        }
-        await RefreshAsync(db, purchase, cancellationToken);
     }
 
     private async Task<TokenPurchaseStatus> RefreshAsync(
@@ -585,34 +519,6 @@ public sealed class PaymentService(
         if (payment is null) return false;
         await RefreshAsync(db, payment.Generation, payment, cancellationToken);
         return true;
-    }
-
-    public async Task ConfirmTestAsync(
-        string publicId,
-        bool approve,
-        CancellationToken cancellationToken)
-    {
-        if (!provider.Name.Equals("Test", StringComparison.Ordinal))
-            throw new InvalidOperationException("TEST_PAYMENT_DISABLED");
-
-        await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        Generation generation = await db.Generations.SingleAsync(
-            value => value.PublicId == publicId, cancellationToken);
-        Payment payment = await db.Payments.SingleAsync(
-            value => value.GenerationId == generation.Id, cancellationToken);
-        if (!approve)
-        {
-            DateTimeOffset now = timeProvider.GetUtcNow();
-            payment.Status = PaymentStatus.Failed;
-            payment.FailureCode = "TEST_PAYMENT_DECLINED";
-            payment.UpdatedAt = now;
-            generation.PaymentStatus = PaymentStatus.Failed;
-            GenerationStateMachine.Transition(generation, GenerationStatus.AwaitingPayment, now);
-            await db.SaveChangesAsync(cancellationToken);
-            return;
-        }
-
-        await RefreshAsync(db, generation, payment, cancellationToken);
     }
 
     private async Task<PaymentStatus> RefreshAsync(

@@ -103,7 +103,7 @@ public sealed class TokenPurchase
     public ApplicationUser User { get; set; } = null!;
     public long TokenPackageId { get; set; }
     public TokenPackage TokenPackage { get; set; } = null!;
-    [MaxLength(32)] public string Provider { get; set; } = "Test";
+    [MaxLength(32)] public string Provider { get; set; } = "YooKassa";
     [MaxLength(128)] public string? ProviderPaymentId { get; set; }
     [MaxLength(1024)] public string? ConfirmationUrl { get; set; }
     [MaxLength(128)] public string IdempotencyKey { get; set; } = string.Empty;

@@ -127,16 +127,15 @@ builder.Services.AddSingleton<ICinematicDynamicEffectAdapter, CinematicDynamicEf
 builder.Services.AddSingleton<IFfmpegCapabilityScanner, FfmpegCapabilityScanner>();
 builder.Services.AddSingleton<IDynamicEffectFilterGraphBuilder, DynamicEffectFilterGraphBuilder>();
 builder.Services.AddSingleton<IHighlightCompilationService, FfmpegHighlightCompilationService>();
-builder.Services.AddSingleton<TestPaymentProvider>();
 builder.Services.AddHttpClient<YooKassaPaymentProvider>(client =>
 {
     client.BaseAddress = new Uri(paymentOptions.ApiBaseUrl, UriKind.Absolute);
     client.Timeout = TimeSpan.FromSeconds(30);
 });
+if (!paymentOptions.UsesYooKassa)
+    throw new InvalidOperationException("Payments:Provider must be YooKassa.");
 builder.Services.AddScoped<IPaymentProvider>(services =>
-    paymentOptions.UsesYooKassa
-        ? services.GetRequiredService<YooKassaPaymentProvider>()
-        : services.GetRequiredService<TestPaymentProvider>());
+    services.GetRequiredService<YooKassaPaymentProvider>());
 builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
 builder.Services.AddScoped<PaymentService>();
 builder.Services.AddScoped<TokenPaymentService>();

@@ -378,7 +378,7 @@ public sealed class Payment
     public long Id { get; set; }
     public long GenerationId { get; set; }
     public Generation Generation { get; set; } = null!;
-    [MaxLength(32)] public string Provider { get; set; } = "Test";
+    [MaxLength(32)] public string Provider { get; set; } = "YooKassa";
     [MaxLength(128)] public string ProviderPaymentId { get; set; } = string.Empty;
     [MaxLength(2048)] public string? ConfirmationUrl { get; set; }
     [MaxLength(128)] public string IdempotencyKey { get; set; } = string.Empty;

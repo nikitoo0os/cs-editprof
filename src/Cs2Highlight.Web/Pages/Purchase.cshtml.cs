@@ -16,7 +16,6 @@ public sealed class PurchaseModel(
     PaymentOptions paymentOptions) : PageModel
 {
     public IReadOnlyList<TokenPackage> Packages { get; private set; } = [];
-    public bool IsTestPayment => !paymentOptions.UsesYooKassa;
 
     public async Task OnGetAsync(CancellationToken cancellationToken)
     {

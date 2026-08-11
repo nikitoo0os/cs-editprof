@@ -31,14 +31,14 @@ public sealed class PaymentTests : IAsyncLifetime, IDisposable
             await AddPayableGenerationAsync(db, publicId);
         }
         GenerationWakeSignal wake = new();
-        PaymentService service = new(factory, new TestPaymentProvider(), TimeProvider.System, wake);
+        PaymentService service = new(factory, new StubPaymentProvider(), TimeProvider.System, wake);
 
         Payment first = (await service.CreateAsync(
             publicId, "https://example.test/return", CancellationToken.None)).Payment;
         Payment second = (await service.CreateAsync(
             publicId, "https://example.test/return", CancellationToken.None)).Payment;
-        await service.ConfirmTestAsync(publicId, true, CancellationToken.None);
-        await service.ConfirmTestAsync(publicId, true, CancellationToken.None);
+        await service.RefreshAsync(publicId, CancellationToken.None);
+        await service.RefreshAsync(publicId, CancellationToken.None);
 
         await using GenerationDbContext verification = await factory.CreateDbContextAsync();
         Assert.Equal(first.Id, second.Id);
@@ -58,12 +58,12 @@ public sealed class PaymentTests : IAsyncLifetime, IDisposable
             await AddPayableGenerationAsync(db, publicId);
         }
         await new PaymentService(
-            factory, new TestPaymentProvider(), TimeProvider.System, new GenerationWakeSignal())
+            factory, new StubPaymentProvider(), TimeProvider.System, new GenerationWakeSignal())
             .CreateAsync(publicId, "https://example.test/return", CancellationToken.None);
 
         PaymentService restarted = new(
-            factory, new TestPaymentProvider(), TimeProvider.System, new GenerationWakeSignal());
-        await restarted.ConfirmTestAsync(publicId, true, CancellationToken.None);
+            factory, new StubPaymentProvider(), TimeProvider.System, new GenerationWakeSignal());
+        await restarted.RefreshAsync(publicId, CancellationToken.None);
 
         await using GenerationDbContext verification = await factory.CreateDbContextAsync();
         Assert.Equal(PaymentStatus.Succeeded, (await verification.Payments.SingleAsync()).Status);
@@ -101,7 +101,7 @@ public sealed class PaymentTests : IAsyncLifetime, IDisposable
 
         TokenPaymentService service = new(
             factory,
-            new TestPaymentProvider(),
+            new StubPaymentProvider(),
             new TokenService(factory, TimeProvider.System, new GenerationMetrics()),
             TimeProvider.System);
 
@@ -111,9 +111,9 @@ public sealed class PaymentTests : IAsyncLifetime, IDisposable
             userId, packageCode, "https://example.test/purchase/payment-return", CancellationToken.None);
 
         Assert.Equal(first.Purchase.Id, second.Purchase.Id);
-        Assert.Contains($"purchaseId={first.Purchase.Id}", first.ConfirmationUrl);
+        Assert.StartsWith("https://pay.example/", first.ConfirmationUrl);
 
-        await service.ConfirmTestAsync(first.Purchase.Id, userId, true, CancellationToken.None);
+        await service.RefreshAsync(first.Purchase.Id, userId, CancellationToken.None);
         Assert.True(await service.RefreshByProviderPaymentIdAsync(
             first.Purchase.ProviderPaymentId!, CancellationToken.None));
 
@@ -130,6 +130,35 @@ public sealed class PaymentTests : IAsyncLifetime, IDisposable
 
     public async Task DisposeAsync() => await connection.DisposeAsync();
     public void Dispose() => connection.Dispose();
+
+    private sealed class StubPaymentProvider : IPaymentProvider
+    {
+        public string Name => "YooKassa";
+
+        public Task<PaymentSessionResult> CreateSessionAsync(
+            PaymentRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new PaymentSessionResult(
+                true,
+                $"stub_{request.IdempotencyKey}",
+                $"https://pay.example/{Uri.EscapeDataString(request.IdempotencyKey)}",
+                null));
+        }
+
+        public Task<PaymentStatusResult> GetStatusAsync(
+            string providerPaymentId,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(new PaymentStatusResult(
+                true,
+                providerPaymentId,
+                ProviderPaymentStatus.Succeeded,
+                null));
+        }
+    }
 
     private static async Task AddPayableGenerationAsync(
         GenerationDbContext db,

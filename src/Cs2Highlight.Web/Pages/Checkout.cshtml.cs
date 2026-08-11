@@ -11,8 +11,7 @@ using Microsoft.EntityFrameworkCore;
 namespace Cs2Highlight.Web.Pages;
 
 public sealed class CheckoutModel(
-    IDbContextFactory<GenerationDbContext> dbFactory,
-    PaymentOptions paymentOptions) : PageModel
+    IDbContextFactory<GenerationDbContext> dbFactory) : PageModel
 {
     private static readonly JsonSerializerOptions WebJson =
         new(JsonSerializerDefaults.Web);
@@ -26,7 +25,6 @@ public sealed class CheckoutModel(
     public IReadOnlyList<CinematicTimelineItem> CinematicTimeline { get; private set; } = [];
     public string DisplayPrice =>
         $"{(Generation.PriceAmountMinor / 100m).ToString("0.00", CultureInfo.GetCultureInfo("ru-RU"))} ₽";
-    public bool IsTestPayment => !paymentOptions.UsesYooKassa;
 
     public IActionResult OnGet(
         string publicId,
