@@ -31,6 +31,11 @@ Kill events include shooter and victim positions. Exact impact data is marked
 unavailable when the parser cannot prove it, so bullet-path shots fail closed
 instead of inventing a trajectory.
 
+Selected-player kills also produce occasional victim-reaction candidates. They
+begin shortly before impact, follow the real victim trajectory through the
+death follow-through, use a tighter FOV, and are eligible only immediately
+after the matching highlight. They never substitute an unrelated death.
+
 Gap selection is content-driven: player approach/follow-through, group motion,
 team setup, utility, weapon action, bomb action, establishing context, then POV.
 Source reuse compares actual tick-range overlap inside the same demo, not only
@@ -52,6 +57,15 @@ volume. Preview media is analyzed with FFmpeg signal statistics and the planned
 geometry is checked for framing, motion and subject visibility. A failed
 preview is rendered again as POV. The resolved fallback output and status are
 persisted and reused during recovery, including after process restart.
+
+Tracking cameras follow the sampled player rail rather than a straight chord
+between its endpoints. The planner deterministically alternates left/right
+operator sides, tries progressively tighter offsets, samples every segment with
+clearance inside calibrated cells, rejects restricted volumes, and only anchors
+point B to the next highlight when that move is locally reachable. HLAE position
+interpolation is linear so a cubic spline cannot overshoot the validated rail;
+rotation remains smoothly interpolated. This calibration is conservative and
+does not claim access to Source 2 collision polygons from a `.dem` file.
 
 No automatic preview metric is claimed to be artistic or computer-vision
 acceptance. A real CS2/HLAE render must still be watched in full.

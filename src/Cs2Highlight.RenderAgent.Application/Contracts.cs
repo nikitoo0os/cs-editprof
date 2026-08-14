@@ -1,5 +1,8 @@
 namespace Cs2Highlight.RenderAgent.Application;
 
+public sealed class DemoPlaybackIncompatibleException(string message)
+    : InvalidOperationException(message);
+
 public interface IEnvironmentVerifier
 {
     Task<EnvironmentReport> VerifyAsync(RenderJob job, CancellationToken cancellationToken);

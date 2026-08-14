@@ -10,7 +10,7 @@
     "Подходящие моменты не найдены",
     "Попробуй вернуться и выбрать другого игрока или снизить минимальную оценку.",
     "Выбрать игрока",
-    $"/generations/{Model.Generation.PublicId}/player");
+    $"/generations/{Model.Generation.PublicId}/player?demoId={Model.Demo.Id}");
 }
 <section data-highlight-catalog
          data-max-selection-count="@Model.MaximumSelectableHighlights"
@@ -18,10 +18,11 @@
          data-transition-duration="@Model.Generation.TransitionDurationMilliseconds">
   <header class="page-header">
     <div>
-      <p class="page-eyebrow">Шаг 3 · Моменты</p>
-      <h1 class="page-title">Выберите лучшие моменты</h1>
+      <p class="page-eyebrow">Демка @Model.DemoNumber из @Model.DemoCount · Моменты</p>
+      <h1 class="page-title">Выберите моменты из этой демки</h1>
       <p class="page-lead">
-        Мы нашли @Model.Cards.Count моментов для @Model.Generation.SelectedPlayerName.
+        <strong>@Model.Demo.OriginalFileName</strong> ·
+        найдено @Model.Cards.Count моментов для @Model.Demo.SelectedPlayerName.
         Выбрано <strong data-selected-count>0</strong> · примерно <strong data-selected-duration>0:00</strong>
       </p>
       @if (Model.MaximumSelectableHighlights.HasValue)
@@ -104,38 +105,17 @@
       </div>
     </div>
 
-    <form method="post" asp-antiforgery="true" id="selection-form" data-loading-form>
+    <form method="post"
+          asp-route-demoId="@Model.Demo.Id"
+          asp-antiforgery="true"
+          id="selection-form"
+          data-loading-form>
       <div class="highlight-grid">
         @foreach (HighlightCard card in Model.Cards)
         {
           <partial name="_HighlightCard" model="card" />
         }
       </div>
-
-      <section class="surface surface-pad" style="margin-bottom:24px">
-        <span class="badge badge-brand">Видеоэффекты</span>
-        <h2 class="section-title" style="margin-top:13px">Выберите характер монтажа</h2>
-        <div class="option-grid" style="margin-top:16px">
-          <label class="option-card">
-            <input asp-for="EffectPreset" type="radio" value="None" />
-            <img class="ui-icon" src="/assets/icons/video.svg" alt="" />
-            <strong>Без эффектов</strong>
-            <small>Только чистая нарезка выбранных моментов.</small>
-          </label>
-          <label class="option-card">
-            <input asp-for="EffectPreset" type="radio" value="Clean" />
-            <img class="ui-icon" src="/assets/icons/film.svg" alt="" />
-            <strong>Чистый</strong>
-            <small>Деликатные переходы и аккуратный цвет.</small>
-          </label>
-          <label class="option-card">
-            <input asp-for="EffectPreset" type="radio" value="Dynamic" />
-            <img class="ui-icon ui-icon--brand" src="/assets/icons/wand-sparkles.svg" alt="" />
-            <strong>Динамичный</strong>
-            <small>Зумы, импакт, вспышки и акценты на убийствах.</small>
-          </label>
-        </div>
-      </section>
 
       <div class="selection-bar" aria-label="Выбранные моменты">
         <div class="selection-bar__summary">

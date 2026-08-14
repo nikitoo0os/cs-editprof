@@ -14,12 +14,15 @@ public sealed class PlayerModel(
     IWebHostEnvironment environment) : PageModel
 {
     public IReadOnlyList<GenerationPlayer> Players { get; private set; } = [];
+    public GenerationDemo Demo { get; private set; } = null!;
+    public int DemoNumber { get; private set; }
+    public int DemoCount { get; private set; }
     [BindProperty] public string SteamId { get; set; } = string.Empty;
-    [BindProperty] public string AspectRatio { get; set; } = "16:9";
-    [BindProperty] public OutputOrder OutputOrder { get; set; }
-    [BindProperty] public double MinimumScore { get; set; }
 
-    public async Task<IActionResult> OnGetAsync(string publicId, CancellationToken cancellationToken)
+    public async Task<IActionResult> OnGetAsync(
+        string publicId,
+        long? demoId,
+        CancellationToken cancellationToken)
     {
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation? generation = await db.Generations.AsNoTracking()
@@ -27,48 +30,121 @@ public sealed class PlayerModel(
         if (generation is null || !GenerationAccess.CanRead(generation, User, environment)) return NotFound();
         if (generation.Status != GenerationStatus.AwaitingPlayerSelection)
             return RedirectToPage("/Generation", new { publicId });
-        Players = await db.GenerationPlayers.AsNoTracking()
-            .Where(value => value.GenerationId == generation.Id)
-            .OrderByDescending(value => value.CandidateCount)
+        GenerationDemo[] demos = await SelectableDemosAsync(
+            db,
+            generation.Id,
+            cancellationToken);
+        GenerationDemo? demo = demoId.HasValue
+            ? demos.SingleOrDefault(value => value.Id == demoId.Value)
+            : demos.FirstOrDefault(value =>
+                value.SelectedSteamId is null ||
+                !value.HighlightSelectionCompleted);
+        demo ??= demos.FirstOrDefault();
+        if (demo is null)
+            return RedirectToPage("/Generation", new { publicId });
+        Demo = demo;
+        DemoCount = demos.Length;
+        DemoNumber = Array.IndexOf(demos, demo) + 1;
+        string[] steamIds = await db.GenerationHighlights.AsNoTracking()
+            .Where(value =>
+                value.GenerationId == generation.Id &&
+                value.GenerationDemoId == demo.Id)
+            .Select(value => value.SteamId)
+            .Distinct()
+            .ToArrayAsync(cancellationToken);
+        GenerationPlayer[] players = await db.GenerationPlayers.AsNoTracking()
+            .Where(value =>
+                value.GenerationId == generation.Id &&
+                steamIds.Contains(value.SteamId))
+            .ToArrayAsync(cancellationToken);
+        var perPlayer = await db.GenerationHighlights.AsNoTracking()
+            .Where(value =>
+                value.GenerationId == generation.Id &&
+                value.GenerationDemoId == demo.Id)
+            .GroupBy(value => value.SteamId)
+            .Select(value => new
+            {
+                SteamId = value.Key,
+                CandidateCount = value.Count(),
+                TotalKills = value.Sum(item => item.KillCount)
+            })
+            .ToDictionaryAsync(value => value.SteamId, cancellationToken);
+        Players = players.Select(value =>
+        {
+            var stats = perPlayer[value.SteamId];
+            return new GenerationPlayer
+            {
+                Id = value.Id,
+                GenerationId = value.GenerationId,
+                SteamId = value.SteamId,
+                DisplayName = value.DisplayName,
+                DemoCount = 1,
+                TotalKills = stats.TotalKills,
+                CandidateCount = stats.CandidateCount,
+                IsSelected = value.SteamId == demo.SelectedSteamId
+            };
+        }).OrderByDescending(value => value.CandidateCount)
             .ThenBy(value => value.SteamId)
-            .ToListAsync(cancellationToken);
+            .ToArray();
+        SteamId = demo.SelectedSteamId ?? string.Empty;
         return Page();
     }
 
-    public async Task<IActionResult> OnPostAsync(string publicId, CancellationToken cancellationToken)
+    public async Task<IActionResult> OnPostAsync(
+        string publicId,
+        long demoId,
+        CancellationToken cancellationToken)
     {
-        if (SteamId.Length != 17 || !SteamId.All(char.IsAsciiDigit) ||
-            AspectRatio is not ("16:9" or "9:16" or "4:3") ||
-            MinimumScore is < 0 or > 1000)
+        if (SteamId.Length != 17 || !SteamId.All(char.IsAsciiDigit))
             return BadRequest();
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation generation = await db.Generations
-            .Include(value => value.Players)
+            .Include(value => value.Demos)
             .SingleAsync(value => value.PublicId == publicId, cancellationToken);
         if (!GenerationAccess.CanRead(generation, User, environment)) return NotFound();
         if (generation.Status != GenerationStatus.AwaitingPlayerSelection)
             return StatusCode(StatusCodes.Status409Conflict);
-        GenerationPlayer? selected = generation.Players.SingleOrDefault(value => value.SteamId == SteamId);
-        if (selected is null) return BadRequest("PLAYER_NOT_FOUND");
-        foreach (GenerationPlayer player in generation.Players) player.IsSelected = player == selected;
-        generation.SelectedSteamId = SteamId;
-        generation.SelectedPlayerName = selected.DisplayName;
-        generation.MinimumScore = MinimumScore;
-        generation.OutputOrder = OutputOrder;
-        generation.AspectRatio = AspectRatio;
-        (generation.Width, generation.Height) = AspectRatio switch
-        {
-            "16:9" => (1920, 1080),
-            "9:16" => (1080, 1920),
-            "4:3" => (1920, 1440),
-            _ => throw new InvalidOperationException("Unsupported aspect ratio.")
-        };
-        generation.Fps = 60;
+        GenerationDemo? demo = generation.Demos.SingleOrDefault(value =>
+            value.Id == demoId &&
+            value.AnalysisStatus == DemoAnalysisStatus.Succeeded);
+        if (demo is null) return BadRequest("DEMO_NOT_FOUND");
+        bool playerExists = await db.GenerationHighlights.AnyAsync(value =>
+            value.GenerationId == generation.Id &&
+            value.GenerationDemoId == demo.Id &&
+            value.SteamId == SteamId,
+            cancellationToken);
+        GenerationPlayer? selected = await db.GenerationPlayers
+            .SingleOrDefaultAsync(value =>
+                value.GenerationId == generation.Id &&
+                value.SteamId == SteamId,
+                cancellationToken);
+        if (!playerExists || selected is null)
+            return BadRequest("PLAYER_NOT_FOUND_IN_DEMO");
+        demo.SelectedSteamId = SteamId;
+        demo.SelectedPlayerName = selected.DisplayName;
+        demo.HighlightSelectionCompleted = false;
+        generation.SelectedSteamId ??= SteamId;
+        generation.SelectedPlayerName ??= selected.DisplayName;
         GenerationStateMachine.Transition(
             generation, GenerationStatus.AwaitingHighlightSelection, timeProvider.GetUtcNow());
         generation.ProgressPercent = 28;
         await db.SaveChangesAsync(cancellationToken);
-        await selections.PrepareRecommendationsAsync(publicId, SteamId, cancellationToken);
-        return RedirectToPage("/Highlights", new { publicId });
+        await selections.PrepareRecommendationsAsync(
+            publicId,
+            demo.Id,
+            SteamId,
+            cancellationToken);
+        return RedirectToPage("/Highlights", new { publicId, demoId = demo.Id });
     }
+
+    private static Task<GenerationDemo[]> SelectableDemosAsync(
+        GenerationDbContext db,
+        long generationId,
+        CancellationToken cancellationToken) =>
+        db.GenerationDemos.AsNoTracking()
+            .Where(value =>
+                value.GenerationId == generationId &&
+                value.AnalysisStatus == DemoAnalysisStatus.Succeeded)
+            .OrderBy(value => value.UploadOrder)
+            .ToArrayAsync(cancellationToken);
 }

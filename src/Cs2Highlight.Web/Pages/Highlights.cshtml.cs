@@ -55,6 +55,9 @@ public sealed class HighlightsModel(
     };
 
     public Generation Generation { get; private set; } = null!;
+    public GenerationDemo Demo { get; private set; } = null!;
+    public int DemoNumber { get; private set; }
+    public int DemoCount { get; private set; }
     public IReadOnlyList<HighlightCard> Cards { get; private set; } = [];
     public int? MaximumSelectableHighlights { get; private set; }
     public long? MaximumSelectionDurationMilliseconds { get; private set; }
@@ -63,20 +66,45 @@ public sealed class HighlightsModel(
 
     public async Task<IActionResult> OnGetAsync(
         string publicId,
+        long? demoId,
         CancellationToken cancellationToken)
     {
-        return await LoadAsync(publicId, cancellationToken);
+        return await LoadAsync(publicId, demoId, cancellationToken);
     }
 
     public async Task<IActionResult> OnPostAsync(
         string publicId,
+        long demoId,
         CancellationToken cancellationToken)
     {
         if (!await CanReadAsync(publicId, cancellationToken)) return NotFound();
         try
         {
             await selections.SaveSelectionAsync(
-                publicId, HighlightIds, EffectPreset, cancellationToken);
+                publicId,
+                demoId,
+                HighlightIds,
+                EffectPreset,
+                cancellationToken);
+            await using GenerationDbContext db =
+                await dbFactory.CreateDbContextAsync(cancellationToken);
+            Generation generation = await db.Generations.AsNoTracking()
+                .SingleAsync(value => value.PublicId == publicId,
+                    cancellationToken);
+            if (generation.Status == GenerationStatus.AwaitingPlayerSelection)
+            {
+                long? nextDemoId = await db.GenerationDemos.AsNoTracking()
+                    .Where(value =>
+                        value.GenerationId == generation.Id &&
+                        value.AnalysisStatus == DemoAnalysisStatus.Succeeded &&
+                        !value.HighlightSelectionCompleted)
+                    .OrderBy(value => value.UploadOrder)
+                    .Select(value => (long?)value.Id)
+                    .FirstOrDefaultAsync(cancellationToken);
+                return RedirectToPage(
+                    "/Player",
+                    new { publicId, demoId = nextDemoId });
+            }
             return RedirectToPage("/Music", new { publicId });
         }
         catch (MusicSelectionCapacityException exception)
@@ -86,19 +114,20 @@ public sealed class HighlightsModel(
                 UiText.HighlightRemovalRequired(
                     HighlightIds.Distinct(StringComparer.Ordinal).Count(),
                     exception.Capacity.RequiredRemovalCount));
-            return await LoadAsync(publicId, cancellationToken);
+            return await LoadAsync(publicId, demoId, cancellationToken);
         }
         catch (InvalidOperationException exception)
         {
             ModelState.AddModelError(
                 string.Empty,
                 UiText.Error(exception.Message));
-            return await LoadAsync(publicId, cancellationToken);
+            return await LoadAsync(publicId, demoId, cancellationToken);
         }
     }
 
     private async Task<IActionResult> LoadAsync(
         string publicId,
+        long? demoId,
         CancellationToken cancellationToken)
     {
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
@@ -108,13 +137,32 @@ public sealed class HighlightsModel(
         if (generation.Status != GenerationStatus.AwaitingHighlightSelection)
             return RedirectToPage("/Generation", new { publicId });
         Generation = generation;
-        Dictionary<long, string> demos = await db.GenerationDemos.AsNoTracking()
+        GenerationDemo[] demos = await db.GenerationDemos.AsNoTracking()
             .Where(value => value.GenerationId == generation.Id)
-            .ToDictionaryAsync(value => value.Id, value => value.OriginalFileName, cancellationToken);
+            .OrderBy(value => value.UploadOrder)
+            .ToArrayAsync(cancellationToken);
+        GenerationDemo? demo = demoId.HasValue
+            ? demos.SingleOrDefault(value => value.Id == demoId.Value)
+            : demos.FirstOrDefault(value =>
+                value.SelectedSteamId is not null &&
+                !value.HighlightSelectionCompleted);
+        demo ??= demos.FirstOrDefault(value =>
+            value.SelectedSteamId is not null);
+        if (demo?.SelectedSteamId is null)
+            return RedirectToPage("/Player", new { publicId, demoId });
+        Demo = demo;
+        DemoCount = demos.Count(value =>
+            value.AnalysisStatus == DemoAnalysisStatus.Succeeded);
+        DemoNumber = Array.IndexOf(
+            demos.Where(value =>
+                    value.AnalysisStatus == DemoAnalysisStatus.Succeeded)
+                .ToArray(),
+            demo) + 1;
         GenerationHighlight[] highlights = await db.GenerationHighlights.AsNoTracking()
             .Where(value =>
                 value.GenerationId == generation.Id &&
-                value.SteamId == generation.SelectedSteamId)
+                value.GenerationDemoId == demo.Id &&
+                value.SteamId == demo.SelectedSteamId)
             .OrderByDescending(value => value.TotalScore)
             .ThenBy(value => value.RoundNumber)
             .ThenBy(value => value.FirstKillTick)
@@ -140,7 +188,7 @@ public sealed class HighlightsModel(
                 value.RoundNumber,
                 value.FirstKillTick,
                 value.MapName,
-                demos.GetValueOrDefault(value.GenerationDemoId, "demo.dem"),
+                demo.OriginalFileName,
                 value.TotalScore,
                 value.BeautyScore,
                 value.EstimatedDurationMilliseconds,

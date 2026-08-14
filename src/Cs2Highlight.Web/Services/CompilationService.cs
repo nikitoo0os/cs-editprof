@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Collections.Concurrent;
 using Cs2Highlight.Music;
 using Cs2Highlight.RenderAgent.Infrastructure;
 using Cs2Highlight.Web.Domain;
@@ -24,7 +25,8 @@ public sealed record CompilationRequest(
     GenerationMovieSettings? MovieSettings = null,
     IReadOnlyList<DynamicEffectPlan?>? DynamicEffectPlans = null,
     FfmpegCapabilities? FfmpegCapabilities = null,
-    CinematicMoviePlan? CinematicMoviePlan = null);
+    CinematicMoviePlan? CinematicMoviePlan = null,
+    bool InputsArePreNormalized = false);
 public sealed record CompilationProgress(int Percent, string Stage);
 
 public static class FrameContinuityPolicy
@@ -138,7 +140,10 @@ public sealed partial class FfmpegHighlightCompilationService(
     ILogger<FfmpegHighlightCompilationService> logger)
     : IHighlightCompilationService
 {
-    private const string NormalizationPipelineVersion = "5";
+    // AAC can add inter-sample overshoot after loudness normalization. Master
+    // below the public -0.8 dBTP ceiling so the encoded artifact also passes.
+    private const double AudioSafetyTruePeakDb = -2.5;
+    private const string NormalizationPipelineVersion = "6";
     private static readonly Encoding Utf8WithoutBom = new UTF8Encoding(false);
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -211,9 +216,9 @@ public sealed partial class FfmpegHighlightCompilationService(
                     watch.ElapsedMilliseconds);
             }
         }
-        List<string> normalized = [];
-        List<string> probeErrors = [];
-        List<DynamicEffectClipResult> effectResults = [];
+        string?[] normalizedSlots = new string?[request.ClipPaths.Count];
+        ConcurrentBag<string> probeErrors = [];
+        ConcurrentBag<DynamicEffectClipResult> effectResults = [];
         CinematicSequenceSegment[] cinematicSegments =
             request.CinematicMoviePlan?.Segments
                 .OrderBy(value => value.OutputStartSeconds)
@@ -227,26 +232,38 @@ public sealed partial class FfmpegHighlightCompilationService(
             request.Height,
             request.Fps,
             request.DynamicEffectPlans?.Count ?? 0);
-        for (int index = 0; index < request.ClipPaths.Count; index++)
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, request.ClipPaths.Count),
+            new ParallelOptions
+            {
+                MaxDegreeOfParallelism = Math.Clamp(
+                    options.CompilationMaxParallelism,
+                    1,
+                    Math.Max(1, Environment.ProcessorCount / 2)),
+                CancellationToken = cancellationToken
+            },
+            async (index, clipCancellationToken) =>
         {
             Stopwatch clipWatch = Stopwatch.StartNew();
             string input = Path.GetFullPath(request.ClipPaths[index]);
             if (!File.Exists(input) || new FileInfo(input).Length == 0)
             {
-                skipped++;
-                continue;
+                Interlocked.Increment(ref skipped);
+                return;
             }
-            MediaMetadata metadata = await ProbeAsync(input, cancellationToken);
+            MediaMetadata metadata = await ProbeAsync(
+                input,
+                clipCancellationToken);
             if (metadata.Error is not null)
             {
                 probeErrors.Add($"{Path.GetFileName(input)}: {metadata.Error}");
-                skipped++;
-                continue;
+                Interlocked.Increment(ref skipped);
+                return;
             }
             if (!metadata.HasVideo || metadata.DurationSeconds <= 0)
             {
-                skipped++;
-                continue;
+                Interlocked.Increment(ref skipped);
+                return;
             }
             progress?.Report(new CompilationProgress(
                 5 + (int)(60d * index / Math.Max(1, request.ClipPaths.Count)),
@@ -278,6 +295,20 @@ public sealed partial class FfmpegHighlightCompilationService(
                 request.ClipPaths.Count,
                 metadata.DurationSeconds,
                 dynamicEffectPlan?.Effects.Count ?? 0);
+            if (request.InputsArePreNormalized)
+            {
+                if (metadata.Width != request.Width ||
+                    metadata.Height != request.Height ||
+                    !metadata.HasAudio)
+                {
+                    probeErrors.Add(
+                        $"{Path.GetFileName(input)}: PRENORMALIZED_INPUT_INVALID");
+                    Interlocked.Increment(ref skipped);
+                    return;
+                }
+                normalizedSlots[index] = input;
+                return;
+            }
             FfmpegFilterGraph graph = filterGraphs.Build(
                 metadata.DurationSeconds,
                 effectPlan,
@@ -359,7 +390,9 @@ public sealed partial class FfmpegHighlightCompilationService(
             string lutFingerprint = selectedLutPath is null
                 ? string.Empty
                 : Convert.ToHexString(SHA256.HashData(
-                    await File.ReadAllBytesAsync(selectedLutPath, cancellationToken)));
+                    await File.ReadAllBytesAsync(
+                        selectedLutPath,
+                        clipCancellationToken)));
             string signature = Convert.ToHexString(SHA256.HashData(
                 Encoding.UTF8.GetBytes(string.Join(
                     '\n',
@@ -379,18 +412,22 @@ public sealed partial class FfmpegHighlightCompilationService(
             if (File.Exists(target) &&
                 File.Exists(signaturePath) &&
                 string.Equals(
-                    await File.ReadAllTextAsync(signaturePath, cancellationToken),
+                    await File.ReadAllTextAsync(
+                        signaturePath,
+                        clipCancellationToken),
                     signature,
                     StringComparison.Ordinal))
             {
-                MediaMetadata persisted = await ProbeAsync(target, cancellationToken);
+                MediaMetadata persisted = await ProbeAsync(
+                    target,
+                    clipCancellationToken);
                 if (persisted.Error is null &&
                     persisted.HasVideo &&
                     persisted.DurationSeconds > 0 &&
                     persisted.Width == request.Width &&
                     persisted.Height == request.Height)
                 {
-                    normalized.Add(target);
+                    normalizedSlots[index] = target;
                     if (dynamicEffectPlan is not null)
                     {
                         effectResults.Add(EffectResult(
@@ -400,7 +437,7 @@ public sealed partial class FfmpegHighlightCompilationService(
                             0,
                             true));
                     }
-                    continue;
+                    return;
                 }
             }
             if (File.Exists(target)) File.Delete(target);
@@ -490,7 +527,7 @@ public sealed partial class FfmpegHighlightCompilationService(
             }
             arguments.AddRange(
             [
-                "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
                 "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
                 "-shortest", "-movflags", "+faststart",
                 "-t", expectedOutputDuration.ToString(
@@ -498,7 +535,10 @@ public sealed partial class FfmpegHighlightCompilationService(
                     CultureInfo.InvariantCulture),
                 temporaryTarget
             ]);
-            ProcessResult normalization = await RunAsync(options.FfmpegPath, arguments, cancellationToken);
+            ProcessResult normalization = await RunAsync(
+                options.FfmpegPath,
+                arguments,
+                clipCancellationToken);
             LogFfmpegCompleted(
                 logger,
                 index + 1,
@@ -507,7 +547,7 @@ public sealed partial class FfmpegHighlightCompilationService(
             await WriteProcessLogAsync(
                 Path.Combine(normalizedDirectory, $"clip-{index + 1:D3}.ffmpeg.log"),
                 normalization,
-                cancellationToken);
+                clipCancellationToken);
             if (normalization.ExitCode != 0 || !File.Exists(temporaryTarget))
             {
                 if (dynamicEffectPlan is not null)
@@ -525,11 +565,11 @@ public sealed partial class FfmpegHighlightCompilationService(
                     logger,
                     index + 1,
                     Path.Combine(normalizedDirectory, $"clip-{index + 1:D3}.ffmpeg.log"));
-                skipped++;
-                continue;
+                Interlocked.Increment(ref skipped);
+                return;
             }
             MediaMetadata normalizedMetadata =
-                await ProbeAsync(temporaryTarget, cancellationToken);
+                await ProbeAsync(temporaryTarget, clipCancellationToken);
             if (normalizedMetadata.Error is not null ||
                 !normalizedMetadata.HasVideo ||
                 normalizedMetadata.DurationSeconds <= 0 ||
@@ -553,16 +593,16 @@ public sealed partial class FfmpegHighlightCompilationService(
                     normalizedMetadata.Width,
                     normalizedMetadata.Height,
                     normalizedMetadata.DurationSeconds);
-                skipped++;
-                continue;
+                Interlocked.Increment(ref skipped);
+                return;
             }
             File.Move(temporaryTarget, target, true);
             await File.WriteAllTextAsync(
                 signaturePath,
                 signature,
                 Utf8WithoutBom,
-                cancellationToken);
-            normalized.Add(target);
+                clipCancellationToken);
+            normalizedSlots[index] = target;
             if (dynamicEffectPlan is not null)
             {
                 effectResults.Add(EffectResult(
@@ -576,7 +616,14 @@ public sealed partial class FfmpegHighlightCompilationService(
                 logger,
                 index + 1,
                 normalizedMetadata.DurationSeconds);
-        }
+        });
+        List<string> normalized = normalizedSlots
+            .Where(value => value is not null)
+            .Select(value => value!)
+            .ToList();
+        DynamicEffectClipResult[] orderedEffectResults = effectResults
+            .OrderBy(value => value.ClipId, StringComparer.Ordinal)
+            .ToArray();
         if (request.DynamicEffectPlans is not null)
         {
             await File.WriteAllTextAsync(
@@ -584,13 +631,13 @@ public sealed partial class FfmpegHighlightCompilationService(
                 JsonSerializer.Serialize(new
                 {
                     schemaVersion = "1.0",
-                    clips = effectResults,
-                    plannedEffects = effectResults.Sum(value => value.PlannedEffects),
-                    appliedEffects = effectResults.Sum(value => value.AppliedEffects),
-                    fallbackEffects = effectResults.Sum(value => value.FallbackEffects),
-                    skippedEffects = effectResults.Sum(value => value.SkippedEffects),
-                    verified = effectResults.Count > 0 &&
-                        effectResults.All(value => value.Verified)
+                    clips = orderedEffectResults,
+                    plannedEffects = orderedEffectResults.Sum(value => value.PlannedEffects),
+                    appliedEffects = orderedEffectResults.Sum(value => value.AppliedEffects),
+                    fallbackEffects = orderedEffectResults.Sum(value => value.FallbackEffects),
+                    skippedEffects = orderedEffectResults.Sum(value => value.SkippedEffects),
+                    verified = orderedEffectResults.Length > 0 &&
+                        orderedEffectResults.All(value => value.Verified)
                 }, JsonOptions),
                 cancellationToken);
         }
@@ -598,8 +645,9 @@ public sealed partial class FfmpegHighlightCompilationService(
         {
             int plannedEffectClips = request.DynamicEffectPlans?
                 .Count(value => value is not null) ?? 0;
-            bool effectsVerified = plannedEffectClips == effectResults.Count &&
-                effectResults.All(value => value.Verified);
+            bool effectsVerified =
+                plannedEffectClips == orderedEffectResults.Length &&
+                orderedEffectResults.All(value => value.Verified);
             if (!effectsVerified)
             {
                 await File.WriteAllTextAsync(
@@ -612,8 +660,8 @@ public sealed partial class FfmpegHighlightCompilationService(
                         plan = contractPlanReport,
                         effectsVerified,
                         plannedEffectClips,
-                        renderedEffectClips = effectResults.Count,
-                        effectResults
+                        renderedEffectClips = orderedEffectResults.Length,
+                        effectResults = orderedEffectResults
                     }, JsonOptions),
                     cancellationToken);
                 return Failure(
@@ -625,7 +673,7 @@ public sealed partial class FfmpegHighlightCompilationService(
         }
         if (normalized.Count == 0)
             return Failure(
-                probeErrors.Count > 0
+                !probeErrors.IsEmpty
                     ? $"CLIP_PROBE_FAILED: {string.Join(" | ", probeErrors)}"
                     : "NO_CLIPS_RENDERED",
                 request.ClipPaths.Count,
@@ -633,7 +681,9 @@ public sealed partial class FfmpegHighlightCompilationService(
                 watch.ElapsedMilliseconds);
 
         List<BriefBlackFrameRepair> blackFrameRepairs = [];
-        for (int index = 0; index < normalized.Count; index++)
+        for (int index = 0;
+             !request.InputsArePreNormalized && index < normalized.Count;
+             index++)
         {
             BriefBlackFrameRepair repair = await RepairBriefBlackFramesAsync(
                 normalized[index],
@@ -680,7 +730,7 @@ public sealed partial class FfmpegHighlightCompilationService(
             "-filter_complex", concatGraph,
             "-map", "[gameplay_video]",
             "-map", "[gameplay_audio]",
-            "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "18",
             "-pix_fmt", "yuv420p", "-r",
             request.Fps.ToString(CultureInfo.InvariantCulture),
             "-c:a", "aac", "-ar", "48000", "-ac", "2", "-b:a", "192k",
@@ -718,7 +768,7 @@ public sealed partial class FfmpegHighlightCompilationService(
                 KillAccentAttackMilliseconds = 120,
                 KillAccentHoldMilliseconds = 110,
                 KillAccentReleaseMilliseconds = 280,
-                OutputTruePeakDb = -0.8
+                OutputTruePeakDb = AudioSafetyTruePeakDb
             };
             string mix = FfmpegMovieFilterBuilder.AudioMix(
                 request.MovieSettings,
@@ -941,7 +991,7 @@ public sealed partial class FfmpegHighlightCompilationService(
                     CinematicContractPolicy.TargetIntegratedLoudnessLufs -
                     measuredLoudness;
                 double peakSafeGain =
-                    CinematicContractPolicy.MaximumTruePeakDb - measuredPeak;
+                    AudioSafetyTruePeakDb - measuredPeak;
                 double correctionDb = Math.Min(requestedGain, peakSafeGain);
                 if (Math.Abs(correctionDb) < 0.05)
                     break;
@@ -951,10 +1001,12 @@ public sealed partial class FfmpegHighlightCompilationService(
                     File.Delete(corrected);
                 string loudnorm = string.Format(
                     CultureInfo.InvariantCulture,
-                    "loudnorm=I={0:0.######}:LRA={1:0.######}:TP={2:0.######}:linear=false:print_format=summary",
+                    "loudnorm=I={0:0.######}:LRA={1:0.######}:TP={2:0.######}:linear=false:print_format=summary," +
+                    "alimiter=limit={3:0.######}:attack=5:release=50:level=false",
                     CinematicContractPolicy.TargetIntegratedLoudnessLufs,
                     CinematicContractPolicy.TargetLoudnessRangeLu,
-                    CinematicContractPolicy.MaximumTruePeakDb);
+                    AudioSafetyTruePeakDb,
+                    Math.Pow(10, AudioSafetyTruePeakDb / 20));
                 ProcessResult safetyPass = await RunAsync(
                     options.FfmpegPath,
                     [
@@ -1072,8 +1124,8 @@ public sealed partial class FfmpegHighlightCompilationService(
                     },
                     frameContinuity = continuity,
                     effectsVerified = request.DynamicEffectPlans is null ||
-                        effectResults.All(value => value.Verified),
-                    effectResults
+                        orderedEffectResults.All(value => value.Verified),
+                    effectResults = orderedEffectResults
                 }, JsonOptions),
                 cancellationToken);
             if (audioContractViolations.Count > 0)
@@ -1632,7 +1684,7 @@ public sealed partial class FfmpegHighlightCompilationService(
                 "-y", "-hide_banner", "-loglevel", "error", "-i", path,
                 "-filter_complex", filter,
                 "-map", $"[{repairInput}]", "-map", "0:a?",
-                "-c:v", "libx264", "-preset", "medium", "-crf", "18",
+                "-c:v", "libx264", "-preset", "fast", "-crf", "18",
                 "-c:a", "copy", "-movflags", "+faststart", repaired
             ],
             cancellationToken);
@@ -1820,8 +1872,9 @@ public static class FfmpegMovieFilterBuilder
     public static string CinematicFinish() =>
         "eq=contrast=1.14:saturation=1.22:gamma=0.97:brightness=-0.015," +
         "colorbalance=bs=.035:gs=.012:rh=.045:gh=.015," +
-        "curves=preset=medium_contrast,vignette=PI/7:eval=frame," +
-        "unsharp=5:5:.35:5:5:0";
+        // Keep the strong cinematic separation, but avoid an additional
+        // full-frame curves pass: contrast is already shaped by the EQ above.
+        "vignette=PI/7:eval=frame,unsharp=3:3:.28:3:3:0";
 
     public static string AudioMix(
         GenerationMovieSettings settings,
@@ -1887,7 +1940,7 @@ public static class FfmpegMovieFilterBuilder
         if (options.EnableLimiter)
             graph.Append(",alimiter=limit=")
                 .Append(Number(Linear(options.OutputTruePeakDb)))
-                .Append(":attack=5:release=50");
+                .Append(":attack=5:release=50:level=false");
         if (cinematic is not null)
         {
             graph.Append(",afade=t=in:st=0:d=0.30");

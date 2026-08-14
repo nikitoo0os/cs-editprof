@@ -147,6 +147,110 @@ public sealed class CinematicPlanningTests
     }
 
     [Fact]
+    public void FullTrackDurationUsesCompleteTrackBelowThreeMinutes()
+    {
+        MusicNarrative narrative = FullTrackNarrative(125);
+        MovieDurationOptions options = new()
+        {
+            Selection = MovieDurationSelection.FullTrack,
+            MaximumMovieDurationSeconds = 125
+        };
+        SelectedHighlight[] highlights =
+        [
+            Highlight("h1", HighlightType.SoloKill, 4, 30)
+        ];
+
+        MovieDurationBudget budget = new CinematicDurationPolicy().Calculate(
+            highlights,
+            options);
+        MusicExcerptPlan excerpt = new MusicExcerptSelector(
+            new CinematicDurationPolicy()).Select(
+                narrative,
+                highlights,
+                options);
+
+        Assert.Equal(125, budget.TargetSeconds);
+        Assert.True(excerpt.IsValid);
+        Assert.Equal(0, excerpt.StartSeconds);
+        Assert.Equal(125, excerpt.EndSeconds);
+        Assert.Contains("FULL_TRACK_DURATION_SELECTED", excerpt.Warnings);
+    }
+
+    [Fact]
+    public void FullTrackDurationCapsLongTrackAtThreeMinutes()
+    {
+        MusicNarrative narrative = FullTrackNarrative(240);
+        MovieDurationOptions options = new()
+        {
+            Selection = MovieDurationSelection.FullTrack,
+            MaximumMovieDurationSeconds =
+                CinematicContractPolicy.MaximumMovieDurationSeconds
+        };
+
+        MusicExcerptPlan excerpt = new MusicExcerptSelector(
+            new CinematicDurationPolicy()).Select(
+                narrative,
+                [Highlight("h1", HighlightType.SoloKill, 4, 30)],
+                options);
+
+        Assert.True(excerpt.IsValid);
+        Assert.Equal(0, excerpt.StartSeconds);
+        Assert.Equal(180, excerpt.EndSeconds);
+        Assert.Contains(
+            "FULL_TRACK_CAPPED_AT_180_SECONDS",
+            excerpt.Warnings);
+    }
+
+    [Fact]
+    public void FullTrackDirectorBuildsContinuousThreeMinuteTimeline()
+    {
+        MusicNarrative narrative = FullTrackNarrative(180);
+        SelectedHighlight[] highlights =
+        [
+            Highlight("h1", HighlightType.SoloKill, 4, 30)
+        ];
+        MovieDurationOptions duration = new()
+        {
+            Selection = MovieDurationSelection.FullTrack,
+            MaximumMovieDurationSeconds = 180
+        };
+        MusicExcerptPlan excerpt = new MusicExcerptSelector(
+            new CinematicDurationPolicy()).Select(
+                narrative,
+                highlights,
+                duration);
+        BrollCandidate[] broll = Enumerable.Range(0, 80)
+            .Select(index => Broll() with
+            {
+                Id = $"full-track-broll-{index:D3}",
+                StartTick = index * 256,
+                EndTick = index * 256 + 192
+            })
+            .ToArray();
+
+        CinematicMoviePlan plan = Director().Create(
+            narrative,
+            excerpt,
+            highlights,
+            broll,
+            DirectorOptions() with { Duration = duration });
+        CinematicSequenceSegment[] ordered = plan.Segments
+            .OrderBy(value => value.OutputStartSeconds)
+            .ToArray();
+
+        Assert.Equal(180, plan.TargetDurationSeconds, 6);
+        Assert.Equal(0, ordered[0].OutputStartSeconds, 6);
+        Assert.Equal(180, ordered[^1].OutputEndSeconds, 6);
+        Assert.All(ordered.Zip(ordered.Skip(1)), pair => Assert.Equal(
+            pair.First.OutputEndSeconds,
+            pair.Second.OutputStartSeconds,
+            6));
+        Assert.DoesNotContain(plan.Warnings, value => value.StartsWith(
+            "CINEMATIC_TIMELINE_GAP:",
+            StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ExcerptContainsBuildUpDropAndEnoughPeaks()
     {
         MusicNarrative narrative = ExcerptNarrative();
@@ -454,15 +558,136 @@ public sealed class CinematicPlanningTests
             0,
             candidate.DurationSeconds *
                 context.MaximumCameraSpeedUnitsPerSecond + 0.001);
-        GameplayVector3 start = plan.Keyframes[0].Position;
-        GameplayVector3 end = plan.Keyframes[^1].Position;
-        foreach (CameraKeyframe keyframe in plan.Keyframes.Skip(1).SkipLast(1))
-        {
-            double cross =
-                (keyframe.Position.X - start.X) * (end.Y - start.Y) -
-                (keyframe.Position.Y - start.Y) * (end.X - start.X);
-            Assert.InRange(Math.Abs(cross), 0, 0.001);
-        }
+        Assert.Contains(
+            plan.Keyframes.Skip(1).SkipLast(1),
+            keyframe =>
+            {
+                GameplayVector3 start = plan.Keyframes[0].Position;
+                GameplayVector3 end = plan.Keyframes[^1].Position;
+                double cross =
+                    (keyframe.Position.X - start.X) * (end.Y - start.Y) -
+                    (keyframe.Position.Y - start.Y) * (end.X - start.X);
+                return Math.Abs(cross) > 0.001;
+            });
+    }
+
+    [Fact]
+    public void CameraRouteVariesTrackingSideDeterministically()
+    {
+        CameraShotPlan first = new CameraPathPlanner().Create(
+            Broll() with
+            {
+                Id = "tracking-0",
+                Type = BrollCandidateType.SideMovement
+            },
+            VerifiedCameraContext());
+        CameraShotPlan second = new CameraPathPlanner().Create(
+            Broll() with
+            {
+                Id = "tracking-1",
+                Type = BrollCandidateType.SideMovement
+            },
+            VerifiedCameraContext());
+
+        Assert.Equal(CameraShotFamily.SideTracking, first.Family);
+        Assert.Equal(CameraShotFamily.SideTracking, second.Family);
+        Assert.True(
+            Math.Sign(first.Keyframes[0].Position.Y) !=
+            Math.Sign(second.Keyframes[0].Position.Y));
+    }
+
+    [Fact]
+    public void BrollDetectorCreatesVictimReactionForSelectedPlayerKill()
+    {
+        GameplayTimelineFrame[] selected = GameplayFrames(
+            null,
+            alive: true,
+            freeze: false,
+            nearKill: true,
+            speed: 120);
+        GameplayTimelineFrame[] victim = selected
+            .Select(frame => frame with
+            {
+                Player = frame.Player with { PlayerId = "victim" },
+                Alive = frame.Tick < 200
+            })
+            .ToArray();
+        KillEvent kill = new(
+            7,
+            164,
+            1,
+            "player",
+            "Player",
+            "victim",
+            "Victim",
+            null,
+            "ak47",
+            true,
+            "T",
+            "CT");
+        BrollDetectionContext context = BrollContext([.. selected, .. victim])
+            with
+            {
+                KillEvents = [kill]
+            };
+
+        BrollCandidate reaction = Assert.Single(
+            new BrollCandidateDetector().Detect(context),
+            value => value.Type == BrollCandidateType.VictimReaction);
+        CameraShotPlan camera = new CameraPathPlanner().Create(
+            reaction,
+            VerifiedCameraContext());
+
+        Assert.Equal(kill.Tick, reaction.FocusTick);
+        Assert.Equal(["victim"], reaction.SubjectIds);
+        Assert.Equal(CameraShotFamily.VictimReaction, camera.Family);
+        Assert.Equal(CameraShotType.VictimReaction, camera.Type);
+        Assert.InRange(camera.FovStart, 60, 72);
+    }
+
+    [Fact]
+    public void VictimReactionKeepsFullPostKillWindowWhenVictimFramesStop()
+    {
+        GameplayTimelineFrame[] selected = GameplayFrames(
+            null,
+            alive: true,
+            freeze: false,
+            nearKill: true,
+            speed: 120);
+        GameplayTimelineFrame[] victim = selected
+            .Take(3)
+            .Select(frame => frame with
+            {
+                Player = frame.Player with { PlayerId = "victim" }
+            })
+            .ToArray();
+        KillEvent kill = new(
+            8,
+            victim[^1].Tick,
+            1,
+            "player",
+            "Player",
+            "victim",
+            "Victim",
+            null,
+            "ak47",
+            false,
+            "T",
+            "CT");
+
+        BrollCandidate reaction = Assert.Single(
+            new BrollCandidateDetector().Detect(
+                BrollContext([.. selected, .. victim]) with
+                {
+                    KillEvents = [kill]
+                }),
+            value => value.Type == BrollCandidateType.VictimReaction);
+
+        Assert.True(reaction.DurationSeconds >= 2.1);
+        Assert.Equal(reaction.EndTick, reaction.Trajectory.Samples[^1].Tick);
+        Assert.Equal(
+            reaction.Trajectory.Samples[^2].Position,
+            reaction.Trajectory.Samples[^1].Position);
     }
 
     [Fact]
@@ -1895,6 +2120,30 @@ public sealed class CinematicPlanningTests
                     Confidence = 0.9,
                     SectionId = "drop"
                 }
+            ],
+            Frames = [],
+            Warnings = []
+        };
+    }
+
+    private static MusicNarrative FullTrackNarrative(double duration)
+    {
+        MusicSection section = DetailedSection(
+            "full-track-drop",
+            MusicSectionType.Drop,
+            0,
+            duration,
+            0.9);
+        return new MusicNarrative
+        {
+            DurationSeconds = duration,
+            Sections = [section],
+            Peaks =
+            [
+                DropPeak(
+                    section.Id,
+                    Math.Min(duration - 1, duration / 2),
+                    1)
             ],
             Frames = [],
             Warnings = []

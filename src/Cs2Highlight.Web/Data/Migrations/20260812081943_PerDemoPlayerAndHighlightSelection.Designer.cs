@@ -3,6 +3,7 @@ using System;
 using Cs2Highlight.Web.Data;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -10,9 +11,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Cs2Highlight.Web.Data.Migrations
 {
     [DbContext(typeof(GenerationDbContext))]
-    partial class GenerationDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260812081943_PerDemoPlayerAndHighlightSelection")]
+    partial class PerDemoPlayerAndHighlightSelection
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "8.0.13");
@@ -1411,109 +1414,6 @@ namespace Cs2Highlight.Web.Data.Migrations
                     b.ToTable("Referrals");
                 });
 
-            modelBuilder.Entity("Cs2Highlight.Web.Domain.SteamHistoryConnection", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTimeOffset>("CreatedAtUtc")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("CursorShareCode")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("LastErrorCode")
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTimeOffset?>("LastSyncedAtUtc")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ProtectedAuthenticationCode")
-                        .IsRequired()
-                        .HasMaxLength(4096)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("SteamId64")
-                        .IsRequired()
-                        .HasMaxLength(20)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTimeOffset>("UpdatedAtUtc")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("UserId")
-                        .IsRequired()
-                        .HasMaxLength(450)
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("UserId")
-                        .IsUnique();
-
-                    b.ToTable("SteamHistoryConnections");
-                });
-
-            modelBuilder.Entity("Cs2Highlight.Web.Domain.SteamHistoryMatch", b =>
-                {
-                    b.Property<long>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("Availability")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("AvailabilityErrorCode")
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTimeOffset>("CreatedAtUtc")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTimeOffset?>("LastCheckedAtUtc")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("MatchId")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTimeOffset?>("PlayedAtUtc")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ReservationId")
-                        .IsRequired()
-                        .HasMaxLength(32)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Score")
-                        .HasMaxLength(32)
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("ShareCode")
-                        .IsRequired()
-                        .HasMaxLength(64)
-                        .HasColumnType("TEXT");
-
-                    b.Property<long>("SteamHistoryConnectionId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("TvPort")
-                        .HasColumnType("INTEGER");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("SteamHistoryConnectionId", "ShareCode")
-                        .IsUnique();
-
-                    b.ToTable("SteamHistoryMatches");
-                });
-
             modelBuilder.Entity("Cs2Highlight.Web.Domain.TokenPackage", b =>
                 {
                     b.Property<long>("Id")
@@ -2123,28 +2023,6 @@ namespace Cs2Highlight.Web.Data.Migrations
                     b.Navigation("ReferrerUser");
                 });
 
-            modelBuilder.Entity("Cs2Highlight.Web.Domain.SteamHistoryConnection", b =>
-                {
-                    b.HasOne("Cs2Highlight.Web.Domain.ApplicationUser", "User")
-                        .WithOne("SteamHistoryConnection")
-                        .HasForeignKey("Cs2Highlight.Web.Domain.SteamHistoryConnection", "UserId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("User");
-                });
-
-            modelBuilder.Entity("Cs2Highlight.Web.Domain.SteamHistoryMatch", b =>
-                {
-                    b.HasOne("Cs2Highlight.Web.Domain.SteamHistoryConnection", "Connection")
-                        .WithMany("Matches")
-                        .HasForeignKey("SteamHistoryConnectionId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Connection");
-                });
-
             modelBuilder.Entity("Cs2Highlight.Web.Domain.TokenPurchase", b =>
                 {
                     b.HasOne("Cs2Highlight.Web.Domain.TokenPackage", "TokenPackage")
@@ -2264,8 +2142,6 @@ namespace Cs2Highlight.Web.Data.Migrations
 
                     b.Navigation("Generations");
 
-                    b.Navigation("SteamHistoryConnection");
-
                     b.Navigation("TokenPurchases");
 
                     b.Navigation("TokenTransactions");
@@ -2313,11 +2189,6 @@ namespace Cs2Highlight.Web.Data.Migrations
                     b.Navigation("Gaps");
 
                     b.Navigation("Revisions");
-                });
-
-            modelBuilder.Entity("Cs2Highlight.Web.Domain.SteamHistoryConnection", b =>
-                {
-                    b.Navigation("Matches");
                 });
 #pragma warning restore 612, 618
         }

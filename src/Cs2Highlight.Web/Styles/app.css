@@ -2257,7 +2257,7 @@
   }
 
   .timeline-lane--anchors {
-    min-height: 132px;
+    min-height: 88px;
   }
 
   .timeline-lane--generated {
@@ -2389,16 +2389,17 @@
   .timeline-anchor {
     position: absolute;
     z-index: 5;
-    top: 18px;
+    top: 24px;
     display: grid;
-    width: 96px;
-    min-height: 78px;
-    translate: -13px 0;
-    gap: 3px;
+    place-items: center;
+    width: clamp(30px, var(--clip-width), 52px);
+    height: 42px;
+    min-height: 42px;
+    translate: -50% 0;
     border: 1px solid #50617c;
-    border-radius: 8px;
+    border-radius: 9px;
     background: #111d2f;
-    padding: 10px 8px 7px 15px;
+    padding: 5px;
     color: #e8eff9;
     text-align: left;
     cursor: ew-resize;
@@ -2408,9 +2409,9 @@
 
   .timeline-anchor::after {
     position: absolute;
-    top: -18px;
-    bottom: -36px;
-    left: 12px;
+    top: -24px;
+    bottom: -22px;
+    left: 50%;
     width: 1px;
     background: currentcolor;
     content: "";
@@ -2427,8 +2428,8 @@
   .timeline-anchor__pin {
     position: absolute;
     z-index: 2;
-    top: -22px;
-    left: 7px;
+    top: -28px;
+    left: calc(50% - 5px);
     width: 11px;
     height: 11px;
     border: 2px solid #07101c;
@@ -2436,19 +2437,51 @@
     background: currentcolor;
   }
 
-  .timeline-anchor__label {
-    overflow: hidden;
-    font-size: 11px;
-    font-weight: 820;
-    line-height: 1.2;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .timeline-anchor__weapon {
+    width: 100%;
+    max-width: 40px;
+    height: 25px;
+    object-fit: contain;
+    pointer-events: none;
   }
 
-  .timeline-anchor__status {
-    font-size: 9px;
-    font-weight: 760;
-    text-transform: uppercase;
+  :root[data-theme="printstream"] .timeline-anchor__weapon {
+    filter: var(--theme-icon-filter);
+  }
+
+  .timeline-anchor__tooltip {
+    position: absolute;
+    z-index: 20;
+    bottom: calc(100% + 9px);
+    left: 50%;
+    display: none;
+    width: max-content;
+    max-width: 210px;
+    translate: -50% 0;
+    border: 1px solid var(--color-app-border-strong);
+    border-radius: 8px;
+    background: var(--color-app-elevated);
+    padding: 7px 9px;
+    color: var(--color-app-text);
+    text-align: left;
+    box-shadow: 0 10px 28px rgb(0 0 0 / 0.35);
+    pointer-events: none;
+  }
+
+  .timeline-anchor__tooltip strong,
+  .timeline-anchor__tooltip small {
+    display: block;
+  }
+
+  .timeline-anchor__tooltip small {
+    margin-top: 2px;
+    color: var(--color-app-muted);
+    font-size: 10px;
+  }
+
+  .timeline-anchor:hover .timeline-anchor__tooltip,
+  .timeline-anchor.is-selected .timeline-anchor__tooltip {
+    display: block;
   }
 
   .timeline-anchor__lock {

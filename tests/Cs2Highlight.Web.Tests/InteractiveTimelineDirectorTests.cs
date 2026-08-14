@@ -45,7 +45,18 @@ public sealed class InteractiveTimelineDirectorTests :
             {
                 Root = storageRoot
             }),
-            new GenerationWakeSignal());
+            new GenerationWakeSignal(),
+            new CameraPathPlanner(),
+            new MapCameraProfileCatalog(),
+            new AutomaticCameraCalibrationStore(
+                new CinematicCameraRuntimeOptions
+                {
+                    CalibrationRoot = Path.Combine(
+                        storageRoot,
+                        "camera-calibration")
+                },
+                TimeProvider.System),
+            new CinematicCameraRuntimeOptions());
     }
 
     [Fact]
@@ -630,13 +641,255 @@ public sealed class InteractiveTimelineDirectorTests :
                 6));
         Assert.Equal(6, normalized[^1].OutputEndSeconds, 6);
         CinematicSequenceSegment second = normalized[^1];
-        Assert.Equal(3.5, second.OutputStartSeconds, 6);
+        Assert.Equal(3.6015, second.OutputStartSeconds, 6);
         Assert.True(second.TimeWarp.UsesLocalRamp);
         Assert.Equal(
             4.703,
             second.OutputStartSeconds +
             TimeWarpMath.MapSourceTime(second.TimeWarp, 1),
             6);
+    }
+
+    [Fact]
+    public async Task SuggestAutomaticallyUsesBestHighlightsWhenSelectionIsEmpty()
+    {
+        await using (GenerationDbContext db =
+                     await factory.CreateDbContextAsync())
+        {
+            GenerationHighlight[] highlights =
+                await db.GenerationHighlights.ToArrayAsync();
+            foreach (GenerationHighlight highlight in highlights)
+                highlight.SelectedByUser = false;
+            await db.SaveChangesAsync();
+        }
+        InteractiveTimelineView initial =
+            await director.GetOrCreateAsync(
+                publicId,
+                CancellationToken.None);
+
+        InteractiveTimelineView suggested = await director.SuggestAsync(
+            publicId,
+            initial.ConcurrencyToken,
+            CancellationToken.None);
+
+        Assert.Equal(2, suggested.Anchors.Count);
+        Assert.All(
+            suggested.Anchors,
+            value => Assert.False(string.IsNullOrWhiteSpace(value.HighlightId)));
+    }
+
+    [Fact]
+    public void ShortGapBetweenHighlightsIsBalancedAcrossBothSides()
+    {
+        CinematicSequenceSegment[] source =
+        [
+            Segment("intro", null, 0, 15.44),
+            Segment("h1", "highlight-one", 15.44, 17.44),
+            Segment("h2", "highlight-two", 18.72, 20.72)
+        ];
+        Dictionary<string, LocalHighlightSegmentPlan> local = new()
+        {
+            ["highlight-one"] = Local("a1", "highlight-one", 1, 1),
+            ["highlight-two"] = Local("a2", "highlight-two", 1, 1)
+        };
+        Dictionary<string, GenerationTimelineAnchor> anchors = new()
+        {
+            ["highlight-one"] = new GenerationTimelineAnchor
+            {
+                AnchorId = "a1",
+                HighlightId = "highlight-one",
+                TargetMilliseconds = 16_440
+            },
+            ["highlight-two"] = new GenerationTimelineAnchor
+            {
+                AnchorId = "a2",
+                HighlightId = "highlight-two",
+                TargetMilliseconds = 19_720
+            }
+        };
+
+        CinematicSequenceSegment[] normalized =
+            InteractiveTimelineDirector.NormalizeCinematicContinuity(
+                source,
+                local,
+                anchors,
+                20.72);
+
+        Assert.Equal(18.08, normalized[1].OutputEndSeconds, 6);
+        Assert.Equal(18.08, normalized[2].OutputStartSeconds, 6);
+        Assert.All(normalized.Where(value => value.HighlightId is not null), value =>
+        {
+            Assert.True(value.TimeWarp.UsesLocalRamp);
+            Assert.All(
+                value.TimeWarp.Segments,
+                warp => Assert.InRange(warp.Speed, 0.50, 1.30));
+        });
+    }
+
+    [Fact]
+    public void ContiguousHighlightsAreRebalancedWhenAbsorptionIsTooSlow()
+    {
+        CinematicSequenceSegment[] source =
+        [
+            Segment("h1", "highlight-one", 0, 2),
+            Segment("h2", "highlight-two", 2, 5.2)
+        ];
+        Dictionary<string, LocalHighlightSegmentPlan> local = new()
+        {
+            ["highlight-one"] = Local("a1", "highlight-one", 1, 1),
+            ["highlight-two"] = Local("a2", "highlight-two", 1, 1)
+        };
+        Dictionary<string, GenerationTimelineAnchor> anchors = new()
+        {
+            ["highlight-one"] = new GenerationTimelineAnchor
+            {
+                AnchorId = "a1",
+                HighlightId = "highlight-one",
+                TargetMilliseconds = 1_000
+            },
+            ["highlight-two"] = new GenerationTimelineAnchor
+            {
+                AnchorId = "a2",
+                HighlightId = "highlight-two",
+                TargetMilliseconds = 4_200
+            }
+        };
+
+        CinematicSequenceSegment[] normalized =
+            InteractiveTimelineDirector.NormalizeCinematicContinuity(
+                source,
+                local,
+                anchors,
+                5.2);
+
+        Assert.Equal(
+            normalized[0].OutputEndSeconds,
+            normalized[1].OutputStartSeconds,
+            6);
+        Assert.All(normalized, value =>
+            Assert.All(value.TimeWarp.Segments, warp =>
+                Assert.InRange(warp.Speed, 0.50, 1.30)));
+    }
+
+    [Fact]
+    public void MissingPersistedSubjectRouteIsRestoredFromBrollTrajectory()
+    {
+        PlayerTrajectory trajectory = new(
+        [
+            new PlayerTransformSample(
+                100,
+                new GameplayVector3(10, 20, 30),
+                GameplayVector3.Zero),
+            new PlayerTransformSample(
+                150,
+                new GameplayVector3(60, 25, 30),
+                GameplayVector3.Zero),
+            new PlayerTransformSample(
+                200,
+                new GameplayVector3(110, 30, 30),
+                GameplayVector3.Zero)
+        ]);
+        GenerationBrollCandidate candidate = new()
+        {
+            CandidateId = "broll-route",
+            GenerationDemoId = 42,
+            StartTick = 100,
+            EndTick = 200,
+            TrajectoryJson = JsonSerializer.Serialize(trajectory, WebJson)
+        };
+        CameraShotPlan camera = new()
+        {
+            Id = "camera-broll-route",
+            Type = CameraShotType.SideTracking,
+            Family = CameraShotFamily.SideTracking,
+            DemoId = "42",
+            StartTick = 100,
+            EndTick = 200,
+            TargetDurationSeconds = 2.5,
+            Keyframes = [],
+            TargetPoints = [],
+            FovStart = 82,
+            FovEnd = 82,
+            RequiresHighFpsCapture = false,
+            FallbackShotId = "fallback",
+            Warnings = []
+        };
+        CinematicMoviePlan plan = new()
+        {
+            SchemaVersion = "2.0",
+            PlannerVersion = "test",
+            GenerationId = "generation",
+            MusicExcerpt = new MusicExcerptPlan
+            {
+                StartSeconds = 0,
+                EndSeconds = 2.5,
+                SectionIds = [],
+                Peaks = [],
+                RequiredPeakCount = 0,
+                UsablePeakCount = 0,
+                Score = 1,
+                IsValid = true,
+                ScoreBreakdown = new Dictionary<string, double>(),
+                Warnings = []
+            },
+            TargetDurationSeconds = 2.5,
+            Segments =
+            [
+                Segment("route", null, 0, 2.5) with
+                {
+                    BrollCandidateId = candidate.CandidateId,
+                    Camera = camera
+                }
+            ],
+            HighlightMatches = [],
+            SoundDesign = new SoundDesignPlan([], true, []),
+            Color = new ColorNarrativePlan(
+                ColorGradePreset.CinematicCool,
+                [],
+                []),
+            Warnings = []
+        };
+        GenerationDemo demo = new()
+        {
+            Id = 42,
+            SelectedSteamId = "player"
+        };
+
+        CinematicMoviePlan restored =
+            GenerationWorker.RestoreMissingSubjectRoutes(
+                plan,
+                [candidate],
+                new Dictionary<long, GenerationDemo> { [42] = demo });
+
+        CameraTargetPoint[] targets = restored.Segments[0].Camera
+            .TargetPoints.ToArray();
+        Assert.Equal(3, targets.Length);
+        Assert.Equal(0, targets[0].TimeSeconds);
+        Assert.Equal(2.5, targets[^1].TimeSeconds);
+        Assert.Equal(new GameplayVector3(10, 20, 30), targets[0].Position);
+        Assert.Equal(["player"], targets[0].SubjectIds);
+    }
+
+    [Fact]
+    public void SubjectRouteFallbackUsesExactlyFourInterpolatedKeyframes()
+    {
+        CameraTargetPoint[] source = Enumerable.Range(0, 22)
+            .Select(index => new CameraTargetPoint(
+                index / 21d * 2.48,
+                new GameplayVector3(index * 10, index, 64),
+                ["player"]))
+            .ToArray();
+
+        CameraTargetPoint[] normalized =
+            GenerationWorker.NormalizeSubjectRouteTargets(source);
+
+        Assert.Equal(4, normalized.Length);
+        Assert.Equal(0, normalized[0].TimeSeconds);
+        Assert.Equal(2.48, normalized[^1].TimeSeconds, 6);
+        Assert.Equal(source[0].Position, normalized[0].Position);
+        Assert.Equal(source[^1].Position, normalized[^1].Position);
+        Assert.True(normalized.Zip(normalized.Skip(1)).All(pair =>
+            pair.First.TimeSeconds < pair.Second.TimeSeconds));
     }
 
     [Fact]

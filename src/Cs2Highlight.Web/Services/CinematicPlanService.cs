@@ -187,8 +187,13 @@ public sealed partial class CinematicPlanService(
             MaximumBrollToHighlightRatio = 1.0,
             MaximumIntroSeconds = 4,
             MaximumOutroSeconds = 0.75,
-            MaximumMovieDurationSeconds = CinematicContractPolicy
-                .MaximumMovieDurationSeconds
+            MaximumMovieDurationSeconds = settings.CinematicDuration ==
+                MovieDurationSelection.FullTrack
+                    ? Math.Min(
+                        narrative.DurationSeconds,
+                        CinematicContractPolicy.MaximumMovieDurationSeconds)
+                    : CinematicContractPolicy
+                        .StandardMaximumMovieDurationSeconds
         };
         MovieDurationBudget budget = durationPolicy.Calculate(
             highlights,
@@ -281,12 +286,13 @@ public sealed partial class CinematicPlanService(
             broll.AddRange(brollDetector.Detect(new BrollDetectionContext
             {
                 DemoId = demo.Id.ToString(CultureInfo.InvariantCulture),
-                PlayerId = generation.SelectedSteamId ??
+                PlayerId = demo.SelectedSteamId ??
                     throw new InvalidOperationException(
                         "CINEMATIC_PLAYER_REQUIRED"),
                 TickRate = demo.TickRate ?? analysis.Demo.TickRate,
                 Frames = analysis.Timeline,
-                ExcludedIntervals = excluded
+                ExcludedIntervals = excluded,
+                KillEvents = analysis.Kills
             }));
         }
         BrollCandidate[] uniqueBroll = broll

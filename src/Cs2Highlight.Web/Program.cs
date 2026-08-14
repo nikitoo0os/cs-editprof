@@ -154,6 +154,14 @@ builder.Services.AddHttpClient<YooKassaPaymentProvider>(client =>
 {
     client.BaseAddress = new Uri(paymentOptions.ApiBaseUrl, UriKind.Absolute);
     client.Timeout = TimeSpan.FromSeconds(30);
+})
+.ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
+{
+    // Payment traffic must not silently inherit a desktop proxy (Clash/V2Ray,
+    // etc.). A stopped local proxy otherwise makes the purchase form appear to
+    // hang and no confirmation_url can be returned to the browser.
+    UseProxy = false,
+    PooledConnectionLifetime = TimeSpan.FromMinutes(5)
 });
 if (!paymentOptions.UsesYooKassa)
     throw new InvalidOperationException("Payments:Provider must be YooKassa.");
@@ -417,12 +425,26 @@ app.MapGet("/api/generations/{publicId}", async (
             value => value.GenerationId == generation.Id &&
                 value.Type == ArtifactType.CameraOnlyVideo,
             cancellationToken);
+    GenerationDemo? activeDemo = generation.Status is
+        GenerationStatus.AwaitingPlayerSelection or
+        GenerationStatus.AwaitingHighlightSelection
+            ? await db.GenerationDemos.AsNoTracking()
+                .Where(value =>
+                    value.GenerationId == generation.Id &&
+                    value.AnalysisStatus == DemoAnalysisStatus.Succeeded &&
+                    !value.HighlightSelectionCompleted)
+                .OrderBy(value => value.UploadOrder)
+                .FirstOrDefaultAsync(cancellationToken)
+            : null;
+    string demoQuery = activeDemo is null
+        ? string.Empty
+        : $"?demoId={activeDemo.Id}";
     string? actionUrl = generation.Status switch
     {
         GenerationStatus.AwaitingPlayerSelection =>
-            $"/generations/{publicId}/player",
+            $"/generations/{publicId}/player{demoQuery}",
         GenerationStatus.AwaitingHighlightSelection =>
-            $"/generations/{publicId}/highlights",
+            $"/generations/{publicId}/highlights{demoQuery}",
         GenerationStatus.AwaitingMusicUpload or
         GenerationStatus.AwaitingMovieConfiguration =>
             $"/generations/{publicId}/music",

@@ -405,8 +405,19 @@ try {
   $health = Invoke-WebRequest $healthUrl -TimeoutSec 10 -UseBasicParsing
   if ($health.StatusCode -ne 200) { throw "Health check returned $($health.StatusCode)." }
 } catch {
+  $startupError = $_
+  $web.Refresh()
+  if ($web.HasExited) {
+    Write-Warning "CSHighlighter exited during startup with code $($web.ExitCode)."
+    if (Test-Path -LiteralPath $webErrorLog) {
+      Get-Content -LiteralPath $webErrorLog -Tail 80 | ForEach-Object { Write-Warning $_ }
+    }
+    if (Test-Path -LiteralPath $webLog) {
+      Get-Content -LiteralPath $webLog -Tail 80 | ForEach-Object { Write-Warning $_ }
+    }
+  }
   Stop-Project
-  throw
+  throw $startupError
 }
 Write-Output "CSHighlighter is ready."
 Show-ListeningAddresses

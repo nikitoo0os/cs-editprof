@@ -14,9 +14,12 @@
 <section data-player-selection>
   <header class="page-header">
     <div>
-      <p class="page-eyebrow">Шаг 2 · Игрок</p>
-      <h1 class="page-title">Чьи моменты собираем?</h1>
-      <p class="page-lead">Выбери игрока — мы покажем найденные для него убийства из всех загруженных матчей.</p>
+      <p class="page-eyebrow">Демка @Model.DemoNumber из @Model.DemoCount · Игрок</p>
+      <h1 class="page-title">Кого снимаем в этой демке?</h1>
+      <p class="page-lead">
+        <strong>@Model.Demo.OriginalFileName</strong> · выберите игрока,
+        затем отметьте его моменты именно из этого матча.
+      </p>
     </div>
     <span class="badge badge-success">@Model.Players.Count игроков найдено</span>
   </header>
@@ -27,7 +30,10 @@
   }
   else
   {
-    <form method="post" asp-antiforgery="true" data-loading-form>
+    <form method="post"
+          asp-route-demoId="@Model.Demo.Id"
+          asp-antiforgery="true"
+          data-loading-form>
       <div class="player-toolbar surface surface-pad">
         <label style="flex:1">
           <span class="form-label">Поиск по нику или SteamID</span>
@@ -71,7 +77,6 @@
               <strong class="player-card__name">@player.DisplayName</strong>
               <span class="player-card__id">SteamID64 · @player.SteamId</span>
               <span class="player-card__stats">
-                <span class="mini-stat"><strong>@player.DemoCount</strong><span>матчей</span></span>
                 <span class="mini-stat"><strong>@player.TotalKills</strong><span>убийств</span></span>
                 <span class="mini-stat"><strong>@player.CandidateCount</strong><span>моментов</span></span>
               </span>
@@ -80,29 +85,9 @@
         </div>
 
         <aside class="surface surface-pad sticky-panel">
-          <span class="badge badge-brand">Параметры отбора</span>
-          <h2 class="section-title" style="margin-top:14px">Каким будет мувик</h2>
-          <div style="display:grid;gap:16px;margin-top:20px">
-            <label>
-              <span class="form-label">Формат видео</span>
-              <select class="form-select" asp-for="AspectRatio">
-                <option value="16:9">16:9 · YouTube и desktop</option>
-                <option value="9:16">9:16 · Shorts и Reels</option>
-                <option value="4:3">4:3 · 1920×1440</option>
-              </select>
-            </label>
-            <label>
-              <span class="form-label">Порядок моментов</span>
-              <select class="form-select" asp-for="OutputOrder">
-                <option value="Chronological">По хронологии</option>
-                <option value="ScoreDescending">Сначала самые яркие</option>
-              </select>
-            </label>
-            <label>
-              <span class="form-label">Минимальная оценка</span>
-              <input class="form-control" asp-for="MinimumScore" type="number" min="0" max="1000" step="1" />
-            </label>
-          </div>
+          <span class="badge badge-brand">Демка @Model.DemoNumber из @Model.DemoCount</span>
+          <h2 class="section-title" style="margin-top:14px">Выберите игрока</h2>
+          <p class="page-lead">Следом вы отметите его моменты в этой демке. Общие параметры всего клипа появятся после загрузки музыки.</p>
           <button type="submit"
                   class="btn btn-primary btn-lg btn-block"
                   style="margin-top:22px"

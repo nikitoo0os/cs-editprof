@@ -43,7 +43,23 @@ public static class MeaningfulGapPolicy
     public const string Version = "1.1";
     public const double MinimumOrdinaryShotSeconds = 1.5;
     public const double MinimumFreeCameraShotSeconds = 1.5;
+    public const double MinimumExtendedFreeCameraSpeed = 0.50;
+    public const double MaximumExplicitDurationAdjustmentSeconds = 5.0;
     public const double MaximumPovContinuitySeconds = 1.5;
+
+    public static bool CanExtendFreeCamera(
+        double sourceDurationSeconds,
+        double outputDurationSeconds) =>
+        sourceDurationSeconds > 0 &&
+        outputDurationSeconds >= sourceDurationSeconds &&
+        sourceDurationSeconds / outputDurationSeconds >=
+            MinimumExtendedFreeCameraSpeed;
+
+    public static bool CanShortenExplicitDuration(
+        double missingDurationSeconds) =>
+        missingDurationSeconds >= 0 &&
+        missingDurationSeconds <=
+            MaximumExplicitDurationAdjustmentSeconds;
 
     public static GapMaterialDecision Select(
         IReadOnlyList<GapMaterialCandidate> candidates,
@@ -69,7 +85,8 @@ public static class MeaningfulGapPolicy
             .Where(value =>
                 !usedSourceIntervals.Contains(value.SourceInterval) &&
                 value.DurationSeconds >= MinimumOrdinaryShotSeconds &&
-                IsEditoriallyUsable(value))
+                IsEditoriallyUsable(value) &&
+                IsContextuallyUsable(value, previous))
             .Select(value => new
             {
                 Candidate = value,
@@ -185,6 +202,7 @@ public static class MeaningfulGapPolicy
             BrollCandidateType.BombApproach => 9,
             BrollCandidateType.EstablishingShot or
             BrollCandidateType.EnvironmentShot => 10,
+            BrollCandidateType.VictimReaction => 2,
             BrollCandidateType.PovContinuity => 11,
             _ => 6
         };
@@ -202,7 +220,25 @@ public static class MeaningfulGapPolicy
              BrollCandidateType.BombPlant or
              BrollCandidateType.BombDefuse or
              BrollCandidateType.TeamSetup or
-             BrollCandidateType.EstablishingShot);
+             BrollCandidateType.EstablishingShot or
+             BrollCandidateType.VictimReaction);
+
+    private static bool IsContextuallyUsable(
+        GapMaterialCandidate value,
+        GapHighlightContext? previous)
+    {
+        if (value.Type != BrollCandidateType.VictimReaction)
+            return true;
+        if (previous is null ||
+            value.DemoId != previous.DemoId ||
+            value.RoundNumber != previous.RoundNumber)
+        {
+            return false;
+        }
+        long tolerance = Math.Max(1, value.TickRate / 3);
+        return value.StartTick <= previous.PrimaryKillTick + tolerance &&
+               value.EndTick >= previous.PrimaryKillTick - tolerance;
+    }
 
     private static double EditorialScore(
         GapMaterialCandidate value,

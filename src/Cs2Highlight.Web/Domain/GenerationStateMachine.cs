@@ -12,7 +12,7 @@ public static class GenerationStateMachine
             [GenerationStatus.Analyzing] = Set(GenerationStatus.BuildingHighlightCatalog, GenerationStatus.AwaitingPlayerSelection, GenerationStatus.Failed, GenerationStatus.Cancelling),
             [GenerationStatus.BuildingHighlightCatalog] = Set(GenerationStatus.AwaitingPlayerSelection, GenerationStatus.Failed, GenerationStatus.Cancelling),
             [GenerationStatus.AwaitingPlayerSelection] = Set(GenerationStatus.AwaitingHighlightSelection, GenerationStatus.Cancelled),
-            [GenerationStatus.AwaitingHighlightSelection] = Set(GenerationStatus.AwaitingMusicUpload, GenerationStatus.AwaitingMovieConfiguration, GenerationStatus.Cancelled),
+            [GenerationStatus.AwaitingHighlightSelection] = Set(GenerationStatus.AwaitingPlayerSelection, GenerationStatus.AwaitingMusicUpload, GenerationStatus.AwaitingMovieConfiguration, GenerationStatus.Cancelled),
             [GenerationStatus.AwaitingMusicUpload] = Set(GenerationStatus.AnalyzingMusic, GenerationStatus.Cancelled),
             [GenerationStatus.AnalyzingMusic] = Set(GenerationStatus.AnalyzingMusicStructure, GenerationStatus.AwaitingMovieConfiguration, GenerationStatus.Failed, GenerationStatus.Cancelling),
             [GenerationStatus.AnalyzingMusicStructure] = Set(GenerationStatus.AnalyzingMusic, GenerationStatus.AwaitingMovieConfiguration, GenerationStatus.Failed, GenerationStatus.Cancelling),

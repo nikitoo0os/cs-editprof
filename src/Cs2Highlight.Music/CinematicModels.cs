@@ -71,7 +71,8 @@ public enum MovieDurationSelection
     Seconds15,
     Seconds30,
     Seconds45,
-    Seconds60
+    Seconds60,
+    FullTrack
 }
 
 public enum CinematicEditIntensity
@@ -136,7 +137,8 @@ public enum BrollCandidateType
     TeamSetup,
     PlayerJump,
     PovContinuity,
-    EnvironmentShot
+    EnvironmentShot,
+    VictimReaction
 }
 
 public sealed record BrollCandidate
@@ -169,6 +171,7 @@ public sealed record BrollDetectionContext
     public required int TickRate { get; init; }
     public required IReadOnlyList<GameplayTimelineFrame> Frames { get; init; }
     public required IReadOnlyList<GameplayInterval> ExcludedIntervals { get; init; }
+    public IReadOnlyList<KillEvent> KillEvents { get; init; } = [];
     public double MinimumDurationSeconds { get; init; } = 1.5;
     public double MaximumDurationSeconds { get; init; } = 4;
     public double MinimumMovementSpeed { get; init; } = 20;
@@ -187,7 +190,8 @@ public enum CameraShotFamily
     Orbit,
     WeaponDetail,
     BulletPath,
-    EnvironmentReveal
+    EnvironmentReveal,
+    VictimReaction
 }
 
 [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -210,7 +214,8 @@ public enum CameraShotType
     GroupWide,
     Orbit,
     WeaponDetail,
-    BulletPath
+    BulletPath,
+    VictimReaction
 }
 
 public sealed record CameraKeyframe

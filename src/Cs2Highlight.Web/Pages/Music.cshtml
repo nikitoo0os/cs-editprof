@@ -148,6 +148,28 @@
           </div>
         </section>
 
+        <section style="margin-top:30px">
+          <span class="badge badge-brand">Общие настройки клипа</span>
+          <h2 class="section-title" style="margin-top:13px">Формат и порядок моментов</h2>
+          <div class="section-grid-2" style="margin-top:16px">
+            <label>
+              <span class="form-label">Формат видео</span>
+              <select class="form-select" asp-for="AspectRatio">
+                <option value="16:9">16:9 · YouTube и desktop</option>
+                <option value="9:16">9:16 · Shorts и Reels</option>
+                <option value="4:3">4:3 · 1920×1440</option>
+              </select>
+            </label>
+            <label>
+              <span class="form-label">Порядок моментов</span>
+              <select class="form-select" asp-for="OutputOrder">
+                <option value="Chronological">По хронологии</option>
+                <option value="ScoreDescending">Сначала самые яркие</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
         <section style="margin-top:30px" data-cinematic-director-settings>
           <span class="badge badge-violet">Cinematic Director</span>
           <h2 class="section-title" style="margin-top:13px">Параметры режиссуры</h2>
@@ -174,6 +196,11 @@
               <input asp-for="CinematicDuration" type="radio" value="Seconds60" />
               <strong>1 РјРёРЅСѓС‚Р°</strong>
               <small>Р”Р»РёРЅРЅС‹Р№ fragmovie РІ РїСЂРµРґРµР»Р°С… РєРёРЅРµРјР°С‚РёС‡РµСЃРєРѕРіРѕ РєРѕРЅС‚СЂР°РєС‚Р°.</small>
+            </label>
+            <label class="option-card" style="min-height:92px">
+              <input asp-for="CinematicDuration" type="radio" value="FullTrack" />
+              <strong>Весь музыкальный трек</strong>
+              <small>Полный трек от начала, максимум 3 минуты.</small>
             </label>
           </div>
           <label class="option-card" style="margin-top:14px;min-height:82px">

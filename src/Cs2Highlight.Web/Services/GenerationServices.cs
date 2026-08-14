@@ -33,6 +33,9 @@ public sealed class PipelineOptions
         "artifacts/music-analyzer/music-analyzer.exe";
     public int FfmpegTimeoutSeconds { get; set; } = 600;
     public int MusicAnalyzerTimeoutSeconds { get; set; } = 180;
+    public int CompilationMaxParallelism { get; set; } = 2;
+    public long MinimumRenderFreeDiskSpaceBytes { get; set; } =
+        10_737_418_240;
     public DemoFailurePolicy DemoFailurePolicy { get; set; } = DemoFailurePolicy.SkipInvalidDemo;
 }
 

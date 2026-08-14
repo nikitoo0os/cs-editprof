@@ -1,4 +1,6 @@
 using Cs2Highlight.RenderAgent.Application;
+using System.Security.Cryptography;
+using System.Text;
 
 namespace Cs2Highlight.Analysis;
 
@@ -65,11 +67,15 @@ public sealed class BatchPlanBuilder(IRenderJobBuilder renderJobBuilder, TimePro
             HighlightCandidate highlight = selected[offset];
             int index = offset + 1;
             string type = highlight.Type.ToString().ToLowerInvariant();
-            string itemId = $"r{highlight.RoundNumber:D2}-{type}-{highlight.FirstKillTick}-{highlight.LastKillTick}";
+            string sourceKey = Convert.ToHexString(SHA256.HashData(
+                    Encoding.UTF8.GetBytes(highlight.Id)))[..12]
+                .ToLowerInvariant();
+            string itemId =
+                $"r{highlight.RoundNumber:D2}-{type}-{highlight.FirstKillTick}-{highlight.LastKillTick}-{sourceKey}";
             string itemDirectory = Path.Combine(
                 root,
                 "jobs",
-                $"highlight-{index:D3}-r{highlight.RoundNumber:D2}-{type}");
+                $"highlight-{index:D3}-r{highlight.RoundNumber:D2}-{type}-{sourceKey}");
             string jobPath = Path.Combine(itemDirectory, "render-job.json");
             RenderJob baseJob = renderJobBuilder.Build(
                 demo,
@@ -183,5 +189,62 @@ public sealed class BatchPlanBuilder(IRenderJobBuilder renderJobBuilder, TimePro
             ? candidates.OrderBy(key)
             : candidates.OrderByDescending(key);
         return ordered.ThenBy(item => item.StartTick).ThenBy(item => item.Id, StringComparer.Ordinal);
+    }
+}
+
+public static class BatchPlanReconciler
+{
+    public static bool IsEquivalent(
+        BatchRenderPlan current,
+        BatchRenderPlan desired) =>
+        current.Items.Count == desired.Items.Count &&
+        current.Items.Zip(desired.Items).All(pair =>
+            string.Equals(
+                pair.First.HighlightId,
+                pair.Second.HighlightId,
+                StringComparison.Ordinal) &&
+            string.Equals(
+                pair.First.ItemId,
+                pair.Second.ItemId,
+                StringComparison.Ordinal));
+
+    public static BatchRenderState ReconcileExpandedPlan(
+        BatchRenderPlan currentPlan,
+        BatchRenderState currentState,
+        BatchRenderPlan desiredPlan,
+        DateTimeOffset now)
+    {
+        Dictionary<string, BatchRenderItemState> completedByHighlight =
+            currentPlan.Items.Zip(currentState.Items)
+                .Where(pair =>
+                    pair.Second.Status == BatchRenderItemStatus.Succeeded &&
+                    !string.IsNullOrWhiteSpace(pair.Second.OutputFile) &&
+                    File.Exists(pair.Second.OutputFile) &&
+                    new FileInfo(pair.Second.OutputFile).Length > 0)
+                .GroupBy(pair => pair.First.HighlightId, StringComparer.Ordinal)
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.First().Second,
+                    StringComparer.Ordinal);
+        BatchRenderItemState[] items = desiredPlan.Items.Select(item =>
+            completedByHighlight.TryGetValue(
+                item.HighlightId,
+                out BatchRenderItemState? completed)
+                ? completed with { ItemId = item.ItemId }
+                : new BatchRenderItemState(
+                    item.ItemId,
+                    BatchRenderItemStatus.Pending,
+                    0)).ToArray();
+        return currentState with
+        {
+            BatchId = desiredPlan.BatchId,
+            Status = items.All(value =>
+                    value.Status == BatchRenderItemStatus.Succeeded)
+                ? BatchRenderStatus.Completed
+                : BatchRenderStatus.Ready,
+            Items = items,
+            CurrentItemIndex = null,
+            UpdatedAt = now
+        };
     }
 }

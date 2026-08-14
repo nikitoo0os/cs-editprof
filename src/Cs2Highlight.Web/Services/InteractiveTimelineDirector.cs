@@ -23,7 +23,9 @@ public sealed record TimelineHighlightView(
     double PreRollSeconds,
     double PostRollSeconds,
     bool HighFpsEligible,
-    string Weapon);
+    string Weapon,
+    string WeaponCode,
+    string WeaponIconPath);
 
 public sealed record TimelineSectionView(
     string Id,
@@ -157,8 +159,14 @@ public sealed class InteractiveTimelineDirector(
     TimeProvider timeProvider,
     InteractiveRetimingOptions retimingOptions,
     GenerationStorage storage,
-    GenerationWakeSignal queue) : IInteractiveTimelineDirector
+    GenerationWakeSignal queue,
+    ICameraPathPlanner cameraPathPlanner,
+    IMapCameraProfileCatalog mapProfiles,
+    AutomaticCameraCalibrationStore automaticCalibrationStore,
+    CinematicCameraRuntimeOptions cameraRuntime) : IInteractiveTimelineDirector
 {
+    private const string LocalPlannerSchemaVersion = "2.4";
+    private static readonly WeaponCatalog TimelineWeapons = new();
     private static readonly JsonSerializerOptions Json =
         new(JsonSerializerDefaults.Web);
     private static readonly JsonSerializerOptions IndentedJson =
@@ -181,10 +189,25 @@ public sealed class InteractiveTimelineDirector(
         bool localPlannerUpgradeRequired = plan.LockedAt is null &&
             plan.Gaps.Any(value =>
                 Deserialize<LocalTimelineRegionPlan>(value.PlanJson)?
-                    .SchemaVersion != "2.2");
+                    .SchemaVersion != LocalPlannerSchemaVersion);
         if (localPlannerUpgradeRequired)
         {
+            GenerationHighlight[] selected = await LoadHighlightsAsync(
+                db,
+                generation.Id,
+                cancellationToken);
+            if (plan.Anchors.All(value => !value.IsLocked))
+            {
+                db.GenerationTimelineAnchors.RemoveRange(plan.Anchors);
+                plan.Anchors.Clear();
+                await AddAutomaticMarkersAsync(db, plan, cancellationToken);
+            }
             await RecalculateAsync(db, plan, cancellationToken);
+            if (plan.Gaps.Any(value =>
+                    value.State == TimelineGapState.Failed))
+            {
+                await AutoRepairMarkersAsync(db, plan, cancellationToken);
+            }
             Touch(plan);
             await db.SaveChangesAsync(cancellationToken);
         }
@@ -398,54 +421,14 @@ public sealed class InteractiveTimelineDirector(
             async (plan, db, cancellation) =>
             {
                 EnsureEditable(plan);
-                GenerationHighlight[] highlights = await LoadHighlightsAsync(
-                    db, plan.GenerationId, cancellation);
                 GenerationTimelineAnchor[] removable = plan.Anchors
                     .Where(value => !value.IsLocked)
                     .ToArray();
                 db.GenerationTimelineAnchors.RemoveRange(removable);
                 foreach (GenerationTimelineAnchor anchor in removable)
                     plan.Anchors.Remove(anchor);
-                int desired = Math.Clamp(highlights.Length, 1, 12);
-                double duration = PlanDurationSeconds(plan);
-                GenerationMusicAnchor[] snapPoints =
-                    await db.GenerationMusicAnchors.AsNoTracking()
-                        .Where(value =>
-                            value.GenerationId == plan.GenerationId &&
-                            value.TimeMilliseconds >=
-                                plan.ExcerptStartMilliseconds &&
-                            value.TimeMilliseconds <=
-                                plan.ExcerptEndMilliseconds)
-                        .OrderByDescending(value => value.Strength)
-                        .ThenBy(value => value.TimeMilliseconds)
-                        .ToArrayAsync(cancellation);
-                List<double> used = plan.Anchors
-                    .Select(value => value.TargetMilliseconds / 1000d)
-                    .ToList();
-                for (int index = 0; index < desired; index++)
-                {
-                    GenerationHighlight highlight = highlights[index];
-                    double ideal = duration * (index + 1d) / (desired + 1d);
-                    double target = snapPoints
-                        .Select(value =>
-                            (value.TimeMilliseconds -
-                             plan.ExcerptStartMilliseconds) / 1000d)
-                        .Where(value =>
-                            Math.Abs(value - ideal) <= 2.5 &&
-                            used.All(item => Math.Abs(item - value) >= 1.25))
-                        .OrderBy(value => Math.Abs(value - ideal))
-                        .FirstOrDefault(ideal);
-                    used.Add(target);
-                    plan.Anchors.Add(new GenerationTimelineAnchor
-                    {
-                        AnchorId = $"anchor-{Guid.NewGuid():N}",
-                        MarkerType = TimelineMarkerType.ExactHighlight,
-                        HighlightId = highlight.HighlightId,
-                        TargetMilliseconds = ToMilliseconds(target),
-                        IsLocked = false,
-                        Order = plan.Anchors.Count
-                    });
-                }
+                await AddAutomaticMarkersAsync(
+                    db, plan, cancellation);
             },
             cancellationToken);
 
@@ -477,9 +460,28 @@ public sealed class InteractiveTimelineDirector(
             throw new TimelineNotFoundException("TIMELINE_NOT_FOUND");
         CheckConcurrency(plan, concurrencyToken);
         EnsureEditable(plan);
+        if (plan.Anchors.All(value => !value.IsLocked))
+        {
+            GenerationHighlight[] selected = await LoadHighlightsAsync(
+                db,
+                generation.Id,
+                cancellationToken);
+            if (plan.Anchors.Count < selected.Length)
+            {
+                db.GenerationTimelineAnchors.RemoveRange(plan.Anchors);
+                plan.Anchors.Clear();
+                await AddAutomaticMarkersAsync(db, plan, cancellationToken);
+            }
+        }
         await AutoRepairMarkersAsync(db, plan, cancellationToken);
         if (plan.Anchors.Count == 0)
-            throw new TimelineValidationException("AT_LEAST_ONE_MARKER_REQUIRED");
+        {
+            await AddAutomaticMarkersAsync(db, plan, cancellationToken);
+            await RecalculateAsync(db, plan, cancellationToken);
+        }
+        if (plan.Anchors.Count == 0)
+            throw new TimelineValidationException(
+                "NO_HIGHLIGHTS_AVAILABLE_FOR_AUTOMATIC_TIMELINE");
         if (plan.Gaps.Any(value =>
                 value.State == TimelineGapState.Failed))
         {
@@ -809,6 +811,14 @@ public sealed class InteractiveTimelineDirector(
                 warnings.Add("SAFE_END_OR_POST_KILL_CANNOT_BE_PRESERVED");
                 status = AnchorFeasibilityStatus.Invalid;
             }
+            else if (preSpeed > 1.30 || postSpeed > 1.30)
+            {
+                // The cinematic continuity pass enforces the same hard
+                // playback ceiling. Do not advertise a marker as merely
+                // "risky" when confirmation can never build it.
+                warnings.Add("HIGHLIGHT_RETIMING_OUT_OF_RANGE");
+                status = AnchorFeasibilityStatus.Invalid;
+            }
             else if (required >= retimingOptions.NaturalMinimumSpeed &&
                      required <= retimingOptions.NaturalMaximumSpeed)
             {
@@ -857,6 +867,8 @@ public sealed class InteractiveTimelineDirector(
                 .FirstOrDefault();
             if (invalid is not null)
             {
+                if (plan.Anchors.Count <= 1)
+                    break;
                 diagnostics.Add($"MARKER_AUTO_DROPPED:{invalid.AnchorId}");
                 db.GenerationTimelineAnchors.Remove(invalid);
                 plan.Anchors.Remove(invalid);
@@ -868,16 +880,12 @@ public sealed class InteractiveTimelineDirector(
                 .FirstOrDefault();
             if (failed is null)
                 break;
-            string? removableId = failed.NextAnchorId ?? failed.PreviousAnchorId;
-            GenerationTimelineAnchor? removable = removableId is null
-                ? null
-                : plan.Anchors.SingleOrDefault(value =>
-                    value.AnchorId == removableId && !value.IsLocked);
-            if (removable is null)
+            int markerCount = plan.Anchors.Count;
+            await AddAutomaticMarkersAsync(db, plan, cancellationToken);
+            if (plan.Anchors.Count == markerCount)
                 break;
-            diagnostics.Add($"MARKER_AUTO_DROPPED_FOR_REGION:{removable.AnchorId}");
-            db.GenerationTimelineAnchors.Remove(removable);
-            plan.Anchors.Remove(removable);
+            diagnostics.Add(
+                $"MARKERS_AUTO_ADDED_FOR_COVERAGE:{plan.Anchors.Count - markerCount}");
         }
         await RecalculateAsync(db, plan, cancellationToken);
         if (diagnostics.Count > 0)
@@ -890,7 +898,143 @@ public sealed class InteractiveTimelineDirector(
         }
     }
 
-    private static async Task ApplyCinematicAnchorsAsync(
+    private static async Task AddAutomaticMarkersAsync(
+        GenerationDbContext db,
+        GenerationTimelinePlan plan,
+        CancellationToken cancellationToken)
+    {
+        GenerationHighlight[] highlights = await LoadHighlightsAsync(
+            db, plan.GenerationId, cancellationToken);
+        if (highlights.Length == 0)
+        {
+            highlights = await db.GenerationHighlights.AsNoTracking()
+                .Where(value => value.GenerationId == plan.GenerationId)
+                .OrderByDescending(value => value.BeautyScore)
+                .ThenByDescending(value => value.TotalScore)
+                .ThenBy(value => value.HighlightId)
+                .Take(12)
+                .ToArrayAsync(cancellationToken);
+        }
+        if (highlights.Length == 0)
+            return;
+
+        HashSet<string> assigned = plan.Anchors
+            .Where(value => value.HighlightId is not null)
+            .Select(value => value.HighlightId!)
+            .ToHashSet(StringComparer.Ordinal);
+        GenerationHighlight[] available = highlights
+            .Where(value => !assigned.Contains(value.HighlightId))
+            .ToArray();
+        int desiredTotal = Math.Clamp(highlights.Length, 1, 64);
+        int toAdd = Math.Min(
+            available.Length,
+            Math.Max(0, desiredTotal - plan.Anchors.Count));
+        if (toAdd == 0)
+            return;
+
+        double duration = PlanDurationSeconds(plan);
+        GenerationMusicAnchor[] snapPoints =
+            await db.GenerationMusicAnchors.AsNoTracking()
+                .Where(value =>
+                    value.GenerationId == plan.GenerationId &&
+                    value.TimeMilliseconds >= plan.ExcerptStartMilliseconds &&
+                    value.TimeMilliseconds <= plan.ExcerptEndMilliseconds)
+                .OrderByDescending(value => value.Strength)
+                .ThenBy(value => value.TimeMilliseconds)
+                .ToArrayAsync(cancellationToken);
+        List<double> used = plan.Anchors
+            .Select(value => value.TargetMilliseconds / 1000d)
+            .ToList();
+        Dictionary<string, GenerationHighlight> highlightById = highlights
+            .ToDictionary(value => value.HighlightId, StringComparer.Ordinal);
+        for (int index = 0; index < toAdd; index++)
+        {
+            GenerationHighlight highlight = available[index];
+            int position = plan.Anchors.Count + 1;
+            double ideal = duration * position / (desiredTotal + 1d);
+            (double preRoll, double postRoll) = HighlightWindow(highlight);
+            double minimumTarget = preRoll;
+            double maximumTarget = Math.Max(
+                minimumTarget,
+                duration - postRoll);
+            foreach (GenerationTimelineAnchor existing in plan.Anchors)
+            {
+                if (existing.HighlightId is null ||
+                    !highlightById.TryGetValue(
+                        existing.HighlightId,
+                        out GenerationHighlight? existingHighlight))
+                {
+                    continue;
+                }
+                (double existingPre, double existingPost) =
+                    HighlightWindow(existingHighlight);
+                double existingTarget =
+                    existing.TargetMilliseconds / 1000d;
+                if (existingTarget <= ideal)
+                {
+                    // RecalculateAsync keeps the preceding post-roll at its
+                    // natural duration. Reserve enough room for that tail and
+                    // for the incoming pre-roll at the hard 1.30x limit.
+                    minimumTarget = Math.Max(
+                        minimumTarget,
+                        existingTarget + existingPost + preRoll / 1.30);
+                }
+                else
+                {
+                    maximumTarget = Math.Min(
+                        maximumTarget,
+                        existingTarget - postRoll - existingPre / 1.30);
+                }
+            }
+            if (maximumTarget < minimumTarget)
+                maximumTarget = minimumTarget;
+            double target = snapPoints
+                .Select(value =>
+                    (value.TimeMilliseconds -
+                     plan.ExcerptStartMilliseconds) / 1000d)
+                .Where(value =>
+                    Math.Abs(value - ideal) <= 2.5 &&
+                    value >= minimumTarget &&
+                    value <= maximumTarget &&
+                    used.All(item => Math.Abs(item - value) >= 1.25))
+                .OrderBy(value => Math.Abs(value - ideal))
+                .FirstOrDefault(Math.Clamp(
+                    ideal,
+                    minimumTarget,
+                    maximumTarget));
+            used.Add(target);
+            plan.Anchors.Add(new GenerationTimelineAnchor
+            {
+                AnchorId = $"anchor-{Guid.NewGuid():N}",
+                MarkerType = TimelineMarkerType.ExactHighlight,
+                HighlightId = highlight.HighlightId,
+                TargetMilliseconds = ToMilliseconds(target),
+                IsLocked = false,
+                Order = plan.Anchors.Count
+            });
+        }
+    }
+
+    private static (double PreRoll, double PostRoll) HighlightWindow(
+        GenerationHighlight highlight)
+    {
+        int tickRate = highlight.TickRate > 0 ? highlight.TickRate : 64;
+        long primaryTick = highlight.PrimaryKillTick > 0
+            ? highlight.PrimaryKillTick
+            : highlight.LastKillTick;
+        long safeEndTick = highlight.SafeEndTick > primaryTick
+            ? highlight.SafeEndTick
+            : highlight.EndTick;
+        return (
+            Math.Max(
+                0.25,
+                (primaryTick - highlight.StartTick) / (double)tickRate),
+            Math.Max(
+                0.25,
+                (safeEndTick - primaryTick) / (double)tickRate));
+    }
+
+    private async Task ApplyCinematicAnchorsAsync(
         GenerationDbContext db,
         GenerationTimelinePlan timeline,
         CancellationToken cancellationToken)
@@ -1042,6 +1186,58 @@ public sealed class InteractiveTimelineDirector(
                 localByHighlight,
                 byHighlight,
                 targetDuration);
+        IReadOnlyDictionary<string, double[]> weaponFireByHighlight =
+            await LoadWeaponFireOffsetsAsync(
+                db,
+                timeline.GenerationId,
+                localByHighlight,
+                cancellationToken);
+        double[] musicalAccents = await db.GenerationMusicAnchors
+            .AsNoTracking()
+            .Where(value =>
+                value.GenerationId == timeline.GenerationId &&
+                value.TimeMilliseconds >=
+                    timeline.ExcerptStartMilliseconds &&
+                value.TimeMilliseconds <=
+                    timeline.ExcerptEndMilliseconds &&
+                value.Type != MusicalAnchorType.SectionBoundary &&
+                (value.Type != MusicalAnchorType.Beat ||
+                 value.Strength >= 0.70))
+            .OrderBy(value => value.TimeMilliseconds)
+            .Select(value =>
+                (value.TimeMilliseconds -
+                 timeline.ExcerptStartMilliseconds) / 1000d)
+            .ToArrayAsync(cancellationToken);
+        for (int index = 0; index < segments.Length; index++)
+        {
+            CinematicSequenceSegment segment = segments[index];
+            if (segment.HighlightId is null ||
+                !localByHighlight.TryGetValue(
+                    segment.HighlightId,
+                    out LocalHighlightSegmentPlan? local) ||
+                !byHighlight.TryGetValue(
+                    segment.HighlightId,
+                    out GenerationTimelineAnchor? anchor) ||
+                !weaponFireByHighlight.TryGetValue(
+                    segment.HighlightId,
+                    out double[]? weaponFireOffsets) ||
+                weaponFireOffsets.Length == 0)
+            {
+                continue;
+            }
+            segments[index] = segment with
+            {
+                TimeWarp = WeaponFireRhythmSync.Apply(
+                    segment.TimeWarp,
+                    local.PreRollSeconds + local.PostKillSeconds,
+                    local.PreRollSeconds,
+                    segment.OutputStartSeconds,
+                    anchor.TargetMilliseconds / 1000d,
+                    segment.OutputEndSeconds,
+                    weaponFireOffsets,
+                    musicalAccents)
+            };
+        }
         HighlightPeakMatch[] updatedMatches =
             plan.HighlightMatches.Select(value =>
             {
@@ -1081,7 +1277,7 @@ public sealed class InteractiveTimelineDirector(
         CinematicMoviePlan updated = plan with
         {
             SchemaVersion = "2.0",
-            PlannerVersion = "10.8-local.1",
+            PlannerVersion = "10.9-local.1",
             MusicExcerpt = excerpt,
             TargetDurationSeconds = targetDuration,
             Segments = segments,
@@ -1097,12 +1293,17 @@ public sealed class InteractiveTimelineDirector(
             },
             Warnings = plan.Warnings
                 .Append("INTERACTIVE_LOCAL_REGIONS_REBUILT")
+                .Concat(segments.Any(value => value.TimeWarp.Warnings.Contains(
+                    "WEAPON_FIRE_MUSIC_ACCENT_SYNC",
+                    StringComparer.Ordinal))
+                    ? ["WEAPON_FIRE_MUSIC_ACCENT_SYNC"]
+                    : [])
                 .Distinct(StringComparer.Ordinal)
                 .ToArray()
         };
         stored.PlanJson = JsonSerializer.Serialize(updated, Json);
         stored.MusicExcerptJson = JsonSerializer.Serialize(excerpt, Json);
-        stored.PlannerVersion = "10.8-local.1";
+        stored.PlannerVersion = "10.9-local.1";
 
         HashSet<string> selectedBrollIds = segments
             .Where(value => value.BrollCandidateId is not null)
@@ -1139,41 +1340,23 @@ public sealed class InteractiveTimelineDirector(
                     highlight.HighlightId,
                     out GenerationTimelineAnchor? anchor))
                 continue;
-            LocalHighlightSegmentPlan local = regions
-                .Select(value => value.HighlightSegment)
-                .Single(value => value?.HighlightId ==
-                    highlight.HighlightId)!;
+            CinematicSequenceSegment plannedSegment = segments.Single(value =>
+                value.HighlightId == highlight.HighlightId);
             editSegment.OutputStartMilliseconds =
-                local.OutputStartMilliseconds;
+                ToMilliseconds(plannedSegment.OutputStartSeconds);
             editSegment.PrimaryKillOutputMilliseconds =
                 anchor.TargetMilliseconds;
-            editSegment.BaseSpeedFactor = anchor.RequiredBaseSpeed;
-            LocalTimelineRegionPlan localRegion = regions.Single(value =>
-                value.HighlightSegment?.HighlightId ==
-                highlight.HighlightId);
+            editSegment.BaseSpeedFactor =
+                plannedSegment.TimeWarp.BaseSpeedFactor;
             editSegment.TimeWarpPlanJson = JsonSerializer.Serialize(
-                new TimeWarpPlan(
-                    localRegion.Retiming.BaseSpeed,
-                    localRegion.Retiming.UsesLocalRamp
-                        ?
-                        [
-                            new TimeWarpSegment(
-                                Math.Max(0, local.PreRollSeconds - 0.20),
-                                local.PreRollSeconds + 0.12,
-                                localRegion.Retiming.LocalSpeed)
-                        ]
-                        : [],
-                    localRegion.Retiming.UsesLocalRamp,
-                    localRegion.Retiming.UsesLocalRamp
-                        ? ["USER_ANCHOR_LOCAL_RETIMING"]
-                        : []),
+                plannedSegment.TimeWarp,
                 Json);
             editSegment.WarningsJson = JsonSerializer.Serialize(
-                Deserialize<string[]>(editSegment.WarningsJson)?
+                (Deserialize<string[]>(editSegment.WarningsJson) ?? [])
+                    .Concat(plannedSegment.TimeWarp.Warnings)
                     .Append("USER_KILL_ANCHOR_LOCAL_REDIRECTION")
                     .Distinct(StringComparer.Ordinal)
-                    .ToArray() ??
-                ["USER_KILL_ANCHOR_LOCAL_REDIRECTION"],
+                    .ToArray(),
                 Json);
         }
     }
@@ -1226,27 +1409,107 @@ public sealed class InteractiveTimelineDirector(
         }
         for (int index = 1; index < segments.Length; index++)
         {
-            double gap = segments[index].OutputStartSeconds -
-                segments[index - 1].OutputEndSeconds;
-            if (Math.Abs(gap) <= tolerance)
+            CinematicSequenceSegment previous = segments[index - 1];
+            CinematicSequenceSegment current = segments[index];
+            double gap = current.OutputStartSeconds -
+                previous.OutputEndSeconds;
+            if (previous.HighlightId is not null &&
+                current.HighlightId is not null &&
+                localByHighlight.TryGetValue(
+                    previous.HighlightId,
+                    out LocalHighlightSegmentPlan? previousLocal) &&
+                localByHighlight.TryGetValue(
+                    current.HighlightId,
+                    out LocalHighlightSegmentPlan? currentLocal) &&
+                byHighlight.TryGetValue(
+                    previous.HighlightId,
+                    out GenerationTimelineAnchor? previousAnchor) &&
+                byHighlight.TryGetValue(
+                    current.HighlightId,
+                    out GenerationTimelineAnchor? currentAnchor))
+            {
+                const double minimumHighlightSpeed = 0.50;
+                const double maximumHighlightSpeed = 1.30;
+                double previousKill =
+                    previousAnchor.TargetMilliseconds / 1000d;
+                double currentKill =
+                    currentAnchor.TargetMilliseconds / 1000d;
+                double currentPreSpeed = currentLocal.PreRollSeconds /
+                    Math.Max(tolerance,
+                        currentKill - current.OutputStartSeconds);
+                double previousPostSpeed = previousLocal.PostKillSeconds /
+                    Math.Max(tolerance,
+                        previous.OutputEndSeconds - previousKill);
+                bool speedAlreadySafe =
+                    currentPreSpeed is >= minimumHighlightSpeed and
+                        <= maximumHighlightSpeed &&
+                    previousPostSpeed is >= minimumHighlightSpeed and
+                        <= maximumHighlightSpeed;
+                if (Math.Abs(gap) <= tolerance && speedAlreadySafe)
+                    continue;
+                if (gap > maximumAbsorbableGap)
+                {
+                    throw new TimelineValidationException(
+                        "CINEMATIC_TIMELINE_DISCONTINUITY");
+                }
+                double minimumBoundary = Math.Max(
+                    previousKill + previousLocal.PostKillSeconds /
+                        maximumHighlightSpeed,
+                    currentKill - currentLocal.PreRollSeconds /
+                        minimumHighlightSpeed);
+                double maximumBoundary = Math.Min(
+                    previousKill + previousLocal.PostKillSeconds /
+                        minimumHighlightSpeed,
+                    currentKill - currentLocal.PreRollSeconds /
+                        maximumHighlightSpeed);
+                if (minimumBoundary > maximumBoundary + tolerance)
+                {
+                    throw new TimelineValidationException(
+                        "CINEMATIC_HIGHLIGHT_RETIMING_OUT_OF_RANGE");
+                }
+
+                // Give both sides the same playback speed where possible. This
+                // avoids forcing the whole short gap into the next pre-roll.
+                double balancedBoundary =
+                    (previousLocal.PostKillSeconds * currentKill +
+                     currentLocal.PreRollSeconds * previousKill) /
+                    (previousLocal.PostKillSeconds +
+                     currentLocal.PreRollSeconds);
+                double boundary = Math.Clamp(
+                    balancedBoundary,
+                    minimumBoundary,
+                    maximumBoundary);
+                segments[index - 1] = previous with
+                {
+                    OutputEndSeconds = boundary
+                };
+                segments[index] = current with
+                {
+                    OutputStartSeconds = boundary
+                };
+            }
+            else if (Math.Abs(gap) <= tolerance)
+            {
                 continue;
-            if (gap < 0 || gap > maximumAbsorbableGap)
+            }
+            else if (gap < 0 || gap > maximumAbsorbableGap)
+            {
                 throw new TimelineValidationException(
                     "CINEMATIC_TIMELINE_DISCONTINUITY");
-            if (segments[index].HighlightId is not null)
+            }
+            else if (current.HighlightId is not null)
             {
-                segments[index] = segments[index] with
+                segments[index] = current with
                 {
                     OutputStartSeconds =
-                        segments[index - 1].OutputEndSeconds
+                        previous.OutputEndSeconds
                 };
             }
             else
             {
-                segments[index - 1] = segments[index - 1] with
+                segments[index - 1] = previous with
                 {
-                    OutputEndSeconds =
-                        segments[index].OutputStartSeconds
+                    OutputEndSeconds = current.OutputStartSeconds
                 };
             }
         }
@@ -1354,6 +1617,108 @@ public sealed class InteractiveTimelineDirector(
             throw new TimelineValidationException(
                 "CINEMATIC_TIMELINE_DISCONTINUITY");
         return segments;
+    }
+
+    private async Task<IReadOnlyDictionary<string, double[]>>
+        LoadWeaponFireOffsetsAsync(
+            GenerationDbContext db,
+            long generationId,
+            IReadOnlyDictionary<string, LocalHighlightSegmentPlan>
+                localByHighlight,
+            CancellationToken cancellationToken)
+    {
+        Generation? generation = await db.Generations.AsNoTracking()
+            .SingleOrDefaultAsync(
+                value => value.Id == generationId,
+                cancellationToken);
+        if (generation?.SelectedSteamId is null ||
+            localByHighlight.Count == 0)
+        {
+            return new Dictionary<string, double[]>(StringComparer.Ordinal);
+        }
+        string[] highlightIds = [.. localByHighlight.Keys];
+        GenerationHighlight[] highlights =
+            await db.GenerationHighlights.AsNoTracking()
+                .Where(value => value.GenerationId == generationId)
+                .Where(value => highlightIds.Contains(value.HighlightId))
+                .ToArrayAsync(cancellationToken);
+        GenerationDemo[] demos = await db.GenerationDemos.AsNoTracking()
+            .Where(value => value.GenerationId == generationId)
+            .ToArrayAsync(cancellationToken);
+        Dictionary<long, GenerationDemo> demosById = demos.ToDictionary(
+            value => value.Id);
+        Dictionary<long, DemoAnalysis> analysesByDemoId = [];
+        Dictionary<string, double[]> result =
+            new(StringComparer.Ordinal);
+        foreach (GenerationHighlight highlight in highlights)
+        {
+            if (!localByHighlight.TryGetValue(
+                    highlight.HighlightId,
+                    out LocalHighlightSegmentPlan? local) ||
+                !demosById.TryGetValue(
+                    highlight.GenerationDemoId,
+                    out GenerationDemo? demo))
+            {
+                continue;
+            }
+            if (!analysesByDemoId.TryGetValue(demo.Id, out DemoAnalysis? analysis))
+            {
+                string path = Path.Combine(
+                    storage.GenerationRoot(generation.PublicId),
+                    "analysis",
+                    $"demo-{demo.UploadOrder:D3}",
+                    "demo-analysis.json");
+                if (!File.Exists(path))
+                    continue;
+                try
+                {
+                    await using FileStream stream = File.OpenRead(path);
+                    analysis = await JsonSerializer.DeserializeAsync<DemoAnalysis>(
+                        stream,
+                        Json,
+                        cancellationToken);
+                }
+                catch (JsonException)
+                {
+                    continue;
+                }
+                catch (IOException)
+                {
+                    continue;
+                }
+                if (analysis is null)
+                    continue;
+                analysesByDemoId[demo.Id] = analysis;
+            }
+            int tickRate = highlight.TickRate > 0
+                ? highlight.TickRate
+                : demo.TickRate ?? analysis.Demo.TickRate;
+            if (tickRate <= 0)
+                continue;
+            long sourceEndTick = local.SafeEndTick > local.SourceStartTick
+                ? local.SafeEndTick
+                : highlight.SafeEndTick;
+            result[highlight.HighlightId] = analysis.Timeline
+                .Where(frame => string.Equals(
+                    frame.Player.PlayerId,
+                    demo.SelectedSteamId ?? generation.SelectedSteamId,
+                    StringComparison.Ordinal))
+                .SelectMany(frame => frame.Events)
+                .Where(value =>
+                    string.Equals(
+                        value.Type,
+                        "WeaponFire",
+                        StringComparison.Ordinal) &&
+                    value.Tick >= local.SourceStartTick &&
+                    value.Tick <= sourceEndTick)
+                .Select(value =>
+                    (value.Tick - local.SourceStartTick) /
+                    (double)tickRate)
+                .Distinct()
+                .OrderBy(value => value)
+                .ToArray();
+        }
+        return result;
     }
 
     private static CinematicSequenceRole RegionRole(
@@ -1483,7 +1848,23 @@ public sealed class InteractiveTimelineDirector(
                 value => value.Id,
                 StringComparer.Ordinal);
         GenerationCameraShot[] storedShots = await db.GenerationCameraShots
-            .AsNoTracking()
+            .Where(value => value.GenerationId == plan.GenerationId)
+            .OrderBy(value => value.ShotId)
+            .ToArrayAsync(cancellationToken);
+        Generation generation = await db.Generations.AsNoTracking()
+            .SingleAsync(
+                value => value.Id == plan.GenerationId,
+                cancellationToken);
+        Dictionary<string, CameraShotPlan> generatedCameraPrototypes =
+            await EnsureCameraPoolAsync(
+                db,
+                generation,
+                demosById,
+                storedCandidates,
+                storedShots,
+                PlanDurationSeconds(plan) + 15,
+                cancellationToken);
+        storedShots = await db.GenerationCameraShots
             .Where(value => value.GenerationId == plan.GenerationId)
             .OrderBy(value => value.ShotId)
             .ToArrayAsync(cancellationToken);
@@ -1523,6 +1904,11 @@ public sealed class InteractiveTimelineDirector(
                         .Camera,
                     StringComparer.Ordinal) ??
             new Dictionary<string, CameraShotPlan>(StringComparer.Ordinal);
+        foreach ((string candidateId, CameraShotPlan camera) in
+                 generatedCameraPrototypes)
+        {
+            cameraPrototypes.TryAdd(candidateId, camera);
+        }
         Dictionary<string, (long Start, long End)> plannedBrollWindows =
             cinematicPlan?.Segments
                 .Where(value => value.BrollCandidateId is not null)
@@ -1548,11 +1934,6 @@ public sealed class InteractiveTimelineDirector(
                 .SingleOrDefaultAsync(
                     value => value.GenerationId == plan.GenerationId,
                     cancellationToken);
-        Generation generation = await db.Generations.AsNoTracking()
-            .SingleAsync(
-                value => value.Id == plan.GenerationId,
-                cancellationToken);
-
         HashSet<string> usedSourceIntervals = highlights
             .Where(value => plan.Anchors.Any(anchor =>
                 anchor.HighlightId == value.HighlightId))
@@ -1569,7 +1950,8 @@ public sealed class InteractiveTimelineDirector(
                 continue;
             LocalTimelineRegionPlan? parsed =
                 Deserialize<LocalTimelineRegionPlan>(gap.PlanJson);
-            if (parsed is null || parsed.SchemaVersion != "2.2" ||
+            if (parsed is null ||
+                parsed.SchemaVersion != LocalPlannerSchemaVersion ||
                 !parsed.Validation.IsValid)
                 continue;
             reusable[descriptor.Id] = parsed;
@@ -1752,15 +2134,56 @@ public sealed class InteractiveTimelineDirector(
             if (decision.ShortenExcerpt &&
                 settings?.CinematicDuration != MovieDurationSelection.Auto)
             {
-                decision = decision with
+                bool canShortenWithinTolerance =
+                    descriptor.Role == TimelineGapRole.Outro &&
+                    MeaningfulGapPolicy.CanShortenExplicitDuration(
+                        (end - cursor) / 1000d);
+                if (broll.Count > 0 && cameras.Count > 0)
                 {
-                    Outcome = LocalRegionOutcome.Invalid,
-                    ShortenExcerpt = false,
-                    Warnings = decision.Warnings.Concat(
-                        ["EXPLICIT_DURATION_CANNOT_BE_SHORTENED"])
+                    int lastIndex = broll.Count - 1;
+                    LocalBrollSegmentPlan lastBroll = broll[lastIndex];
+                    CameraShotPlan lastCamera = cameras[lastIndex];
+                    double extendedDuration =
+                        (end - lastBroll.OutputStartMilliseconds) / 1000d;
+                    if (MeaningfulGapPolicy.CanExtendFreeCamera(
+                            lastCamera.TargetDurationSeconds,
+                            extendedDuration))
+                    {
+                        broll[lastIndex] = lastBroll with
+                        {
+                            OutputEndMilliseconds = end
+                        };
+                        cursor = end;
+                        outcome = MoreSevere(
+                            outcome,
+                            LocalRegionOutcome.Retiming);
+                        warnings.Add(
+                            "EXPLICIT_DURATION_FILLED_BY_FREECAM_RETIMING");
+                        break;
+                    }
+                }
+                if (canShortenWithinTolerance)
+                {
+                    decision = decision with
+                    {
+                        Warnings = decision.Warnings.Concat(
+                            ["EXPLICIT_DURATION_ADJUSTED_WITHIN_TOLERANCE"])
                         .Distinct(StringComparer.Ordinal)
                         .ToArray()
-                };
+                    };
+                }
+                else
+                {
+                    decision = decision with
+                    {
+                        Outcome = LocalRegionOutcome.Invalid,
+                        ShortenExcerpt = false,
+                        Warnings = decision.Warnings.Concat(
+                            ["EXPLICIT_DURATION_CANNOT_BE_SHORTENED"])
+                            .Distinct(StringComparer.Ordinal)
+                            .ToArray()
+                    };
+                }
             }
             warnings.AddRange(decision.Warnings);
             if (decision.Candidate is not null)
@@ -1788,7 +2211,12 @@ public sealed class InteractiveTimelineDirector(
                     storedShot,
                     cameraPrototypes.GetValueOrDefault(candidate.Id),
                     previewStatus,
-                    generation.SelectedSteamId,
+                    demos.TryGetValue(
+                        candidate.DemoId,
+                        out GenerationDemo? playerDemo)
+                            ? playerDemo.SelectedSteamId ??
+                                generation.SelectedSteamId
+                            : generation.SelectedSteamId,
                     demos.TryGetValue(
                         candidate.DemoId,
                         out GenerationDemo? demo)
@@ -1900,7 +2328,7 @@ public sealed class InteractiveTimelineDirector(
                 : "anchor-local speed policy");
         LocalTimelineRegionPlan localPlan = new()
         {
-            SchemaVersion = "2.2",
+            SchemaVersion = LocalPlannerSchemaVersion,
             RegionId = descriptor.Id,
             PreviousAnchorId = descriptor.Previous?.AnchorId,
             NextAnchorId = descriptor.Next?.AnchorId,
@@ -1950,7 +2378,7 @@ public sealed class InteractiveTimelineDirector(
                 timeline.RevisionCursor + 1,
                 descriptor,
                 settings?.EffectPlannerVersion ?? "7.0"),
-            PlannerVersion = "10.8-local.1",
+            PlannerVersion = "10.9-local.1",
             ReusedSuccessfulPlan = false
         };
         return new LocalRegionBuildResult(localPlan, shortenedEnd);
@@ -1959,6 +2387,291 @@ public sealed class InteractiveTimelineDirector(
     private static string SourceInterval(GenerationHighlight value) =>
         $"{value.GenerationDemoId}:{value.StartTick}-" +
         $"{Math.Max(value.SafeEndTick, value.EndTick)}";
+
+    private async Task<Dictionary<string, CameraShotPlan>>
+        EnsureCameraPoolAsync(
+            GenerationDbContext db,
+            Generation generation,
+            IReadOnlyDictionary<long, GenerationDemo> demos,
+            IReadOnlyList<GenerationBrollCandidate> candidates,
+            IReadOnlyList<GenerationCameraShot> existingShots,
+            double requiredSeconds,
+            CancellationToken cancellationToken)
+    {
+        Dictionary<long, GenerationCameraShot> existingByCandidate =
+            existingShots
+                .Where(value => value.GenerationBrollCandidateId.HasValue)
+                .GroupBy(value => value.GenerationBrollCandidateId!.Value)
+                .ToDictionary(
+                    value => value.Key,
+                    value => value.OrderByDescending(item =>
+                            item.Type != CameraShotType.PlayerPov)
+                        .ThenBy(item => item.Id)
+                        .First());
+        Dictionary<string, CameraShotPlan> result =
+            new(StringComparer.Ordinal);
+        double availableSeconds = 0;
+        foreach (GenerationBrollCandidate candidate in candidates)
+        {
+            if (!existingByCandidate.TryGetValue(
+                    candidate.Id,
+                    out GenerationCameraShot? row) ||
+                row.Type == CameraShotType.PlayerPov)
+                continue;
+            CameraShotPlan? plan = StoredCameraPlan(candidate, row, demos);
+            if (plan is null)
+                continue;
+            result[candidate.CandidateId] = plan;
+            availableSeconds += plan.TargetDurationSeconds;
+        }
+        if (!cameraRuntime.Enabled || availableSeconds >= requiredSeconds)
+            return result;
+
+        Dictionary<string, MapCameraProfile?> profiles =
+            new(StringComparer.OrdinalIgnoreCase);
+        foreach (GenerationDemo demo in demos.Values)
+        {
+            string mapName = demo.MapName ?? string.Empty;
+            MapCameraProfile? profile = mapProfiles.Find(mapName);
+            MapCameraProfile? automatic = await automaticCalibrationStore
+                .LoadAsync(
+                    mapName,
+                    cameraRuntime.HlaeVersion,
+                    cancellationToken);
+            profiles[mapName] = MergeProfiles(profile, automatic);
+        }
+        foreach (GenerationBrollCandidate row in candidates
+                     .Where(value =>
+                         value.CinematicScore >= 0.35 &&
+                         value.ActionDensity <= 0.72)
+                     .OrderByDescending(value => value.CinematicScore)
+                     .ThenByDescending(value => value.MovementScore)
+                     .ThenBy(value => value.CandidateId,
+                         StringComparer.Ordinal))
+        {
+            if (result.ContainsKey(row.CandidateId) ||
+                !demos.TryGetValue(row.GenerationDemoId,
+                    out GenerationDemo? demo))
+                continue;
+            string mapName = demo.MapName ?? string.Empty;
+            MapCameraProfile? profile = profiles.GetValueOrDefault(mapName);
+            bool profileAvailable = profile is not null &&
+                (profile.ManuallyVerified || profile.AutomaticallyCalibrated) &&
+                profile.SafeVolumes.Count > 0;
+            if (!profileAvailable)
+                continue;
+            PlayerTrajectory? trajectory = Deserialize<PlayerTrajectory>(
+                row.TrajectoryJson);
+            if (trajectory is null || trajectory.Samples.Count < 2)
+                continue;
+            int tickRate = demo.TickRate.GetValueOrDefault(64);
+            BrollCandidate candidate = new()
+            {
+                Id = row.CandidateId,
+                DemoId = row.GenerationDemoId.ToString(
+                    System.Globalization.CultureInfo.InvariantCulture),
+                RoundNumber = row.RoundNumber,
+                Type = row.Type,
+                StartTick = row.StartTick,
+                EndTick = row.EndTick,
+                DurationSeconds = Math.Max(
+                    0,
+                    (row.EndTick - row.StartTick) /
+                    (double)Math.Max(1, tickRate)),
+                MovementScore = row.MovementScore,
+                CinematicScore = row.CinematicScore,
+                ActionDensity = row.ActionDensity,
+                Trajectory = trajectory,
+                Tags = [],
+                SubjectIds = string.IsNullOrWhiteSpace(demo.SelectedSteamId)
+                    ? []
+                    : [demo.SelectedSteamId]
+            };
+            CameraShotPlan camera = cameraPathPlanner.Create(
+                candidate,
+                new CameraPlanningContext
+                {
+                    MapName = mapName,
+                    Profile = profile,
+                    Capabilities = new HlaeCameraCapabilities
+                    {
+                        Available = true,
+                        Version = cameraRuntime.HlaeVersion,
+                        SupportsCampath = true,
+                        SupportsInput = true,
+                        SupportsFov = true,
+                        SupportsHighFpsCapture = true,
+                        ManualSpikeVerified = !string.IsNullOrWhiteSpace(
+                            cameraRuntime.HlaeVersion),
+                        Warnings = ["INTERACTIVE_CAMERA_POOL_EXPANDED"]
+                    }
+                });
+            if (camera.Family == CameraShotFamily.PlayerPov ||
+                camera.Keyframes.Count == 0 ||
+                camera.SafetyVolume is null)
+                continue;
+            if (!existingByCandidate.TryGetValue(
+                    row.Id,
+                    out GenerationCameraShot? stored))
+            {
+                stored = new GenerationCameraShot
+                {
+                    GenerationId = generation.Id,
+                    GenerationBrollCandidateId = row.Id,
+                    ShotId = camera.Id,
+                    FallbackType = CameraShotType.PlayerPov
+                };
+                db.GenerationCameraShots.Add(stored);
+                existingByCandidate[row.Id] = stored;
+            }
+            stored.Type = camera.Type;
+            stored.StartTick = camera.StartTick;
+            stored.EndTick = camera.EndTick;
+            stored.KeyframesJson = JsonSerializer.Serialize(
+                camera.Keyframes,
+                Json);
+            stored.FovStart = camera.FovStart;
+            stored.FovEnd = camera.FovEnd;
+            stored.PreviewStatus = CameraPreviewStatus.NotAttempted;
+            result[row.CandidateId] = camera;
+            availableSeconds += camera.TargetDurationSeconds;
+            if (availableSeconds >= requiredSeconds)
+                break;
+        }
+        await db.SaveChangesAsync(cancellationToken);
+        return result;
+    }
+
+    private static CameraShotPlan? StoredCameraPlan(
+        GenerationBrollCandidate candidate,
+        GenerationCameraShot row,
+        IReadOnlyDictionary<long, GenerationDemo> demos)
+    {
+        CameraKeyframe[] keyframes = Deserialize<CameraKeyframe[]>(
+            row.KeyframesJson) ?? [];
+        PlayerTransformSample[] subjectSamples =
+            Deserialize<PlayerTrajectory>(candidate.TrajectoryJson)?
+                .Samples?
+                .OrderBy(value => value.Tick)
+                .ToArray() ?? [];
+        CameraShotFamily family = CameraFamily(row.Type);
+        if (family == CameraShotFamily.PlayerPov || keyframes.Length == 0)
+            return null;
+        int tickRate = demos.TryGetValue(
+                candidate.GenerationDemoId,
+                out GenerationDemo? demo)
+            ? demo.TickRate.GetValueOrDefault(64)
+            : 64;
+        double duration = Math.Max(
+            MeaningfulGapPolicy.MinimumFreeCameraShotSeconds,
+            (candidate.EndTick - candidate.StartTick) /
+            (double)Math.Max(1, tickRate));
+        SafeCameraVolume safety = EncloseKeyframes(keyframes);
+        CameraShotPlan plan = new()
+        {
+            Id = row.ShotId,
+            Type = row.Type,
+            Family = family,
+            DemoId = candidate.GenerationDemoId.ToString(
+                System.Globalization.CultureInfo.InvariantCulture),
+            StartTick = candidate.StartTick,
+            EndTick = candidate.EndTick,
+            TargetDurationSeconds = duration,
+            Keyframes = keyframes,
+            FovStart = row.FovStart,
+            FovEnd = row.FovEnd,
+            RequiresHighFpsCapture = false,
+            FallbackShotId = $"{row.ShotId}-pov-fallback",
+            Warnings = row.PreviewStatus == CameraPreviewStatus.Passed
+                ? []
+                : ["CAMERA_PREVIEW_PENDING"],
+            SubjectIds = string.IsNullOrWhiteSpace(demo?.SelectedSteamId)
+                ? []
+                : [demo.SelectedSteamId],
+            TargetPoints = SubjectTargetPoints(
+                subjectSamples,
+                candidate.StartTick,
+                candidate.EndTick,
+                duration,
+                string.IsNullOrWhiteSpace(demo?.SelectedSteamId)
+                    ? []
+                    : [demo.SelectedSteamId]),
+            FovCurve = keyframes.Select(value =>
+                new CameraFovPoint(value.TimeSeconds, value.Fov)).ToArray(),
+            FramingIntent = "interactive free-camera insert",
+            MovementDirection = GameplayVector3.Zero,
+            SafetyVolume = safety,
+            PreviewRequired = true,
+            FallbackChain =
+                [CameraShotFamily.StaticTripod,
+                    CameraShotFamily.PlayerPov],
+            AutomaticCalibration = true
+        };
+        return CameraShotSignatureBuilder.Attach(
+            plan,
+            demo?.MapName ?? string.Empty);
+    }
+
+    private static CameraTargetPoint[] SubjectTargetPoints(
+        IReadOnlyList<PlayerTransformSample> samples,
+        long startTick,
+        long endTick,
+        double durationSeconds,
+        IReadOnlyList<string> subjectIds)
+    {
+        PlayerTransformSample[] ordered = samples
+            .Where(value => value.Tick >= startTick && value.Tick <= endTick)
+            .OrderBy(value => value.Tick)
+            .ToArray();
+        if (ordered.Length < 2)
+            return [];
+        double tickSpan = Math.Max(1, endTick - startTick);
+        return ordered.Select(value => new CameraTargetPoint(
+            Math.Clamp(
+                (value.Tick - startTick) / tickSpan * durationSeconds,
+                0,
+                durationSeconds),
+            value.Position,
+            subjectIds)).ToArray();
+    }
+
+    private static SafeCameraVolume EncloseKeyframes(
+        IReadOnlyList<CameraKeyframe> keyframes)
+    {
+        const double margin = 24;
+        return new SafeCameraVolume(
+            new GameplayVector3(
+                keyframes.Min(value => value.Position.X) - margin,
+                keyframes.Min(value => value.Position.Y) - margin,
+                keyframes.Min(value => value.Position.Z) - margin),
+            new GameplayVector3(
+                keyframes.Max(value => value.Position.X) + margin,
+                keyframes.Max(value => value.Position.Y) + margin,
+                keyframes.Max(value => value.Position.Z) + margin));
+    }
+
+    private static MapCameraProfile? MergeProfiles(
+        MapCameraProfile? builtIn,
+        MapCameraProfile? automatic)
+    {
+        if (builtIn is null)
+            return automatic;
+        if (automatic is null)
+            return builtIn;
+        return builtIn with
+        {
+            SafeVolumes = builtIn.SafeVolumes
+                .Concat(automatic.SafeVolumes)
+                .ToArray(),
+            EstablishingShots = builtIn.EstablishingShots
+                .Concat(automatic.EstablishingShots)
+                .GroupBy(value => value.Id, StringComparer.Ordinal)
+                .Select(value => value.First())
+                .ToArray(),
+            AutomaticallyCalibrated =
+                automatic.AutomaticallyCalibrated
+        };
+    }
 
     private static GapHighlightContext? HighlightContext(
         GenerationTimelineAnchor? anchor,
@@ -2166,6 +2879,8 @@ public sealed class InteractiveTimelineDirector(
             CameraShotType.CurvedCampath => CameraShotFamily.Orbit,
             CameraShotType.WeaponDetail => CameraShotFamily.WeaponDetail,
             CameraShotType.BulletPath => CameraShotFamily.BulletPath,
+            CameraShotType.VictimReaction =>
+                CameraShotFamily.VictimReaction,
             CameraShotType.EnvironmentReveal =>
                 CameraShotFamily.EnvironmentReveal,
             _ => CameraShotFamily.PlayerPov
@@ -2489,7 +3204,7 @@ public sealed class InteractiveTimelineDirector(
             ["local-region-plans.json"] = new
             {
                 schemaVersion = "2.2",
-                plannerVersion = "10.8-local.1",
+                plannerVersion = "10.9-local.1",
                 generationId = generation.PublicId,
                 timelineRevision = plan.RevisionCursor,
                 regions = localRegions
@@ -2688,9 +3403,13 @@ public sealed class InteractiveTimelineDirector(
             long safeEnd = value.SafeEndTick > primary
                 ? value.SafeEndTick
                 : value.EndTick;
-            string weapon = Deserialize<string[]>(
+            WeaponSequenceSegment? weaponSegment =
+                Deserialize<WeaponSequenceSegment[]>(
                     value.WeaponSequenceJson)?
-                .FirstOrDefault() ?? "Weapon";
+                .OrderByDescending(item => item.KillCount)
+                .FirstOrDefault();
+            WeaponMetadata weapon = TimelineWeapons.Resolve(
+                weaponSegment?.WeaponCode);
             return new TimelineHighlightView(
                 value.HighlightId,
                 value.Type,
@@ -2713,7 +3432,9 @@ public sealed class InteractiveTimelineDirector(
                     0,
                     (safeEnd - primary) / (double)tickRate),
                 tickRate >= 120,
-                weapon);
+                weapon.DisplayName,
+                weapon.Code,
+                weapon.IconPath);
         }).ToArray();
         UserKillAnchor[] anchors = plan.Anchors
             .OrderBy(value => value.Order)

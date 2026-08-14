@@ -489,6 +489,19 @@ public sealed class NetConsoleDemoController(
                 applied.Add(ToApplied(keyframe));
             }
 
+            // Cubic position interpolation can overshoot a safe polyline and
+            // cut through nearby walls. Keep the planned corridor exact while
+            // retaining smooth angular interpolation.
+            await connection.SendAsync(
+                "mirv_campath edit interp position linear",
+                cancellationToken);
+            await connection.SendAsync(
+                "mirv_campath edit interp rotation sLinear",
+                cancellationToken);
+            await connection.SendAsync(
+                "mirv_campath edit interp fov linear",
+                cancellationToken);
+
             const string printMarker = "AFX_RENDER_CAMPATH_PRINT_END";
             await connection.SendAsync("mirv_campath print", cancellationToken);
             await connection.SendAsync($"echo {printMarker}", cancellationToken);
@@ -1211,6 +1224,7 @@ public sealed class NetConsoleDemoController(
     {
         private static readonly string[] FatalMarkers =
         [
+            "NETWORK_DISCONNECT_REPLAY_INCOMPATIBLE",
             "NETWORK_DISCONNECT_MESSAGE_PARSE_ERROR",
             "Failed to parse message",
             "FATAL ERROR:",
@@ -1297,6 +1311,14 @@ public sealed class NetConsoleDemoController(
                     }
                     if (FatalMarkers.Any(fatal => line.Contains(fatal, StringComparison.OrdinalIgnoreCase)))
                     {
+                        if (line.Contains(
+                                "NETWORK_DISCONNECT_REPLAY_INCOMPATIBLE",
+                                StringComparison.OrdinalIgnoreCase))
+                        {
+                            throw new DemoPlaybackIncompatibleException(
+                                "DEMO_NETWORK_VERSION_INCOMPATIBLE: The demo was recorded with a CS2 network version " +
+                                $"that the installed game cannot play. CS2 reported: {line}");
+                        }
                         throw new InvalidOperationException($"CS2 demo playback failed: {line}");
                     }
                     if (markers.Any(marker =>
