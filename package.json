@@ -6,6 +6,9 @@
   "scripts": {
     "css:build": "tailwindcss -i ./src/Cs2Highlight.Web/Styles/app.css -o ./src/Cs2Highlight.Web/wwwroot/css/app.generated.css --minify",
     "css:watch": "tailwindcss -i ./src/Cs2Highlight.Web/Styles/app.css -o ./src/Cs2Highlight.Web/wwwroot/css/app.generated.css --watch",
+    "steam-bot:auth": "node ./tools/steam-gc-bot/auth.cjs",
+    "steam-bot:resolve": "node ./tools/steam-gc-bot/resolve.cjs",
+    "steam-bot:test": "node --test ./tools/steam-gc-bot/resolve.test.cjs",
     "vendor:sync": "node ./scripts/sync-web-vendor.mjs",
     "ui:build": "npm run vendor:sync && npm run css:build"
   },
@@ -16,6 +19,11 @@
     "tailwindcss": "4.3.3"
   },
   "dependencies": {
-    "@microsoft/signalr": "8.0.7"
+    "@microsoft/signalr": "8.0.7",
+    "globaloffensive": "3.3.0",
+    "qrcode": "1.5.4",
+    "qrcode-terminal": "0.12.0",
+    "steam-session": "1.9.4",
+    "steam-user": "5.3.0"
   }
 }

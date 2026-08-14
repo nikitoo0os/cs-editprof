@@ -16,6 +16,7 @@
       </a>
       @if (Context.User.Identity?.IsAuthenticated == true)
       {
+        <a class="app-nav__link" asp-page="/SteamHistory">Матчи Steam</a>
         <a class="app-nav__link" asp-page="/Profile">Профиль</a>
         <form method="post" asp-page="/Account/Logout"><button class="app-nav__link" type="submit">Выйти</button></form>
       }
