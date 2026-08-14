@@ -33,6 +33,8 @@ public sealed class GenerationDbContext(DbContextOptions<GenerationDbContext> op
     public DbSet<TokenPackage> TokenPackages => Set<TokenPackage>();
     public DbSet<TokenPurchase> TokenPurchases => Set<TokenPurchase>();
     public DbSet<Referral> Referrals => Set<Referral>();
+    public DbSet<SteamHistoryConnection> SteamHistoryConnections => Set<SteamHistoryConnection>();
+    public DbSet<SteamHistoryMatch> SteamHistoryMatches => Set<SteamHistoryMatch>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -50,6 +52,18 @@ public sealed class GenerationDbContext(DbContextOptions<GenerationDbContext> op
         builder.Entity<TokenPurchase>().HasIndex(value => value.ProviderPaymentId).IsUnique();
         builder.Entity<Referral>().HasIndex(value => value.ReferredUserId).IsUnique();
         builder.Entity<Referral>().HasIndex(value => new { value.ReferrerUserId, value.ReferredUserId }).IsUnique();
+        builder.Entity<SteamHistoryConnection>().HasIndex(value => value.UserId).IsUnique();
+        builder.Entity<SteamHistoryConnection>().HasOne(value => value.User)
+            .WithOne(value => value.SteamHistoryConnection)
+            .HasForeignKey<SteamHistoryConnection>(value => value.UserId)
+            .OnDelete(DeleteBehavior.Cascade);
+        builder.Entity<SteamHistoryMatch>().Property(value => value.Availability).HasConversion<string>();
+        builder.Entity<SteamHistoryMatch>()
+            .HasIndex(value => new { value.SteamHistoryConnectionId, value.ShareCode }).IsUnique();
+        builder.Entity<SteamHistoryMatch>().HasOne(value => value.Connection)
+            .WithMany(value => value.Matches)
+            .HasForeignKey(value => value.SteamHistoryConnectionId)
+            .OnDelete(DeleteBehavior.Cascade);
         builder.Entity<Generation>().HasIndex(value => value.PublicId).IsUnique();
         builder.Entity<Generation>().Property(value => value.Status).HasConversion<string>();
         builder.Entity<Generation>().Property(value => value.PaymentStatus).HasConversion<string>();

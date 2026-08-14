@@ -363,6 +363,83 @@ work resumes from persisted Stage 2/3 artifacts, and progress is sent through
 SignalR with HTTP polling as a fallback. The final endpoint supports HTTP Range
 and download; opaque generation URLs currently act as bearer secrets.
 
+### Steam match-code import
+
+The web flow also accepts CS2 match share codes (`CSGO-...`) and imports the
+official Valve replay as a normal `.dem` upload. The preferred provider is a
+headless server bot built on `steam-user` and `globaloffensive`; users do not
+need Steam running on their computers. The old local-Steam `boiler-writter`
+provider remains available as an automatic fallback.
+
+Install Node dependencies, then authorize a dedicated bot account once by QR:
+
+```powershell
+npm install
+npm run steam-bot:auth
+```
+
+Scan the QR code with the Steam mobile application and approve the login. The
+command writes the resulting SteamClient refresh token to the git-ignored
+`artifacts/steam-gc-bot/refresh-token.txt`. Use a dedicated account rather than
+a personal inventory/trading account. The web application never receives a
+user's Steam password, cookies or Steam Guard code.
+
+For a deployment secret store, set `CS2_STEAM_BOT_REFRESH_TOKEN` instead of
+using a file. `CS2_STEAM_BOT_REFRESH_TOKEN_FILE` can point the helper at a
+mounted secret. Set `SteamDemoImport:Provider` to `ServerBot` to require the
+headless provider, `LocalSteam` to force `boiler-writter`, or leave `Auto` to
+prefer a configured server bot and fall back to local Steam.
+
+Test the bot independently with:
+
+```powershell
+npm run steam-bot:resolve -- CSGO-xxxxx-xxxxx-xxxxx-xxxxx-xxxxx
+```
+
+It prints a JSON array containing the Valve replay URL. A refresh token can
+expire or be revoked; rerun `npm run steam-bot:auth` when the UI reports an
+authentication error.
+
+#### Connected Steam match history
+
+Authenticated users can open `/SteamHistory`, connect their Steam match
+history once, refresh it later, and select every replay that is still available
+from Valve. Valve's API only returns the match after a known share code, so the
+first connection seeds the list with the supplied match and automatically
+accumulates future matches; it cannot backfill older history.
+
+The application operator must create a Steam Web API key at
+<https://steamcommunity.com/dev/apikey> and configure it as a secret:
+
+```powershell
+$env:SteamHistory__WebApiKey = "your-operator-api-key"
+dotnet run --project .\src\Cs2Highlight.Web --urls http://127.0.0.1:5080
+```
+
+For a persistent local setup, put `SteamHistory:WebApiKey` in the git-ignored
+`src/Cs2Highlight.Web/appsettings.local.json`. Do not ask users for a Web API
+key. Each user supplies only SteamID64, the match-history authentication code,
+and one current share code from Steam's personal game-data page. Authentication
+codes are protected with ASP.NET Core Data Protection before they are stored;
+the key ring persists under `storage/data-protection`.
+
+#### Local Steam fallback
+
+When no server-bot token is configured and provider mode is `Auto`, the server
+uses the local Steam Game Coordinator through `boiler-writter`; Steam must then
+be running and logged in on the render machine. Install the pinned Windows
+helper and keep its default path:
+
+```powershell
+.\scripts\install-boiler-writter.ps1
+```
+
+Then paste one or more codes into the Steam import box on the home page. Valve
+replay links are temporary (normally about one month), so import a match soon
+after it is played. The public Steam Web API alone is not enough to resolve the
+demo URL; it only iterates match-history codes, while the Game Coordinator
+returns the replay metadata.
+
 Configure machine-local paths:
 
 ```powershell

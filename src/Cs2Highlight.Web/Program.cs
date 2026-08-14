@@ -5,6 +5,7 @@ using Cs2Highlight.Web.Data;
 using Cs2Highlight.Web.Domain;
 using Cs2Highlight.Web.Hubs;
 using Cs2Highlight.Web.Services;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.RateLimiting;
@@ -19,6 +20,11 @@ builder.Services.AddRazorPages(options =>
 {
     options.Conventions.ConfigureFilter(new Microsoft.AspNetCore.Mvc.AutoValidateAntiforgeryTokenAttribute());
 });
+IDataProtectionBuilder dataProtection = builder.Services.AddDataProtection()
+    .SetApplicationName("CSHighlighter")
+    .PersistKeysToFileSystem(new DirectoryInfo(Path.GetFullPath("storage/data-protection")));
+if (OperatingSystem.IsWindows())
+    dataProtection.ProtectKeysWithDpapi(protectToLocalMachine: true);
 builder.Services.AddIdentity<ApplicationUser, IdentityRole>(options =>
 {
     options.User.RequireUniqueEmail = true;
@@ -44,6 +50,10 @@ builder.Services.AddDbContextFactory<GenerationDbContext>(options =>
 UploadOptions uploadOptions = builder.Configuration.GetSection("Uploads").Get<UploadOptions>() ?? new();
 StorageOptions storageOptions = builder.Configuration.GetSection("Storage").Get<StorageOptions>() ?? new();
 PipelineOptions pipelineOptions = builder.Configuration.GetSection("Pipeline").Get<PipelineOptions>() ?? new();
+SteamDemoImportOptions steamDemoImportOptions =
+    builder.Configuration.GetSection("SteamDemoImport").Get<SteamDemoImportOptions>() ?? new();
+SteamHistoryOptions steamHistoryOptions =
+    builder.Configuration.GetSection("SteamHistory").Get<SteamHistoryOptions>() ?? new();
 CinematicCameraRuntimeOptions cinematicCameraOptions =
     builder.Configuration.GetSection("CinematicCameraRuntime")
         .Get<CinematicCameraRuntimeOptions>() ?? new();
@@ -63,6 +73,8 @@ LegalOptions legalOptions =
 builder.Services.AddSingleton(uploadOptions);
 builder.Services.AddSingleton(storageOptions);
 builder.Services.AddSingleton(pipelineOptions);
+builder.Services.AddSingleton(steamDemoImportOptions);
+builder.Services.AddSingleton(steamHistoryOptions);
 builder.Services.AddSingleton(cinematicCameraOptions);
 builder.Services.AddSingleton(retentionOptions);
 builder.Services.AddSingleton(musicUploadOptions);
@@ -81,6 +93,17 @@ builder.WebHost.ConfigureKestrel(options =>
 builder.Services.AddSingleton<GenerationStorage>();
 builder.Services.AddSingleton<GenerationMetrics>();
 builder.Services.AddSingleton<DemoUploadService>();
+builder.Services.AddSingleton<SteamDemoImportService>();
+builder.Services.AddSingleton<SteamHistorySecretProtector>();
+builder.Services.AddSingleton<SteamMatchHistoryApiClient>();
+builder.Services.AddSingleton<SteamServerBotProbeClient>();
+builder.Services.AddSingleton<SteamHistoryService>();
+builder.Services.AddSingleton<SteamGenerationCreationService>();
+builder.Services.AddHttpClient("steam-demo", client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(3);
+    client.DefaultRequestHeaders.UserAgent.ParseAdd("CSHighlighter/1.0");
+});
 builder.Services.AddSingleton<IMusicMediaValidator, FfprobeMusicMediaValidator>();
 builder.Services.AddSingleton<MusicUploadService>();
 builder.Services.AddSingleton<TrustedLutCatalog>();

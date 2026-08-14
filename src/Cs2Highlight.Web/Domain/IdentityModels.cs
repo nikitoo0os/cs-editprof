@@ -15,6 +15,7 @@ public sealed class ApplicationUser : IdentityUser
     public List<TokenTransaction> TokenTransactions { get; set; } = [];
     public List<TokenPurchase> TokenPurchases { get; set; } = [];
     public List<Generation> Generations { get; set; } = [];
+    public SteamHistoryConnection? SteamHistoryConnection { get; set; }
 }
 
 public enum ConsentType

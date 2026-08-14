@@ -1,0 +1,127 @@
+@page
+@model SteamHistoryModel
+@using Cs2Highlight.Web.Domain
+@{
+  ViewData["Title"] = "История матчей Steam";
+  string? error = Model.ErrorCode switch
+  {
+    "STEAM_HISTORY_API_NOT_CONFIGURED" => "На сервере ещё не указан Steam Web API key. Добавь SteamHistory__WebApiKey и перезапусти проект.",
+    "STEAM_HISTORY_AUTH_INVALID" => "Steam отклонил SteamID64 или код авторизации истории матчей.",
+    "STEAM_HISTORY_KNOWN_CODE_INVALID" => "Steam не принял стартовый код матча. Скопируй свежий код с той же страницы.",
+    "STEAM_HISTORY_STEAM_ID_INVALID" => "Нужен SteamID64 — 17 цифр.",
+    "STEAM_HISTORY_AUTH_FORMAT_INVALID" => "Проверь формат кода авторизации истории матчей.",
+    "INVALID_MATCH_CODE" => "Проверь стартовый код матча CSGO-…",
+    "STEAM_HISTORY_API_UNAVAILABLE" => "API истории Steam временно недоступен. Попробуй обновить позже.",
+    "STEAM_BOT_GC_UNAVAILABLE" => "CS2 Game Coordinator временно не отвечает. Попробуй ещё раз.",
+    "STEAM_BOT_AUTH_FAILED" => "Сессия серверного Steam-бота истекла — её нужно переподключить.",
+    "STEAM_HISTORY_NO_SELECTION" => "Выбери хотя бы один доступный матч.",
+    "STEAM_HISTORY_SELECTION_INVALID" => "Один из выбранных replay уже недоступен. Обнови список.",
+    "TOO_MANY_MATCH_CODES" => "За один мувик можно выбрать не больше 10 матчей.",
+    "TOKEN_BALANCE_INSUFFICIENT" => "Для создания видео нужен один свободный токен.",
+    "DEMO_EXPIRED" => "Один из replay уже удалён Valve. Обнови историю и выбери свежий матч.",
+    null => null,
+    _ => "Не удалось обновить историю Steam. Попробуй ещё раз."
+  };
+}
+
+<section class="page-hero">
+  <span class="page-eyebrow">STEAM MATCH HISTORY / АВТОИМПОРТ</span>
+  <h1 class="page-title">Твои матчи — без захода в CS2</h1>
+  <p class="page-lead">Один раз подключи историю. После этого новые матчи появятся здесь по кнопке «Обновить».</p>
+</section>
+
+@if (error is not null)
+{
+  <div class="error-state-inline" role="alert" style="margin-bottom:18px">@error</div>
+}
+@if (Model.Notice is not null)
+{
+  <div class="surface surface-pad" role="status" style="margin-bottom:18px;border-color:#2c7a68">@Model.Notice</div>
+}
+
+@if (Model.Connection is null)
+{
+  <section class="surface surface--elevated surface-pad" style="max-width:760px">
+    <span class="console-kicker">ПОДКЛЮЧЕНИЕ / ОДИН РАЗ</span>
+    <h2 class="section-title" style="margin-top:10px">Подключить историю матчей</h2>
+    <p class="muted">На странице Steam скопируй SteamID64, код авторизации и код последнего соревновательного матча.</p>
+    <p><a class="btn btn-secondary" href="https://steamcommunity.com/my/gcpd/730/?tab=matchhistorycompetitive" target="_blank" rel="noopener">Открыть страницу Steam</a></p>
+    <form method="post" asp-page-handler="Connect" data-loading-form style="display:grid;gap:16px;margin-top:22px">
+      <label class="form-label">SteamID64
+        <input asp-for="Input.SteamId64" class="form-input" placeholder="7656119…" autocomplete="off" />
+      </label>
+      <label class="form-label">Код авторизации истории матчей
+        <input asp-for="Input.AuthenticationCode" class="form-input" placeholder="XXXX-XXXXX-XXXX" autocomplete="off" />
+      </label>
+      <label class="form-label">Код последнего матча
+        <input asp-for="Input.KnownShareCode" class="form-input" placeholder="CSGO-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX" autocomplete="off" />
+      </label>
+      <button class="btn btn-primary btn-lg" type="submit" data-loading-label="Подключаем Steam…">Подключить и найти матчи</button>
+    </form>
+    <p class="subtle" style="margin-top:16px">Пароль, Steam Guard и cookies не нужны. Код истории хранится в зашифрованном виде и удаляется при отключении.</p>
+  </section>
+}
+else
+{
+  <section class="surface surface-pad" style="margin-bottom:18px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:18px;flex-wrap:wrap">
+      <div>
+        <span class="console-kicker">STEAMID @Model.Connection.SteamId64</span>
+        <h2 class="section-title" style="margin-top:8px">История подключена</h2>
+        <p class="muted" style="margin:6px 0 0">Последнее обновление: @(Model.Connection.LastSyncedAtUtc?.ToLocalTime().ToString("dd.MM.yyyy HH:mm") ?? "ещё не завершено")</p>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <form method="post" asp-page-handler="Sync" data-loading-form>
+          <button class="btn btn-primary" type="submit" data-loading-label="Ищем новые матчи…">Обновить матчи</button>
+        </form>
+        <form method="post" asp-page-handler="Disconnect">
+          <button class="btn btn-secondary" type="submit">Отключить</button>
+        </form>
+      </div>
+    </div>
+  </section>
+
+  <form method="post" asp-page-handler="Import" data-loading-form>
+    <section class="surface surface--elevated surface-pad">
+      <div style="display:flex;align-items:end;justify-content:space-between;gap:18px;flex-wrap:wrap;margin-bottom:18px">
+        <div>
+          <span class="console-kicker">REPLAY VAULT / @Model.Matches.Count МАТЧЕЙ</span>
+          <h2 class="section-title" style="margin-top:8px">Выбери матчи для мувика</h2>
+        </div>
+        <button class="btn btn-primary" type="submit" data-loading-label="Загружаем replay…">Импортировать выбранные</button>
+      </div>
+      @if (Model.Matches.Count == 0)
+      {
+        <p class="muted">Матчей пока нет. Нажми «Обновить матчи».</p>
+      }
+      else
+      {
+        <div style="display:grid;gap:10px">
+          @foreach (SteamHistoryMatch match in Model.Matches)
+          {
+            bool available = match.Availability == SteamReplayAvailability.Available;
+            string status = match.Availability switch
+            {
+              SteamReplayAvailability.Available => "REPLAY ДОСТУПЕН",
+              SteamReplayAvailability.Expired => "REPLAY УДАЛЁН",
+              SteamReplayAvailability.Unavailable => "НЕДОСТУПЕН",
+              _ => "ОЖИДАЕТ ПРОВЕРКИ"
+            };
+            <label class="surface steam-history-match" style="opacity:@(available ? "1" : ".62")">
+              <input type="checkbox" name="SelectedMatchIds" value="@match.Id" disabled="@(!available)" style="width:20px;height:20px" />
+              <span class="steam-history-match__identity">
+                <strong>@(match.PlayedAtUtc?.ToLocalTime().ToString("dd.MM.yyyy · HH:mm") ?? "Дата уточняется")</strong>
+                <small class="subtle" style="display:block;margin-top:4px">@match.ShareCode</small>
+              </span>
+              <span class="steam-history-match__status">
+                @if (match.Score is not null) { <strong style="display:block">@match.Score</strong> }
+                <small class="console-kicker">@status</small>
+              </span>
+            </label>
+          }
+        </div>
+      }
+    </section>
+  </form>
+  <p class="subtle" style="margin-top:14px">Valve отдаёт только матчи новее стартового кода. Старые replay постепенно удаляются, поэтому свежие лучше импортировать сразу.</p>
+}

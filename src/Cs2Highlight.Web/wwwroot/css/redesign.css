@@ -434,6 +434,26 @@ body {
   padding: clamp(22px, 3vw, 36px);
 }
 
+.steam-history-match {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+}
+
+.steam-history-match__identity {
+  min-width: 0;
+}
+
+.steam-history-match__identity .subtle {
+  overflow-wrap: anywhere;
+}
+
+.steam-history-match__status {
+  text-align: right;
+}
+
 .section-title {
   color: var(--cr-text);
   font-size: clamp(1.2rem, 1.8vw, 1.55rem);
@@ -1299,6 +1319,15 @@ select:focus {
 }
 
 @media (max-width: 720px) {
+  .steam-history-match {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .steam-history-match__status {
+    grid-column: 2;
+    text-align: left;
+  }
   .profile-hero,
   .profile-section__heading {
     align-items: stretch;

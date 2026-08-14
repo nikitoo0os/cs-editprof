@@ -8,6 +8,23 @@
     "TOO_MANY_FILES" => "Выбрано слишком много файлов.",
     "ALL_FILES_DUPLICATE" => "Все выбранные демки уже были добавлены.",
     "TOKEN_BALANCE_INSUFFICIENT" => "Для создания видео нужен один свободный токен. Пополните баланс или дождитесь завершения уже запущенного рендера.",
+    "INVALID_MATCH_CODE" => "Проверь формат кода матча CS2.",
+    "NO_MATCH_CODES" => "Вставь хотя бы один код матча.",
+    "TOO_MANY_MATCH_CODES" => "Слишком много кодов матчей за один импорт.",
+    "STEAM_IMPORT_NOT_CONFIGURED" => "Импорт Steam пока не настроен на render-машине.",
+    "STEAM_IMPORT_DISABLED" => "Импорт через Steam отключён в настройках.",
+    "STEAM_IMPORT_TIMEOUT" => "Steam не ответил вовремя. Повтори импорт через минуту.",
+    "STEAM_IMPORT_FAILED" => "Steam не смог получить эту демку. Проверь, что Steam запущен и матч ещё доступен.",
+    "STEAM_BOT_NOT_CONFIGURED" => "Серверный Steam-бот ещё не подключён.",
+    "STEAM_BOT_AUTH_FAILED" => "Сессия серверного Steam-бота истекла. Администратору нужно повторно подключить аккаунт.",
+    "STEAM_BOT_GC_UNAVAILABLE" => "Серверный Steam-бот вошёл в Steam, но CS2 Game Coordinator пока не отвечает.",
+    "STEAM_BOT_FAILED" => "Серверный Steam-бот не смог получить replay. Попробуй ещё раз.",
+    "MATCH_NOT_FOUND" => "Steam не нашёл матч по этому коду. Возьми код из CS2 → Ваши матчи и попробуй свежий replay.",
+    "DEMO_URL_NOT_FOUND" => "Steam вернул матч без ссылки на replay. Попробуй другой код.",
+    "STEAM_DOWNLOAD_FAILED" => "Сервер replay у Valve временно не отвечает. Подожди немного и повтори импорт.",
+    "DUPLICATE_MATCH_CODES" => "Один и тот же код матча вставлен несколько раз.",
+    "DEMO_EXPIRED" => "Эта демка уже удалена с серверов Valve.",
+    "ALL_MATCHES_DUPLICATE" => "Все эти демки уже были добавлены в эту генерацию.",
     _ when Model.Error is not null => "Не удалось загрузить демки. Проверь файлы и попробуй ещё раз.",
     _ => null
   };
@@ -93,6 +110,34 @@
       </button>
     </form>
   </section>
+</section>
+
+<section class="surface surface-pad" style="margin-top:18px">
+  <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px">
+    <div>
+      <span class="console-kicker">STEAM GAME COORDINATOR / БЫСТРЫЙ ИМПОРТ</span>
+      <h2 class="section-title" style="margin-top:10px">Или вставь коды матчей</h2>
+      <p class="muted" style="margin:8px 0 0">По одному коду в строке. Replay получает серверный Steam-бот — запускать Steam у себя не нужно.</p>
+    </div>
+    <img class="ui-icon ui-icon--brand" src="/assets/icons/download.svg" alt="" style="width:28px;height:28px" />
+  </div>
+  <form method="post" asp-antiforgery="true" asp-page-handler="Import" data-loading-form style="margin-top:18px">
+    <textarea asp-for="MatchShareCodes"
+              rows="4"
+              class="form-input"
+              placeholder="CSGO-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX"
+              spellcheck="false"
+              autocomplete="off"></textarea>
+    <button type="submit" class="btn btn-secondary btn-block" style="margin-top:12px" data-loading-label="Запрашиваем демки…">
+      <img class="ui-icon" src="/assets/icons/download.svg" alt="" />
+      Получить демки из Steam
+    </button>
+  </form>
+  @if (User.Identity?.IsAuthenticated == true)
+  {
+    <p style="margin:12px 0 0"><a class="btn btn-primary btn-block" asp-page="/SteamHistory">Выбрать из истории Steam</a></p>
+  }
+  <p class="subtle" style="margin:12px 0 0">Пароль Steam, Steam Guard и cookies сайту не нужны. Коды действуют, пока Valve хранит replay — обычно около месяца.</p>
 </section>
 
 <section class="surface surface-pad" style="margin-top:18px">

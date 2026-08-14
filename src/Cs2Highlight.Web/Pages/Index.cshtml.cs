@@ -13,6 +13,7 @@ namespace Cs2Highlight.Web.Pages;
 public sealed class IndexModel(
     IDbContextFactory<GenerationDbContext> dbFactory,
     DemoUploadService uploads,
+    SteamGenerationCreationService steamGenerations,
     GenerationWakeSignal queue,
     UploadOptions options,
     PaymentOptions paymentOptions,
@@ -21,6 +22,7 @@ public sealed class IndexModel(
     GenerationMetrics metrics) : PageModel
 {
     [BindProperty] public List<IFormFile> DemoFiles { get; set; } = [];
+    [BindProperty] public string MatchShareCodes { get; set; } = string.Empty;
     public int MaximumFiles => options.MaximumFilesPerGeneration;
     public long MaximumFileSizeBytes => options.MaximumFileSizeBytes;
     public string? Error { get; private set; }
@@ -89,6 +91,32 @@ public sealed class IndexModel(
             metrics.GenerationCreated.Add(1);
             queue.Wake();
             return RedirectToPage("/Generation", new { publicId = generation.PublicId });
+        }
+        catch (Exception exception) when (
+            exception is InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            Error = exception.Message;
+            return Page();
+        }
+    }
+
+    public async Task<IActionResult> OnPostImportAsync(CancellationToken cancellationToken)
+    {
+        if (!User.Identity?.IsAuthenticated ?? true)
+            return RedirectToPage("/Account/Login", new { returnUrl = Request.Path });
+        ApplicationUser user = await userManager.GetUserAsync(User) ??
+            throw new InvalidOperationException("AUTHENTICATED_USER_NOT_FOUND");
+        try
+        {
+            string[] codes = (MatchShareCodes ?? string.Empty)
+                .Split(['\r', '\n', ',', ';', ' ', '\t'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            string publicId = await steamGenerations.CreateAsync(user, codes, cancellationToken);
+            return RedirectToPage("/Generation", new { publicId });
+        }
+        catch (SteamDemoImportException exception)
+        {
+            Error = exception.Code;
+            return Page();
         }
         catch (Exception exception) when (
             exception is InvalidOperationException or IOException or UnauthorizedAccessException)
