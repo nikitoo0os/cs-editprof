@@ -119,6 +119,10 @@ public sealed class ProcessRenderAgentClientTests : IDisposable
             await File.ReadAllTextAsync(fallbackPath),
             JsonOptions)!;
         Assert.Equal(RenderCameraMode.PlayerPov, fallback.Camera.Mode);
+        Assert.Equal(CaptureUiProfile.Gameplay, fallback.CaptureUi);
+        Assert.Equal(
+            CapturePresentationMode.PovCombat,
+            fallback.EffectivePresentationMode);
         RenderJob unchanged = JsonSerializer.Deserialize<RenderJob>(
             await File.ReadAllTextAsync(jobPath),
             JsonOptions)!;

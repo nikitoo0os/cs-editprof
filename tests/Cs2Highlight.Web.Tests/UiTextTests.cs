@@ -43,4 +43,14 @@ public sealed class UiTextTests
         Assert.Contains("оставьте не больше 4 из 7", message);
         Assert.Contains("уберите минимум 3", message);
     }
+
+    [Fact]
+    public void IncompatibleDemoExplainsThatAnotherGameVersionIsRequired()
+    {
+        string message = UiText.Error("DEMO_NETWORK_VERSION_INCOMPATIBLE");
+
+        Assert.Contains("демка", message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("верс", message, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("DEMO_", message, StringComparison.Ordinal);
+    }
 }

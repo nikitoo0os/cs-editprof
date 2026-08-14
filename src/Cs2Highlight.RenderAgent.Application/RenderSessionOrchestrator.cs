@@ -271,13 +271,34 @@ public sealed class RenderSessionOrchestrator(
                 }
                 catch (Exception exception) when (exception is not OperationCanceledException)
                 {
+                    bool demoIncompatible =
+                        exception is DemoPlaybackIncompatibleException;
+                    string errorCode = demoIncompatible
+                        ? "DEMO_NETWORK_VERSION_INCOMPATIBLE"
+                        : "DEMO_CONTROL_FAILED";
                     outcomes[item.Index] = await FailAsync(
                         item,
                         RenderState.Recording,
-                        "DEMO_CONTROL_FAILED",
+                        errorCode,
                         exception.Message,
-                        true,
+                        !demoIncompatible,
                         processes);
+                    if (demoIncompatible)
+                    {
+                        for (int remaining = preparedIndex + 1;
+                             remaining < prepared.Count;
+                             remaining++)
+                        {
+                            outcomes[prepared[remaining].Index] = await FailAsync(
+                                prepared[remaining],
+                                RenderState.Recording,
+                                errorCode,
+                                "Rendering was stopped because this demo cannot be played by the installed CS2 version.",
+                                false,
+                                processes);
+                        }
+                        break;
+                    }
                 }
             }
 

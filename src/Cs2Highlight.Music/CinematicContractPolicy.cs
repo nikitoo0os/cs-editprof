@@ -8,7 +8,7 @@ public sealed record CinematicContractValidationReport(
 {
     public static CinematicContractValidationReport Valid(
         IReadOnlyDictionary<string, bool> checks) =>
-        new("10.8", true, checks, []);
+        new(CinematicContractPolicy.ContractVersion, true, checks, []);
 }
 
 /// <summary>
@@ -18,8 +18,9 @@ public sealed record CinematicContractValidationReport(
 /// </summary>
 public static class CinematicContractPolicy
 {
-    public const string ContractVersion = "10.8";
-    public const double MaximumMovieDurationSeconds = 60;
+    public const string ContractVersion = "10.9";
+    public const double StandardMaximumMovieDurationSeconds = 60;
+    public const double MaximumMovieDurationSeconds = 180;
     public const double MinimumFreeCameraShotSeconds = 1.5;
     public const double MinimumOrdinaryShotSeconds = 0.25;
     public const double TargetIntegratedLoudnessLufs = -14;

@@ -31,7 +31,30 @@ public sealed class GenerationModel(
             .SingleOrDefaultAsync(value => value.PublicId == publicId, cancellationToken);
         if (generation is null || !GenerationAccess.CanRead(generation, User, environment)) return NotFound();
         if (generation.Status == GenerationStatus.AwaitingPlayerSelection)
-            return RedirectToPage("/Player", new { publicId });
+        {
+            long? demoId = await db.GenerationDemos.AsNoTracking()
+                .Where(value =>
+                    value.GenerationId == generation.Id &&
+                    value.AnalysisStatus == DemoAnalysisStatus.Succeeded &&
+                    !value.HighlightSelectionCompleted)
+                .OrderBy(value => value.UploadOrder)
+                .Select(value => (long?)value.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+            return RedirectToPage("/Player", new { publicId, demoId });
+        }
+        if (generation.Status == GenerationStatus.AwaitingHighlightSelection)
+        {
+            long? demoId = await db.GenerationDemos.AsNoTracking()
+                .Where(value =>
+                    value.GenerationId == generation.Id &&
+                    value.AnalysisStatus == DemoAnalysisStatus.Succeeded &&
+                    value.SelectedSteamId != null &&
+                    !value.HighlightSelectionCompleted)
+                .OrderBy(value => value.UploadOrder)
+                .Select(value => (long?)value.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+            return RedirectToPage("/Highlights", new { publicId, demoId });
+        }
         if (generation.Status == GenerationStatus.AwaitingMovieConfiguration)
             return RedirectToPage("/Music", new { publicId });
         Generation = generation;

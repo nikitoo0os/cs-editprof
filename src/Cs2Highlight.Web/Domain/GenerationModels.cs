@@ -288,6 +288,9 @@ public sealed class GenerationDemo
     [MaxLength(128)] public string? MapName { get; set; }
     public int? TickRate { get; set; }
     public long? DurationTicks { get; set; }
+    [MaxLength(17)] public string? SelectedSteamId { get; set; }
+    [MaxLength(128)] public string? SelectedPlayerName { get; set; }
+    public bool HighlightSelectionCompleted { get; set; }
     [MaxLength(64)] public string? ErrorCode { get; set; }
     [MaxLength(1024)] public string? ErrorMessage { get; set; }
 }

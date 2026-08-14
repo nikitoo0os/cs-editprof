@@ -15,7 +15,6 @@ public sealed partial class GenerationWorker(
     GenerationCancellationRegistry cancellations,
     GenerationStorage storage,
     PipelineOptions pipelineOptions,
-    GlobalHighlightSelector globalSelector,
     IMusicAnalyzerClient musicAnalyzer,
     IMusicalAnchorBuilder musicalAnchorBuilder,
     IMusicEditPlanner musicEditPlanner,
@@ -478,6 +477,20 @@ public sealed partial class GenerationWorker(
 
     private async Task GenerateAsync(string publicId, CancellationToken cancellationToken)
     {
+        DriveInfo renderDrive = new(Path.GetPathRoot(storage.Root)!);
+        if (renderDrive.AvailableFreeSpace <
+            pipelineOptions.MinimumRenderFreeDiskSpaceBytes)
+        {
+            await FailAsync(
+                publicId,
+                "INSUFFICIENT_RENDER_DISK_SPACE",
+                $"INSUFFICIENT_RENDER_DISK_SPACE:" +
+                $"available={renderDrive.AvailableFreeSpace};" +
+                $"required={pipelineOptions.MinimumRenderFreeDiskSpaceBytes}",
+                cancellationToken,
+                refundToken: false);
+            return;
+        }
         Generation snapshot;
         await using (GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken))
             snapshot = await db.Generations
@@ -493,9 +506,13 @@ public sealed partial class GenerationWorker(
             await FailAsync(publicId, "PAYMENT_REQUIRED", "Successful payment is required.", cancellationToken);
             return;
         }
-        if (snapshot.SelectedSteamId is null)
+        if (snapshot.Demos
+            .Where(value => value.AnalysisStatus == DemoAnalysisStatus.Succeeded)
+            .Any(value =>
+                value.SelectedSteamId is null ||
+                !value.HighlightSelectionCompleted))
         {
-            await FailAsync(publicId, "PLAYER_NOT_FOUND", "A player was not selected.", cancellationToken);
+            await FailAsync(publicId, "PLAYER_NOT_FOUND", "A player and highlights must be selected for every demo.", cancellationToken);
             return;
         }
         if (snapshot.Status is GenerationStatus.QueuedForGeneration or
@@ -519,33 +536,29 @@ public sealed partial class GenerationWorker(
         GenerationHighlight[] manualSelection = snapshot.Highlights
             .Where(value =>
                 value.SelectedByUser &&
-                value.SteamId == snapshot.SelectedSteamId)
+                demos.TryGetValue(
+                    value.GenerationDemoId,
+                    out GenerationDemo? demo) &&
+                value.SteamId == demo.SelectedSteamId)
             .OrderBy(value => value.SelectionOrder)
             .ThenBy(value => value.HighlightId, StringComparer.Ordinal)
             .ToArray();
-        IReadOnlyList<GlobalHighlightCandidate> selected = manualSelection.Length > 0
-            ? manualSelection.Select(value => new GlobalHighlightCandidate(
+        GlobalHighlightCandidate[] selected = manualSelection
+            .Select(value => new GlobalHighlightCandidate(
                 value.GenerationDemoId,
                 demos[value.GenerationDemoId].StoredPath,
                 demos[value.GenerationDemoId].UploadOrder,
-                ToCandidate(value, snapshot.SelectedPlayerName))).ToArray()
-            : globalSelector.Select(
-                snapshot.Highlights.Select(value => new GlobalHighlightCandidate(
-                    value.GenerationDemoId,
-                    demos[value.GenerationDemoId].StoredPath,
-                    demos[value.GenerationDemoId].UploadOrder,
-                    ToCandidate(value, snapshot.SelectedPlayerName))),
-                snapshot.SelectedSteamId,
-                snapshot.MaximumHighlights,
-                snapshot.MinimumScore,
-                snapshot.OutputOrder);
-        if (selected.Count == 0)
+                ToCandidate(
+                    value,
+                    demos[value.GenerationDemoId].SelectedPlayerName)))
+            .ToArray();
+        if (selected.Length == 0)
         {
             await FailAsync(publicId, "NO_HIGHLIGHTS_FOUND", "No highlights matched the settings.", cancellationToken);
             return;
         }
         CinematicMoviePlan? cinematicPlan = null;
-        IReadOnlyList<GlobalHighlightCandidate> renderSelection = selected;
+        GlobalHighlightCandidate[] renderSelection = selected;
         if (cinematicDirector)
         {
             await using GenerationDbContext cinematicDb =
@@ -600,14 +613,20 @@ public sealed partial class GenerationWorker(
                 throw new InvalidOperationException(
                     $"CINEMATIC_LOCKED_BROLL_MISSING:{string.Join(',', missing)}");
             }
+            cinematicPlan = RestoreMissingSubjectRoutes(
+                cinematicPlan,
+                brollRows,
+                demos);
             renderSelection =
             [
                 .. selected,
                 .. brollRows.Select(value => ToBrollRenderCandidate(
                     value,
                     demos[value.GenerationDemoId],
-                    snapshot.SelectedSteamId,
-                    snapshot.SelectedPlayerName))
+                    demos[value.GenerationDemoId].SelectedSteamId ??
+                        snapshot.SelectedSteamId!,
+                    demos[value.GenerationDemoId].SelectedPlayerName ??
+                        snapshot.SelectedPlayerName))
             ];
         }
         await PersistSelectionAndPlanAsync(snapshot, selected, cancellationToken);
@@ -623,7 +642,7 @@ public sealed partial class GenerationWorker(
                     ? GenerationStatus.RenderingHighlights
                     : GenerationStatus.RenderingClips,
                 40,
-                $"Rendering 0/{renderSelection.Count} cinematic sources",
+                $"Rendering 0/{renderSelection.Length} cinematic sources",
                 cancellationToken);
         }
         GenerationStatus renderingStatus = cinematicDirector
@@ -635,6 +654,7 @@ public sealed partial class GenerationWorker(
         Dictionary<string, string> renderJobPaths =
             new(StringComparer.Ordinal);
         IReadOnlyList<CameraPreviewResult> persistedCameraFallbacks = [];
+        BatchItemError? terminalRenderError = null;
         bool cameraStagesCompleted = false;
         int renderedCount = 0;
         foreach (IGrouping<long, GlobalHighlightCandidate> demoGroup in
@@ -648,104 +668,127 @@ public sealed partial class GenerationWorker(
             BatchRenderState? state = null;
             string planPath = Path.Combine(batchRoot, "batch-plan.json");
             string statePath = Path.Combine(batchRoot, "batch-state.json");
-            if (File.Exists(planPath))
-            {
-                plan = await store.LoadAsync<BatchRenderPlan>(planPath, cancellationToken);
-                if (File.Exists(statePath))
-                    state = await store.LoadAsync<BatchRenderState>(statePath, cancellationToken);
-            }
-            else
-            {
-                BatchPlanBuildResult build = new BatchPlanBuilder(new RenderJobBuilder(), timeProvider).Build(
+            BatchPlanBuildResult build = new BatchPlanBuilder(
+                new RenderJobBuilder(),
+                timeProvider).Build(
                     demo.StoredPath,
                     batchRoot,
-                    snapshot.SelectedSteamId,
+                    demo.SelectedSteamId ?? snapshot.SelectedSteamId!,
                     demoGroup.Select(value => value.Highlight).ToArray(),
                     new BatchRenderOptions
                     {
                         ContinueOnError = true,
                         UseSharedCs2Session = true,
+                        OverlapPolicy = OverlapResolutionPolicy.KeepAll,
                         MaximumClips = null,
                         Width = snapshot.Width,
                         Height = snapshot.Height,
                         Fps = snapshot.Fps
                     });
-                plan = build.Plan;
-                await store.SaveAsync(planPath, plan, cancellationToken);
-                foreach (BatchRenderItem item in plan.Items)
+            if (File.Exists(planPath))
+            {
+                BatchRenderPlan persistedPlan =
+                    await store.LoadAsync<BatchRenderPlan>(
+                        planPath,
+                        cancellationToken);
+                if (File.Exists(statePath))
                 {
-                    Directory.CreateDirectory(Path.Combine(item.OutputDirectory, "logs"));
-                    Cs2Highlight.RenderAgent.Application.RenderJob job =
-                        build.RenderJobs[item.ItemId];
-                    if (item.HighlightId.StartsWith(
-                            "broll-",
-                            StringComparison.Ordinal))
-                    {
-                        job = job with
-                        {
-                            CaptureUi = Cs2Highlight.RenderAgent.Application
-                                .CaptureUiProfile.Cinematic,
-                            PresentationMode = Cs2Highlight.RenderAgent.Application
-                                .CapturePresentationMode.CinematicBroll,
-                            ContainsFirstPersonWeaponFire = false
-                        };
-                    }
-                    CinematicSequenceSegment? cinematicSource =
-                        cinematicPlan?.Segments.FirstOrDefault(value =>
-                            string.Equals(
-                                value.HighlightId ??
-                                value.BrollCandidateId,
-                                item.HighlightId,
-                                StringComparison.Ordinal));
-                    if (cinematicSource?.Camera.RequiresHighFpsCapture == true)
-                    {
-                        job = job with
-                        {
-                            Video = job.Video with
-                            {
-                                Fps = Math.Max(snapshot.Fps, 120)
-                            }
-                        };
-                    }
-                    if (cinematicSource is not null &&
-                        cinematicSource.Camera.Type !=
-                            CameraShotType.PlayerPov)
-                    {
-                        string mapName = demo.MapName ?? string.Empty;
-                        MapCameraProfile? profile =
-                            mapCameraProfiles.Find(mapName);
-                        job = job with
-                        {
-                            CaptureUi = Cs2Highlight.RenderAgent.Application
-                                .CaptureUiProfile.Cinematic,
-                            PresentationMode = Cs2Highlight.RenderAgent.Application
-                                .CapturePresentationMode.CinematicBroll,
-                            ContainsFirstPersonWeaponFire = false,
-                            Camera = BuildRenderCameraPlan(
-                                cinematicSource.Camera,
-                                mapName,
-                                profile?.ManuallyVerified == true,
-                                job,
-                                cameraRuntime)
-                        };
-                    }
-                    else if (cinematicSource is not null)
-                    {
-                        job = job with
-                        {
-                            CaptureUi = Cs2Highlight.RenderAgent.Application
-                                .CaptureUiProfile.Gameplay,
-                            PresentationMode = Cs2Highlight.RenderAgent.Application
-                                .CapturePresentationMode.PovCombat,
-                            Camera = Cs2Highlight.RenderAgent.Application
-                                .RenderCameraPlan.PlayerPov
-                        };
-                    }
-                    await store.SaveAsync(
-                        item.RenderJobPath,
-                        job,
+                    state = await store.LoadAsync<BatchRenderState>(
+                        statePath,
                         cancellationToken);
                 }
+                plan = build.Plan;
+                if (state is not null &&
+                    !BatchPlanReconciler.IsEquivalent(persistedPlan, plan))
+                {
+                    state = BatchPlanReconciler.ReconcileExpandedPlan(
+                        persistedPlan,
+                        state,
+                        plan,
+                        timeProvider.GetUtcNow());
+                    await store.SaveAsync(
+                        statePath,
+                        state,
+                        cancellationToken);
+                }
+                await store.SaveAsync(planPath, plan, cancellationToken);
+            }
+            else
+            {
+                plan = build.Plan;
+                await store.SaveAsync(planPath, plan, cancellationToken);
+            }
+            foreach (BatchRenderItem item in plan.Items)
+            {
+                Directory.CreateDirectory(Path.Combine(item.OutputDirectory, "logs"));
+                Cs2Highlight.RenderAgent.Application.RenderJob job =
+                    build.RenderJobs[item.ItemId];
+                if (item.HighlightId.StartsWith(
+                        "broll-",
+                        StringComparison.Ordinal))
+                {
+                    job = job with
+                    {
+                        CaptureUi = Cs2Highlight.RenderAgent.Application
+                            .CaptureUiProfile.Cinematic,
+                        PresentationMode = Cs2Highlight.RenderAgent.Application
+                            .CapturePresentationMode.CinematicBroll,
+                        ContainsFirstPersonWeaponFire = false
+                    };
+                }
+                CinematicSequenceSegment? cinematicSource =
+                    cinematicPlan?.Segments.FirstOrDefault(value =>
+                        string.Equals(
+                            value.HighlightId ??
+                            value.BrollCandidateId,
+                            item.HighlightId,
+                            StringComparison.Ordinal));
+                if (cinematicSource?.Camera.RequiresHighFpsCapture == true)
+                {
+                    job = job with
+                    {
+                        Video = job.Video with
+                        {
+                            Fps = Math.Max(snapshot.Fps, 120)
+                        }
+                    };
+                }
+                if (cinematicSource is not null &&
+                    cinematicSource.Camera.Type != CameraShotType.PlayerPov)
+                {
+                    string mapName = demo.MapName ?? string.Empty;
+                    MapCameraProfile? profile = mapCameraProfiles.Find(mapName);
+                    job = job with
+                    {
+                        CaptureUi = Cs2Highlight.RenderAgent.Application
+                            .CaptureUiProfile.Cinematic,
+                        PresentationMode = Cs2Highlight.RenderAgent.Application
+                            .CapturePresentationMode.CinematicBroll,
+                        ContainsFirstPersonWeaponFire = false,
+                        Camera = BuildRenderCameraPlan(
+                            cinematicSource.Camera,
+                            mapName,
+                            profile?.ManuallyVerified == true,
+                            job,
+                            cameraRuntime)
+                    };
+                }
+                else if (cinematicSource is not null)
+                {
+                    job = job with
+                    {
+                        CaptureUi = Cs2Highlight.RenderAgent.Application
+                            .CaptureUiProfile.Gameplay,
+                        PresentationMode = Cs2Highlight.RenderAgent.Application
+                            .CapturePresentationMode.PovCombat,
+                        Camera = Cs2Highlight.RenderAgent.Application
+                            .RenderCameraPlan.PlayerPov
+                    };
+                }
+                await store.SaveAsync(
+                    item.RenderJobPath,
+                    job,
+                    cancellationToken);
             }
             foreach (BatchRenderItem item in plan.Items)
                 renderJobPaths[item.HighlightId] = item.RenderJobPath;
@@ -756,6 +799,10 @@ public sealed partial class GenerationWorker(
                             $"RENDER_AGENT_NOT_FOUND: {pipelineOptions.RenderAgentPath}")),
                 store,
                 timeProvider).RunAsync(plan, batchRoot, state, cancellationToken);
+            terminalRenderError ??= result.Report.Items
+                .Select(value => value.Error)
+                .FirstOrDefault(value =>
+                    value?.Code == "DEMO_NETWORK_VERSION_INCOMPATIBLE");
             foreach ((BatchRenderItem item, BatchRenderReportItem reportItem) in
                      plan.Items.Zip(result.Report.Items))
             {
@@ -766,8 +813,8 @@ public sealed partial class GenerationWorker(
             renderedCount += result.Report.Summary.Succeeded;
             await PublishAsync(
                 publicId, renderingStatus,
-                40 + (int)(45d * renderedCount / renderSelection.Count),
-                $"Rendered {renderedCount}/{renderSelection.Count} cinematic sources",
+                40 + (int)(45d * renderedCount / renderSelection.Length),
+                $"Rendered {renderedCount}/{renderSelection.Length} cinematic sources",
                 cancellationToken);
         }
         if (cinematicPlan is not null)
@@ -1019,7 +1066,12 @@ public sealed partial class GenerationWorker(
             .ToArray();
         if (clips.Length == 0)
         {
-            await FailAsync(publicId, "NO_CLIPS_RENDERED", "No selected clip rendered successfully.", cancellationToken);
+            await FailAsync(
+                publicId,
+                terminalRenderError?.Code ?? "NO_CLIPS_RENDERED",
+                terminalRenderError?.Message ??
+                    "No selected clip rendered successfully.",
+                cancellationToken);
             return;
         }
         MusicMovieContext? musicContext = await GetOrCreateMusicEditPlanAsync(
@@ -1327,8 +1379,17 @@ public sealed partial class GenerationWorker(
                 .ToArray();
             CinematicMoviePlan cameraOnlyPlan =
                 CameraOnlyVariantPlanner.Create(cinematicPlan, cameraSegments);
+            Dictionary<string, int> sourceSegmentIndexes = cinematicPlan.Segments
+                .OrderBy(value => value.OutputStartSeconds)
+                .ThenBy(value => value.Id, StringComparer.Ordinal)
+                .Select((value, index) => new { value.Id, Index = index + 1 })
+                .ToDictionary(value => value.Id, value => value.Index,
+                    StringComparer.Ordinal);
             string[] cameraClips = cameraSegments
-                .Select(value => cameraOnlySources[value.Id].Path)
+                .Select(value => Path.Combine(
+                    output,
+                    ".normalized",
+                    $"clip-{sourceSegmentIndexes[value.Id]:D3}.mp4"))
                 .ToArray();
             MusicEditPlan? sourceMusicPlan = musicContext?.Plan;
             MusicEditPlan? cameraMusicPlan = sourceMusicPlan is null
@@ -1356,7 +1417,8 @@ public sealed partial class GenerationWorker(
                         MusicPath: musicContext?.MusicPath,
                         MovieSettings: musicContext?.Settings,
                         FfmpegCapabilities: capabilities,
-                        CinematicMoviePlan: cameraOnlyPlan),
+                        CinematicMoviePlan: cameraOnlyPlan,
+                        InputsArePreNormalized: true),
                     progress: null,
                     cancellationToken);
             if (candidate.Success &&
@@ -1378,7 +1440,7 @@ public sealed partial class GenerationWorker(
             cancellationToken);
         await CompleteAsync(
             publicId,
-            selected.Count,
+            selected.Length,
             renderedSelection.Length,
             compilation,
             cameraOnlyCompilation,
@@ -1871,7 +1933,14 @@ public sealed partial class GenerationWorker(
                     generation.EstimatedDurationMilliseconds
                 },
                 sourceDemos = generation.Demos.OrderBy(value => value.UploadOrder).Select(value =>
-                    new { demoId = value.Id, fileName = value.OriginalFileName, value.Sha256 }),
+                    new
+                    {
+                        demoId = value.Id,
+                        fileName = value.OriginalFileName,
+                        value.Sha256,
+                        value.SelectedSteamId,
+                        value.SelectedPlayerName
+                    }),
                 selectedHighlights = selected.Select((value, index) => new
                 {
                     index = index + 1,
@@ -2004,6 +2073,15 @@ public sealed partial class GenerationWorker(
                 },
                 selectedSteamId = generation.SelectedSteamId,
                 selectedPlayerName = generation.SelectedPlayerName,
+                selectedPlayersByDemo = generation.Demos
+                    .OrderBy(value => value.UploadOrder)
+                    .Select(value => new
+                    {
+                        demoId = value.Id,
+                        fileName = value.OriginalFileName,
+                        value.SelectedSteamId,
+                        value.SelectedPlayerName
+                    }),
                 uploadedDemos = generation.Demos.Count,
                 validDemos,
                 skippedDemos,
@@ -2498,7 +2576,7 @@ public sealed partial class GenerationWorker(
             CameraShotPlan source,
             Cs2Highlight.RenderAgent.Application.RenderJob job,
             IReadOnlyList<string> rejectedWarnings,
-            string hlaeVersion)
+        string hlaeVersion)
     {
         CameraTargetPoint[] targets = source.TargetPoints
             .OrderBy(value => value.TimeSeconds)
@@ -2508,6 +2586,7 @@ public sealed partial class GenerationWorker(
             throw new InvalidOperationException(
                 $"CINEMATIC_SUBJECT_ROUTE_TARGETS_MISSING:{source.Id}");
         }
+        targets = NormalizeSubjectRouteTargets(targets);
         GameplayVector3 first = targets[0].Position;
         GameplayVector3 last = targets[^1].Position;
         double dx = last.X - first.X;
@@ -2610,6 +2689,126 @@ public sealed partial class GenerationWorker(
                 VerificationId = "auto-subject-" + source.Id,
                 HlaeVersionPrefix = hlaeVersion
             });
+    }
+
+    internal static CameraTargetPoint[] NormalizeSubjectRouteTargets(
+        IReadOnlyList<CameraTargetPoint> source)
+    {
+        CameraTargetPoint[] ordered = source
+            .OrderBy(value => value.TimeSeconds)
+            .ToArray();
+        if (ordered.Length < 2)
+            return ordered;
+        CameraTargetPoint first = ordered[0];
+        CameraTargetPoint last = ordered[^1];
+        double duration = Math.Max(
+            0.001,
+            last.TimeSeconds - first.TimeSeconds);
+        return Enumerable.Range(0, 4).Select(index =>
+        {
+            double progress = index / 3d;
+            double time = first.TimeSeconds + duration * progress;
+            int upperIndex = Array.FindIndex(
+                ordered,
+                value => value.TimeSeconds >= time);
+            if (upperIndex <= 0)
+                return first with { TimeSeconds = time };
+            if (upperIndex < 0)
+                return last with { TimeSeconds = time };
+            CameraTargetPoint lower = ordered[upperIndex - 1];
+            CameraTargetPoint upper = ordered[upperIndex];
+            double span = Math.Max(
+                0.001,
+                upper.TimeSeconds - lower.TimeSeconds);
+            double local = Math.Clamp(
+                (time - lower.TimeSeconds) / span,
+                0,
+                1);
+            return new CameraTargetPoint(
+                time,
+                new GameplayVector3(
+                    lower.Position.X +
+                        (upper.Position.X - lower.Position.X) * local,
+                    lower.Position.Y +
+                        (upper.Position.Y - lower.Position.Y) * local,
+                    lower.Position.Z +
+                        (upper.Position.Z - lower.Position.Z) * local),
+                lower.SubjectIds.Count > 0
+                    ? lower.SubjectIds
+                    : upper.SubjectIds);
+        }).ToArray();
+    }
+
+    internal static CinematicMoviePlan RestoreMissingSubjectRoutes(
+        CinematicMoviePlan source,
+        IReadOnlyList<GenerationBrollCandidate> brollRows,
+        IReadOnlyDictionary<long, GenerationDemo> demos)
+    {
+        Dictionary<string, GenerationBrollCandidate> byId = brollRows
+            .ToDictionary(value => value.CandidateId, StringComparer.Ordinal);
+        return source with
+        {
+            Segments = source.Segments.Select(segment =>
+            {
+                CameraShotPlan camera = segment.Camera;
+                if (camera.Family == CameraShotFamily.PlayerPov ||
+                    camera.TargetPoints.Count >= 2 ||
+                    segment.BrollCandidateId is null ||
+                    !byId.TryGetValue(
+                        segment.BrollCandidateId,
+                        out GenerationBrollCandidate? candidate))
+                {
+                    return segment;
+                }
+                PlayerTransformSample[] samples =
+                    JsonSerializer.Deserialize<PlayerTrajectory>(
+                        candidate.TrajectoryJson,
+                        JsonOptions)?
+                    .Samples
+                    .Where(value =>
+                        value.Tick >= candidate.StartTick &&
+                        value.Tick <= candidate.EndTick)
+                    .OrderBy(value => value.Tick)
+                    .ToArray() ?? [];
+                if (samples.Length < 2)
+                    return segment;
+                double tickSpan = Math.Max(
+                    1,
+                    candidate.EndTick - candidate.StartTick);
+                IReadOnlyList<string> subjectIds = camera.SubjectIds.Count > 0
+                    ? camera.SubjectIds
+                    : demos.TryGetValue(
+                            candidate.GenerationDemoId,
+                            out GenerationDemo? demo) &&
+                        !string.IsNullOrWhiteSpace(demo.SelectedSteamId)
+                            ? [demo.SelectedSteamId]
+                            : [];
+                CameraTargetPoint[] targets = samples.Select(value =>
+                    new CameraTargetPoint(
+                        Math.Clamp(
+                            (value.Tick - candidate.StartTick) / tickSpan *
+                            camera.TargetDurationSeconds,
+                            0,
+                            camera.TargetDurationSeconds),
+                        value.Position,
+                        subjectIds)).ToArray();
+                return segment with
+                {
+                    Camera = CameraShotSignatureBuilder.Attach(
+                        camera with
+                        {
+                            TargetPoints = targets,
+                            SubjectIds = subjectIds,
+                            Warnings = camera.Warnings
+                                .Append("SUBJECT_ROUTE_RESTORED_FROM_TRAJECTORY")
+                                .Distinct(StringComparer.Ordinal)
+                                .ToArray(),
+                            Signature = null
+                        },
+                        camera.Signature?.MapName ?? string.Empty)
+                };
+            }).ToArray()
+        };
     }
 
     private static GameplayVector3 CameraLookAt(

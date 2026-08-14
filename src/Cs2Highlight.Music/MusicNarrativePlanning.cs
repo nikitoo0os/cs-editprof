@@ -471,6 +471,7 @@ public sealed class CinematicDurationPolicy : ICinematicDurationPolicy
             MovieDurationSelection.Seconds30 => 30,
             MovieDurationSelection.Seconds45 => 45,
             MovieDurationSelection.Seconds60 => 60,
+            MovieDurationSelection.FullTrack => double.MaxValue,
             _ => double.MaxValue
         };
 }
@@ -501,6 +502,8 @@ public sealed class MusicExcerptSelector(
         MovieDurationBudget budget = durationPolicy.Calculate(
             highlights,
             durationOptions);
+        if (durationOptions.Selection == MovieDurationSelection.FullTrack)
+            return SelectFullTrack(narrative, budget, highlights.Count);
         int requiredPeaks = highlights.Count;
         Candidate[] candidates = BuildCandidates(
                 narrative,
@@ -578,6 +581,72 @@ public sealed class MusicExcerptSelector(
             Score = selected.Score,
             IsValid = selected.Valid,
             ScoreBreakdown = selected.Breakdown,
+            Warnings = warnings
+        };
+    }
+
+    private static MusicExcerptPlan SelectFullTrack(
+        MusicNarrative narrative,
+        MovieDurationBudget budget,
+        int requiredPeaks)
+    {
+        double end = Math.Min(
+            narrative.DurationSeconds,
+            Math.Min(
+                CinematicContractPolicy.MaximumMovieDurationSeconds,
+                budget.TargetSeconds));
+        MusicSection[] sections = narrative.Sections
+            .Where(value => value.StartSeconds < end &&
+                value.EndSeconds > 0)
+            .OrderBy(value => value.StartSeconds)
+            .ToArray();
+        MusicalPeak[] SelectPeaks(bool relaxedEnergy) => narrative.Peaks
+            .Where(value =>
+                value.TimeSeconds >= 0 &&
+                value.TimeSeconds <= end &&
+                sections.Any(section =>
+                    section.Id == value.SectionId &&
+                    MusicalPeakDetector.IsAllowedPrimaryKillSection(
+                        section.Type,
+                        relaxedEnergy)))
+            .OrderBy(value => value.TimeSeconds)
+            .ThenBy(value => value.Id, StringComparer.Ordinal)
+            .ToArray();
+        MusicalPeak[] peaks = SelectPeaks(relaxedEnergy: false);
+        bool relaxed = peaks.Length < requiredPeaks;
+        if (relaxed)
+            peaks = SelectPeaks(relaxedEnergy: true);
+        bool valid = end > 0 &&
+            end + 0.001 >= budget.HighlightDurationSeconds &&
+            sections.Length > 0 &&
+            peaks.Length >= requiredPeaks;
+        List<string> warnings = ["FULL_TRACK_DURATION_SELECTED"];
+        if (narrative.DurationSeconds >
+            CinematicContractPolicy.MaximumMovieDurationSeconds + 0.001)
+        {
+            warnings.Add("FULL_TRACK_CAPPED_AT_180_SECONDS");
+        }
+        if (relaxed)
+            warnings.Add(RelaxedEnergyFallbackWarning);
+        if (peaks.Length < requiredPeaks)
+            warnings.Add("MUSIC_EXCERPT_INSUFFICIENT_PEAKS");
+        if (end + 0.001 < budget.HighlightDurationSeconds)
+            warnings.Add("MUSIC_EXCERPT_SHORTER_THAN_HIGHLIGHTS");
+        return new MusicExcerptPlan
+        {
+            StartSeconds = 0,
+            EndSeconds = end,
+            SectionIds = sections.Select(value => value.Id).ToArray(),
+            Peaks = peaks,
+            RequiredPeakCount = requiredPeaks,
+            UsablePeakCount = peaks.Length,
+            Score = valid ? 100 : 0,
+            IsValid = valid,
+            ScoreBreakdown = new Dictionary<string, double>(
+                StringComparer.Ordinal)
+            {
+                ["fullTrack"] = valid ? 100 : 0
+            },
             Warnings = warnings
         };
     }

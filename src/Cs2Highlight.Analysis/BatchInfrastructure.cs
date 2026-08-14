@@ -475,6 +475,8 @@ public sealed class ProcessRenderAgentClient(string renderAgentPath) : ISessionR
 
         RenderJob fallbackJob = job with
         {
+            CaptureUi = CaptureUiProfile.Gameplay,
+            PresentationMode = CapturePresentationMode.PovCombat,
             Camera = RenderCameraPlan.PlayerPov,
             ContainsFirstPersonWeaponFire = false
         };

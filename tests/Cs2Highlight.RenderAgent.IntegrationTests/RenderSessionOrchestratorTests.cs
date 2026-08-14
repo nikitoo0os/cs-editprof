@@ -60,6 +60,49 @@ public sealed class RenderSessionOrchestratorTests : IDisposable
             });
     }
 
+    [Fact]
+    public async Task StopsSharedSessionAfterIncompatibleDemoIsDetected()
+    {
+        Directory.CreateDirectory(root);
+        string demo = Path.Combine(root, "old-match.dem");
+        await File.WriteAllBytesAsync(demo, [1, 2, 3]);
+        RenderEnvironmentOptions environment = new()
+        {
+            WorkingRoot = Path.Combine(root, "work"),
+            ProcessShutdownTimeoutSeconds = 2
+        };
+        IncompatibleSessionRuntime runtime = new();
+        RenderSessionOrchestrator orchestrator = new(
+            environment,
+            new SuccessfulEnvironmentVerifier(),
+            new FakeWorkspaceManager(environment),
+            new PassThroughRepairer(),
+            new FakeScriptGenerator(),
+            runtime,
+            runtime,
+            new SuccessfulOutputWatcher(),
+            new FakeLockFactory(),
+            new NullStateJournal(),
+            TimeProvider.System);
+
+        IReadOnlyList<RenderJobOutcome> outcomes = await orchestrator.RunAsync(
+            [Job("clip-1", demo, 100, 200), Job("clip-2", demo, 300, 400)],
+            CancellationToken.None);
+
+        Assert.Equal(1, runtime.ControlCount);
+        Assert.Equal(1, runtime.QuitCount);
+        Assert.All(
+            outcomes,
+            outcome =>
+            {
+                Assert.False(outcome.Result.Success);
+                Assert.Equal(
+                    "DEMO_NETWORK_VERSION_INCOMPATIBLE",
+                    outcome.Result.Error?.Code);
+                Assert.False(outcome.Result.Error?.Retryable);
+            });
+    }
+
     private RenderJob Job(
         string id,
         string demo,
@@ -193,6 +236,49 @@ public sealed class RenderSessionOrchestratorTests : IDisposable
             ControlCount++;
             LoadModes.Add(loadMode);
             return Task.CompletedTask;
+        }
+
+        public Task QuitAsync(CancellationToken cancellationToken)
+        {
+            QuitCount++;
+            completion.TrySetResult(new ProcessExecutionResult(
+                123,
+                0,
+                false,
+                TimeSpan.FromSeconds(1),
+                456));
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class IncompatibleSessionRuntime : IHlaeLauncher, IDemoController
+    {
+        private readonly TaskCompletionSource<ProcessExecutionResult> completion =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int ControlCount { get; private set; }
+        public int QuitCount { get; private set; }
+
+        public Task<ProcessExecutionResult> LaunchAsync(
+            RenderJob job,
+            RenderWorkspace workspace,
+            GeneratedRenderScript script,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.Register(() => completion.TrySetCanceled(cancellationToken));
+            return completion.Task;
+        }
+
+        public Task ControlAsync(
+            RenderJob job,
+            RenderWorkspace workspace,
+            DemoLoadMode loadMode,
+            CancellationToken cancellationToken)
+        {
+            ControlCount++;
+            return Task.FromException(
+                new DemoPlaybackIncompatibleException(
+                    "DEMO_NETWORK_VERSION_INCOMPATIBLE: test"));
         }
 
         public Task QuitAsync(CancellationToken cancellationToken)

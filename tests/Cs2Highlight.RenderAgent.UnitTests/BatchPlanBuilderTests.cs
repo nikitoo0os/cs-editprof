@@ -64,6 +64,93 @@ public sealed class BatchPlanBuilderTests
     }
 
     [Fact]
+    public void KeepAllAssignsUniqueItemIdsToSourcesAtTheSameTick()
+    {
+        HighlightCandidate pov = Candidate(
+            "demo-round-20-player-1-125540-125540",
+            SteamId,
+            20,
+            125476,
+            125604,
+            80,
+            kills: 1);
+        HighlightCandidate reaction = Candidate(
+            "broll-68-20-125540-VictimReaction-148",
+            SteamId,
+            20,
+            125476,
+            125604,
+            90,
+            kills: 1);
+
+        BatchRenderPlan plan = Build(
+            [pov, reaction],
+            new BatchRenderOptions
+            {
+                OverlapPolicy = OverlapResolutionPolicy.KeepAll
+            }).Plan;
+
+        Assert.Equal(2, plan.Items.Count);
+        Assert.Equal(2, plan.Items.Select(value => value.ItemId)
+            .Distinct(StringComparer.Ordinal).Count());
+    }
+
+    [Fact]
+    public void ExpandedPlanPreservesRenderedSourcesAndQueuesOnlyMissingOnes()
+    {
+        string rendered = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllBytes(rendered, [1]);
+            BatchRenderPlan current = Build(
+                [Candidate("reaction", SteamId, 20, 100, 200, 90, kills: 1)],
+                new BatchRenderOptions
+                {
+                    OverlapPolicy = OverlapResolutionPolicy.KeepAll
+                }).Plan;
+            BatchRenderState state = new(
+                "1.0",
+                current.BatchId,
+                BatchRenderStatus.Completed,
+                DateTimeOffset.UtcNow,
+                DateTimeOffset.UtcNow,
+                null,
+                [new BatchRenderItemState(
+                    current.Items[0].ItemId,
+                    BatchRenderItemStatus.Succeeded,
+                    1,
+                    OutputFile: rendered)]);
+            BatchRenderPlan expanded = Build(
+                [
+                    Candidate("pov", SteamId, 20, 100, 200, 80, kills: 1),
+                    Candidate("reaction", SteamId, 20, 100, 200, 90, kills: 1)
+                ],
+                new BatchRenderOptions
+                {
+                    OverlapPolicy = OverlapResolutionPolicy.KeepAll
+                }).Plan;
+
+            BatchRenderState reconciled =
+                BatchPlanReconciler.ReconcileExpandedPlan(
+                    current,
+                    state,
+                    expanded,
+                    DateTimeOffset.UtcNow);
+
+            Assert.Equal(BatchRenderStatus.Ready, reconciled.Status);
+            Assert.Equal(2, reconciled.Items.Count);
+            Assert.Single(reconciled.Items.Where(value =>
+                value.Status == BatchRenderItemStatus.Succeeded));
+            Assert.Single(reconciled.Items.Where(value =>
+                value.Status == BatchRenderItemStatus.Pending));
+        }
+        finally
+        {
+            File.Delete(rendered);
+        }
+    }
+
+    [Fact]
     public void UnsafeNicknameNeverEntersPaths()
     {
         HighlightCandidate candidate = Candidate("safe", SteamId, 8, 100, 200, 50) with

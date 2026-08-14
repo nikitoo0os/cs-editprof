@@ -293,7 +293,8 @@ public static class ExitCodes
         "HLAE_LAUNCH_FAILED" => HlaeLaunchFailed,
         "CS2_START_TIMEOUT" => Cs2LaunchTimeout,
         "CS2_EXITED" => Cs2ExitedUnexpectedly,
-        "DEMO_CONTROL_FAILED" or "DEMO_COMPATIBILITY_REPAIR_FAILED" => DemoControlFailed,
+        "DEMO_CONTROL_FAILED" or "DEMO_COMPATIBILITY_REPAIR_FAILED" or
+            "DEMO_NETWORK_VERSION_INCOMPATIBLE" => DemoControlFailed,
         "RECORDING_FAILED" => RecordingFailed,
         "OUTPUT_INVALID" => OutputVerificationFailed,
         "CANCELLED" => Cancelled,

@@ -31,6 +31,18 @@ if (root) {
     risky: "Risky",
     invalid: "Invalid"
   };
+  const validationMessages = {
+    AT_LEAST_ONE_MARKER_REQUIRED:
+      "Система автоматически восстанавливает расстановку из лучших хайлайтов. Обновите страницу, если пересчёт ещё не завершился.",
+    NO_HIGHLIGHTS_AVAILABLE_FOR_AUTOMATIC_TIMELINE:
+      "В демке не найдено ни одного подходящего хайлайта для автоматической расстановки.",
+    CINEMATIC_HIGHLIGHT_RETIMING_OUT_OF_RANGE:
+      "Автоматическая расстановка не смогла сохранить безопасную скорость одного из хайлайтов. Нажмите «Предложить расстановку» — система пересоберёт проблемный участок.",
+    CINEMATIC_TIMELINE_DISCONTINUITY:
+      "В расстановке остался незаполненный участок. Нажмите «Предложить расстановку», чтобы система заполнила его автоматически.",
+    INVALID_LOCAL_REGION_BLOCKS_CONFIRMATION:
+      "Не все промежутки удалось заполнить. Система автоматически добавит выбранные хайлайты и свободные камеры — нажмите «Предложить расстановку» ещё раз."
+  };
 
   const clamp = (value, min, max) => Math.max(min, Math.min(max, value));
   const percent = seconds => `${(seconds / state.durationSeconds) * 100}%`;
@@ -65,9 +77,10 @@ if (root) {
     }
     if (!response.ok) {
       const problem = await response.json().catch(() => ({}));
-      const message = problem.error
+      const errorCode = problem.error
         || problem.errors?.timeline?.[0]
         || "Не удалось сохранить изменение";
+      const message = validationMessages[errorCode] || errorCode;
       announce(message, "error");
       throw new Error(message);
     }
@@ -183,6 +196,10 @@ if (root) {
     return anchor.markerType.replace(/^Best/, "Best ");
   }
 
+  function anchorHighlight(anchor) {
+    return state.highlights.find(item => item.id === anchor.highlightId);
+  }
+
   function renderAnchors() {
     anchorTrack.innerHTML = state.anchors.map((anchor, index) => {
       const selected = anchor.id === selectedAnchorId ? " is-selected" : "";
@@ -191,17 +208,27 @@ if (root) {
       const target = optimisticTime?.id === anchor.id
         ? optimisticTime.time
         : anchor.targetMusicTimeSeconds;
+      const highlight = anchorHighlight(anchor);
+      const weaponIcon = highlight?.weaponIconPath || "/assets/weapons/unknown.svg";
+      const weaponName = highlight?.weapon || "Хайлайт";
+      const duration = highlight?.durationSeconds ||
+        anchor.estimatedPreRollSeconds + anchor.estimatedPostRollSeconds;
+      const clipWidth = clamp(duration / state.durationSeconds * 100, 0.45, 4.5);
       return `
         <button type="button"
                 class="timeline-anchor timeline-anchor--${status}${selected}${locked}"
-                style="left:${percent(target)}"
+                style="left:${percent(target)};--clip-width:${clipWidth}%"
                 data-anchor-id="${escapeHtml(anchor.id)}"
                 aria-label="${escapeHtml(anchorTitle(anchor))}, ${formatTime(target)}, ${statusLabels[status]}"
                 aria-describedby="timeline-anchor-status-${index}"
                 ${state.isLocked ? "disabled" : ""}>
           <span class="timeline-anchor__pin" aria-hidden="true"></span>
-          <span class="timeline-anchor__label">${escapeHtml(anchorTitle(anchor))}</span>
-          <span class="timeline-anchor__status" id="timeline-anchor-status-${index}">${statusLabels[status]}</span>
+          <img class="timeline-anchor__weapon" src="${escapeHtml(weaponIcon)}" alt="" draggable="false" />
+          <span class="timeline-anchor__tooltip">
+            <strong>${escapeHtml(anchorTitle(anchor))}</strong>
+            <small>${escapeHtml(weaponName)} · ${duration.toFixed(1)} сек · ${statusLabels[status]}</small>
+          </span>
+          <span class="sr-only" id="timeline-anchor-status-${index}">${statusLabels[status]}</span>
           ${anchor.isLocked ? '<span class="timeline-anchor__lock" aria-hidden="true">⌾</span>' : ""}
         </button>`;
     }).join("");

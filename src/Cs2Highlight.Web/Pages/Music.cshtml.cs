@@ -46,6 +46,8 @@ public sealed class MusicModel(
     [BindProperty] public IFormFile? MusicFile { get; set; }
     [BindProperty] public bool RightsConfirmed { get; set; }
     [BindProperty] public MovieStyle MovieStyle { get; set; } = MovieStyle.Clean;
+    [BindProperty] public string AspectRatio { get; set; } = string.Empty;
+    [BindProperty] public OutputOrder OutputOrder { get; set; } = OutputOrder.Chronological;
     [BindProperty] public MusicSyncIntensity SyncIntensity { get; set; } = MusicSyncIntensity.Aggressive;
     [BindProperty] public EffectIntensity EffectIntensity { get; set; } = EffectIntensity.Balanced;
     [BindProperty] public List<string> EnabledEffectGroups { get; set; } =
@@ -136,6 +138,13 @@ public sealed class MusicModel(
             return BadRequest();
         if (MovieStyle is not (MovieStyle.Clean or MovieStyle.CinematicDirector))
             return BadRequest();
+        if (AspectRatio is not ("16:9" or "9:16" or "4:3") ||
+            !Enum.IsDefined(OutputOrder))
+            return BadRequest();
+        if (!Enum.IsDefined(CinematicDuration))
+            return BadRequest();
+        if (MovieStyle != MovieStyle.CinematicDirector)
+            CinematicDuration = MovieDurationSelection.Auto;
         if (EnabledEffectGroups.Any(value => !DynamicEffectGroups.All.Contains(value)))
             return BadRequest();
         try
@@ -186,6 +195,16 @@ public sealed class MusicModel(
         await using var transaction =
             await db.Database.BeginTransactionAsync(cancellationToken);
         DateTimeOffset now = timeProvider.GetUtcNow();
+        generation.AspectRatio = AspectRatio;
+        generation.OutputOrder = OutputOrder;
+        (generation.Width, generation.Height) = AspectRatio switch
+        {
+            "16:9" => (1920, 1080),
+            "9:16" => (1080, 1920),
+            "4:3" => (1920, 1440),
+            _ => throw new InvalidOperationException("Unsupported aspect ratio.")
+        };
+        generation.Fps = 60;
         GenerationStateMachine.Transition(
             generation, GenerationStatus.ValidatingMoviePlan, now);
         GenerationMovieSettings movieSettings = new()
@@ -374,6 +393,10 @@ public sealed class MusicModel(
             GenerationStatus.AwaitingMovieConfiguration))
             return RedirectToPage("/Generation", new { publicId });
         Generation = generation;
+        if (string.IsNullOrWhiteSpace(AspectRatio))
+            AspectRatio = generation.AspectRatio;
+        if (!Request.HasFormContentType)
+            OutputOrder = generation.OutputOrder;
         Music = await db.GenerationMusic.AsNoTracking().SingleOrDefaultAsync(
             value => value.GenerationId == generation.Id, cancellationToken);
         GenerationMusicAnchor[] anchors = await db.GenerationMusicAnchors.AsNoTracking()
@@ -457,6 +480,10 @@ public sealed class MusicModel(
             .OrderBy(value => value.SelectionOrder)
             .ThenBy(value => value.HighlightId)
             .ToArrayAsync(cancellationToken);
+        Dictionary<long, GenerationDemo> demos =
+            await db.GenerationDemos.AsNoTracking()
+                .Where(value => value.GenerationId == generation.Id)
+                .ToDictionaryAsync(value => value.Id, cancellationToken);
         List<SelectedHighlight> selected = [];
         foreach (GenerationHighlight value in stored)
         {
@@ -467,7 +494,8 @@ public sealed class MusicModel(
                 value.HighlightId,
                 Enum.Parse<HighlightType>(value.Type),
                 value.SteamId,
-                generation.SelectedPlayerName ?? value.SteamId,
+                demos.GetValueOrDefault(value.GenerationDemoId)?
+                    .SelectedPlayerName ?? value.SteamId,
                 value.RoundNumber,
                 value.FirstKillTick,
                 value.LastKillTick,

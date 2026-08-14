@@ -30,12 +30,36 @@ public sealed class HighlightSelectionService(
         string steamId,
         CancellationToken cancellationToken)
     {
+        await using GenerationDbContext db =
+            await dbFactory.CreateDbContextAsync(cancellationToken);
+        long demoId = await db.GenerationHighlights.AsNoTracking()
+            .Where(value =>
+                value.Generation.PublicId == publicId &&
+                value.SteamId == steamId)
+            .OrderBy(value => value.GenerationDemoId)
+            .Select(value => value.GenerationDemoId)
+            .FirstAsync(cancellationToken);
+        await PrepareRecommendationsAsync(
+            publicId,
+            demoId,
+            steamId,
+            cancellationToken);
+    }
+
+    public async Task PrepareRecommendationsAsync(
+        string publicId,
+        long generationDemoId,
+        string steamId,
+        CancellationToken cancellationToken)
+    {
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         Generation generation = await db.Generations
             .Include(value => value.Highlights)
             .SingleAsync(value => value.PublicId == publicId, cancellationToken);
         GenerationHighlight[] eligible = generation.Highlights
-            .Where(value => value.SteamId == steamId)
+            .Where(value =>
+                value.GenerationDemoId == generationDemoId &&
+                value.SteamId == steamId)
             .ToArray();
         foreach (GenerationHighlight highlight in eligible) highlight.Recommended = false;
 
@@ -93,6 +117,7 @@ public sealed class HighlightSelectionService(
 
     public async Task SaveSelectionAsync(
         string publicId,
+        long generationDemoId,
         IEnumerable<string> highlightIds,
         EffectPreset preset,
         CancellationToken cancellationToken)
@@ -105,13 +130,21 @@ public sealed class HighlightSelectionService(
         await using GenerationDbContext db = await dbFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         Generation generation = await db.Generations
+            .Include(value => value.Demos)
             .Include(value => value.Highlights)
             .SingleAsync(value => value.PublicId == publicId, cancellationToken);
         if (generation.Status != GenerationStatus.AwaitingHighlightSelection)
             throw new InvalidOperationException("GENERATION_SELECTION_LOCKED");
+        GenerationDemo demo = generation.Demos.SingleOrDefault(value =>
+            value.Id == generationDemoId &&
+            value.AnalysisStatus == DemoAnalysisStatus.Succeeded) ??
+            throw new InvalidOperationException("DEMO_NOT_FOUND");
+        if (demo.SelectedSteamId is null)
+            throw new InvalidOperationException("PLAYER_NOT_SELECTED_FOR_DEMO");
         GenerationHighlight[] selected = generation.Highlights
             .Where(value => ids.Contains(value.HighlightId) &&
-                value.SteamId == generation.SelectedSteamId)
+                value.GenerationDemoId == demo.Id &&
+                value.SteamId == demo.SelectedSteamId)
             .ToArray();
         if (selected.Length != ids.Length)
             throw new InvalidOperationException("INVALID_HIGHLIGHT_SELECTION");
@@ -129,7 +162,8 @@ public sealed class HighlightSelectionService(
                 MusicSelectionCapacityPolicy.Calculate(
                     generation.Highlights
                         .Where(value =>
-                            value.SteamId == generation.SelectedSteamId)
+                            value.GenerationDemoId == demo.Id &&
+                            value.SteamId == demo.SelectedSteamId)
                         .Select(value =>
                             value.EstimatedDurationMilliseconds),
                     selected.Select(value =>
@@ -139,26 +173,42 @@ public sealed class HighlightSelectionService(
             if (capacity.RequiredRemovalCount > 0)
                 throw new MusicSelectionCapacityException(capacity);
         }
+        int existingSelectionCount = generation.Highlights.Count(value =>
+            value.SelectedByUser &&
+            value.GenerationDemoId != demo.Id);
         Dictionary<string, int> order = ids
-            .Select((id, index) => (id, index: index + 1))
+            .Select((id, index) =>
+                (id, index: existingSelectionCount + index + 1))
             .ToDictionary(value => value.id, value => value.index, StringComparer.Ordinal);
         foreach (GenerationHighlight highlight in generation.Highlights)
         {
+            if (highlight.GenerationDemoId != demo.Id)
+                continue;
             highlight.SelectedByUser = order.TryGetValue(
                 highlight.HighlightId, out int selectionOrder);
             highlight.SelectionOrder = highlight.SelectedByUser ? selectionOrder : null;
         }
-        generation.MaximumHighlights = selected.Length;
+        demo.HighlightSelectionCompleted = true;
+        GenerationHighlight[] allSelected = generation.Highlights
+            .Where(value => value.SelectedByUser)
+            .ToArray();
+        generation.MaximumHighlights = allSelected.Length;
         long transitionOverlap =
-            Math.Max(0, selected.Length - 1) *
+            Math.Max(0, allSelected.Length - 1) *
             Math.Max(0, generation.TransitionDurationMilliseconds);
         generation.EstimatedDurationMilliseconds = Math.Max(
             0,
-            selected.Sum(value => value.EstimatedDurationMilliseconds) -
+            allSelected.Sum(value => value.EstimatedDurationMilliseconds) -
             transitionOverlap);
         generation.EffectPreset = preset;
+        long[] demoHighlightIds = generation.Highlights
+            .Where(value => value.GenerationDemoId == demo.Id)
+            .Select(value => value.Id)
+            .ToArray();
         await db.GenerationEffectPlans
-            .Where(value => value.GenerationId == generation.Id)
+            .Where(value =>
+                value.GenerationId == generation.Id &&
+                demoHighlightIds.Contains(value.GenerationHighlightId))
             .ExecuteDeleteAsync(cancellationToken);
         Dictionary<long, int> tickRates = await db.GenerationDemos
             .Where(value => value.GenerationId == generation.Id)
@@ -182,6 +232,12 @@ public sealed class HighlightSelectionService(
                 CreatedAt = timeProvider.GetUtcNow()
             });
         }
+        GenerationDemo? nextDemo = generation.Demos
+            .Where(value =>
+                value.AnalysisStatus == DemoAnalysisStatus.Succeeded &&
+                !value.HighlightSelectionCompleted)
+            .OrderBy(value => value.UploadOrder)
+            .FirstOrDefault();
         bool reusableMusic = existingMusic is
         {
             RightsConfirmed: true,
@@ -189,13 +245,74 @@ public sealed class HighlightSelectionService(
         };
         GenerationStateMachine.Transition(
             generation,
-            reusableMusic
-                ? GenerationStatus.AwaitingMovieConfiguration
-                : GenerationStatus.AwaitingMusicUpload,
+            nextDemo is not null
+                ? GenerationStatus.AwaitingPlayerSelection
+                : reusableMusic
+                    ? GenerationStatus.AwaitingMovieConfiguration
+                    : GenerationStatus.AwaitingMusicUpload,
             timeProvider.GetUtcNow());
         generation.ProgressPercent = Math.Max(generation.ProgressPercent, 30);
         await db.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
+    }
+
+    public async Task SaveSelectionAsync(
+        string publicId,
+        IEnumerable<string> highlightIds,
+        EffectPreset preset,
+        CancellationToken cancellationToken)
+    {
+        string[] ids = highlightIds.Distinct(StringComparer.Ordinal).ToArray();
+        await using GenerationDbContext db =
+            await dbFactory.CreateDbContextAsync(cancellationToken);
+        long demoId = await db.GenerationHighlights.AsNoTracking()
+            .Where(value =>
+                value.Generation.PublicId == publicId &&
+                ids.Contains(value.HighlightId))
+            .Select(value => value.GenerationDemoId)
+            .Distinct()
+            .SingleAsync(cancellationToken);
+        GenerationDemo? demo = await db.GenerationDemos.SingleOrDefaultAsync(
+            value => value.Id == demoId,
+            cancellationToken);
+        Generation generation = await db.Generations.AsNoTracking()
+            .SingleAsync(value => value.PublicId == publicId,
+                cancellationToken);
+        if (demo is null)
+        {
+            demo = new GenerationDemo
+            {
+                GenerationId = generation.Id,
+                OriginalFileName = "legacy-demo.dem",
+                StoredPath = "legacy-demo.dem",
+                Sha256 = Convert.ToHexString(
+                    System.Security.Cryptography.SHA256.HashData(
+                        System.Text.Encoding.UTF8.GetBytes(publicId)))
+                    .ToLowerInvariant(),
+                UploadOrder = 1,
+                AnalysisStatus = DemoAnalysisStatus.Succeeded,
+                TickRate = 64
+            };
+            db.GenerationDemos.Add(demo);
+            await db.SaveChangesAsync(cancellationToken);
+            await db.GenerationHighlights
+                .Where(value =>
+                    value.GenerationId == generation.Id &&
+                    value.GenerationDemoId == 0)
+                .ExecuteUpdateAsync(setters => setters.SetProperty(
+                    value => value.GenerationDemoId,
+                    demo.Id), cancellationToken);
+            demoId = demo.Id;
+        }
+        demo.SelectedSteamId ??= generation.SelectedSteamId;
+        demo.SelectedPlayerName ??= generation.SelectedPlayerName;
+        await db.SaveChangesAsync(cancellationToken);
+        await SaveSelectionAsync(
+            publicId,
+            demoId,
+            ids,
+            preset,
+            cancellationToken);
     }
 
     private static int TypeRank(string type) => type switch

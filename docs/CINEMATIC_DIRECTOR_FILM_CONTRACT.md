@@ -23,9 +23,18 @@ style. They are acceptance rules, not optional planner preferences.
 - Selected kills are spread across the whole movie. The planner must avoid a
   front-loaded block of kills followed by a long block of B-roll and must keep
   chronology whenever the available musical anchors allow it.
+- `FullTrack` duration starts at music time `0:00`, uses the complete track
+  when it is no longer than three minutes, and uses exactly the first `3:00`
+  for longer tracks. The ordinary Auto and fixed-duration modes retain their
+  60-second ceiling.
 
 ## Music, speed and effects
 
+- Significant weapon-fire events use their exact demo `WeaponFire` ticks and
+  are retimed onto nearby measured beats/onsets (maximum snap distance 220 ms).
+  The selected kill anchor and total highlight duration stay fixed. A snap is
+  skipped when it would require playback outside the safe 0.50x-1.30x range;
+  the planner must never invent a fake sync by moving the kill or hiding it.
 - Slow motion on a highlight is motivated by a sharp music-energy/onset change
   and is localized to the firing/impact window immediately around a selected
   kill. Running and uneventful POV are not slowed to manufacture duration.
@@ -189,7 +198,7 @@ Before compilation, the locked plan must satisfy all of the following:
 10. final audio measures -14 LUFS integrated, LRA no higher than 7 LU and no higher than
     -0.8 dBTP true peak, with verified start/end fades.
 
-The planner version implementing this contract is `10.8` or newer.
+The planner version implementing this contract is `10.9` or newer.
 
 ## Executable enforcement
 

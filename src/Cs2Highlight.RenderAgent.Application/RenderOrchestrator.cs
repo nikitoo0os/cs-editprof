@@ -155,7 +155,10 @@ public sealed class RenderOrchestrator(
                 catch (Exception exception) when (
                     exception is not OperationCanceledException)
                 {
+                    bool demoIncompatible =
+                        exception is DemoPlaybackIncompatibleException;
                     if (attempt < maximumStartupAttempts &&
+                        !demoIncompatible &&
                         exception is IOException &&
                         IsEarlyStartupFailure(workspace, stopwatch))
                     {
@@ -175,9 +178,11 @@ public sealed class RenderOrchestrator(
                         startedAt,
                         stopwatch,
                         RenderState.Recording,
-                        "DEMO_CONTROL_FAILED",
+                        demoIncompatible
+                            ? "DEMO_NETWORK_VERSION_INCOMPATIBLE"
+                            : "DEMO_CONTROL_FAILED",
                         exception.Message,
-                        true,
+                        !demoIncompatible,
                         processes,
                         warnings);
                 }

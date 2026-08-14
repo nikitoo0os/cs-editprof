@@ -22,7 +22,7 @@ public sealed class CinematicDirector(
     ICinematicDurationPolicy durationPolicy) : ICinematicDirector
 {
     public const string SchemaVersion = "2.0";
-    public const string PlannerVersion = "10.8";
+    public const string PlannerVersion = "10.9";
 
     public CinematicMoviePlan Create(
         MusicNarrative music,
@@ -615,6 +615,7 @@ public sealed class CinematicDirector(
                 $"{value.Camera.EndTick}")
             .ToHashSet(StringComparer.Ordinal);
         double cursor = 0;
+        CinematicSequenceSegment? previousHighlight = null;
         foreach (CinematicSequenceSegment? next in highlights
                      .Cast<CinematicSequenceSegment?>()
                      .Append(null))
@@ -640,7 +641,16 @@ public sealed class CinematicDirector(
                 var choice = broll
                     .Where(value =>
                         !selected.Contains(value.Id) &&
-                        !selectedIntervals.Contains(SourceInterval(value)))
+                        !selectedIntervals.Contains(SourceInterval(value)) &&
+                        (value.Type != BrollCandidateType.VictimReaction ||
+                         (selectedCameras.Count(camera =>
+                              camera.Family ==
+                                  CameraShotFamily.VictimReaction) <
+                              Math.Max(1, highlights.Length / 3) &&
+                          VictimReactionMatches(
+                              value,
+                              previousHighlight,
+                              highlightById))))
                     .Select(candidate =>
                     {
                         double durationForCandidate = Math.Min(
@@ -706,6 +716,9 @@ public sealed class CinematicDirector(
                     .Where(value => value is not null && value.Duration >=
                         MeaningfulShotMinimumSeconds)
                     .OrderByDescending(value =>
+                        value!.Candidate.Type ==
+                            BrollCandidateType.VictimReaction)
+                    .ThenByDescending(value =>
                         value!.Duration + 0.001 >= availableDuration)
                     .ThenByDescending(value =>
                         BrollCompatibility(
@@ -797,7 +810,10 @@ public sealed class CinematicDirector(
                     $"CINEMATIC_TIMELINE_GAP:{cursor:F3}-{gapEnd:F3}");
             }
             if (next is not null)
+            {
                 cursor = Math.Max(cursor, next.OutputEndSeconds);
+                previousHighlight = next;
+            }
         }
     }
 
@@ -919,6 +935,31 @@ public sealed class CinematicDirector(
         return primary?.ShooterPosition ??
             primary?.HitPosition ??
             primary?.VictimPosition;
+    }
+
+    private static bool VictimReactionMatches(
+        BrollCandidate candidate,
+        CinematicSequenceSegment? previousHighlight,
+        IReadOnlyDictionary<string, SelectedHighlight> highlightById)
+    {
+        if (candidate.FocusTick is not long focusTick ||
+            previousHighlight?.HighlightId is not string highlightId ||
+            !highlightById.TryGetValue(
+                highlightId,
+                out SelectedHighlight? highlight) ||
+            !string.Equals(
+                candidate.DemoId,
+                highlight.Highlight.SourceDemoId,
+                StringComparison.Ordinal))
+        {
+            return false;
+        }
+        return highlight.Highlight.Kills.Any(kill =>
+            Math.Abs(kill.Tick - focusTick) <=
+                Math.Max(1, highlight.Highlight.TickRate / 3) &&
+            candidate.SubjectIds.Contains(
+                kill.VictimPlayerId,
+                StringComparer.Ordinal));
     }
 
     private static bool TimelineIsDiscontinuous(
@@ -1060,6 +1101,12 @@ public sealed class CinematicDirector(
             MusicSectionType.Intro when candidate.Type is
                 BrollCandidateType.EstablishingShot or
                 BrollCandidateType.PlayerApproach => 1,
+            MusicSectionType.Calm or MusicSectionType.Verse
+                when candidate.Type is
+                    BrollCandidateType.VictimReaction => 1.35,
+            MusicSectionType.Breakdown
+                when candidate.Type is
+                    BrollCandidateType.VictimReaction => 1.25,
             MusicSectionType.Calm or MusicSectionType.Verse
                 when candidate.Type is
                     BrollCandidateType.EstablishingShot or

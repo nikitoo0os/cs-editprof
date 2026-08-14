@@ -112,6 +112,7 @@ public sealed class Stage5ServicesTests
         Assert.Contains("volume='0.707946'", graph);
         Assert.Contains("amix=", graph);
         Assert.Contains("alimiter=limit=0.891251", graph);
+        Assert.Contains("level=false", graph);
         Assert.Contains("loudnorm=I=-14:TP=-1", graph);
     }
 
@@ -415,6 +416,113 @@ public sealed class Stage5ServicesTests
             saved.Highlights.Single(value => value.HighlightId == "h2").Id,
             effect.GenerationHighlightId);
     }
+
+    [Fact]
+    public async Task EachDemoRequiresItsOwnPlayerAndHighlightSelectionBeforeMusic()
+    {
+        await using SqliteConnection connection = new("Data Source=:memory:");
+        await connection.OpenAsync();
+        DbContextOptions<GenerationDbContext> dbOptions =
+            new DbContextOptionsBuilder<GenerationDbContext>()
+                .UseSqlite(connection)
+                .Options;
+        TestFactory factory = new(dbOptions);
+        long firstDemoId;
+        long secondDemoId;
+        await using (GenerationDbContext db =
+                     await factory.CreateDbContextAsync())
+        {
+            await db.Database.EnsureCreatedAsync();
+            Generation generation = new()
+            {
+                PublicId = "per-demo-selection",
+                Status = GenerationStatus.AwaitingHighlightSelection,
+                SelectedSteamId = "76561198000000001",
+                SelectedPlayerName = "First"
+            };
+            GenerationDemo first = Demo(1, "first.dem");
+            first.SelectedSteamId = "76561198000000001";
+            first.SelectedPlayerName = "First";
+            GenerationDemo second = Demo(2, "second.dem");
+            generation.Demos.Add(first);
+            generation.Demos.Add(second);
+            db.Generations.Add(generation);
+            await db.SaveChangesAsync();
+            firstDemoId = first.Id;
+            secondDemoId = second.Id;
+            GenerationHighlight firstHighlight = Highlight("first-h", 100, 500);
+            firstHighlight.GenerationId = generation.Id;
+            firstHighlight.GenerationDemoId = first.Id;
+            GenerationHighlight secondHighlight = Highlight("second-h", 600, 1000);
+            secondHighlight.GenerationId = generation.Id;
+            secondHighlight.GenerationDemoId = second.Id;
+            secondHighlight.SteamId = "76561198000000002";
+            db.GenerationHighlights.AddRange(firstHighlight, secondHighlight);
+            await db.SaveChangesAsync();
+        }
+        HighlightSelectionService service = new(
+            factory,
+            new RecommendedSelectionOptions(),
+            new EffectPlanner(),
+            TimeProvider.System);
+
+        await service.SaveSelectionAsync(
+            "per-demo-selection",
+            firstDemoId,
+            ["first-h"],
+            EffectPreset.Dynamic,
+            CancellationToken.None);
+
+        await using (GenerationDbContext db =
+                     await factory.CreateDbContextAsync())
+        {
+            Generation afterFirst = await db.Generations
+                .Include(value => value.Demos)
+                .SingleAsync();
+            Assert.Equal(
+                GenerationStatus.AwaitingPlayerSelection,
+                afterFirst.Status);
+            Assert.True(afterFirst.Demos.Single(value =>
+                value.Id == firstDemoId).HighlightSelectionCompleted);
+            GenerationDemo second = afterFirst.Demos.Single(value =>
+                value.Id == secondDemoId);
+            second.SelectedSteamId = "76561198000000002";
+            second.SelectedPlayerName = "Second";
+            afterFirst.Status = GenerationStatus.AwaitingHighlightSelection;
+            afterFirst.CurrentStage = GenerationStatus
+                .AwaitingHighlightSelection.ToString();
+            await db.SaveChangesAsync();
+        }
+
+        await service.SaveSelectionAsync(
+            "per-demo-selection",
+            secondDemoId,
+            ["second-h"],
+            EffectPreset.Dynamic,
+            CancellationToken.None);
+
+        await using GenerationDbContext verification =
+            await factory.CreateDbContextAsync();
+        Generation completed = await verification.Generations
+            .Include(value => value.Demos)
+            .Include(value => value.Highlights)
+            .SingleAsync();
+        Assert.Equal(GenerationStatus.AwaitingMusicUpload, completed.Status);
+        Assert.All(completed.Demos, value =>
+            Assert.True(value.HighlightSelectionCompleted));
+        Assert.Equal(2, completed.Highlights.Count(value =>
+            value.SelectedByUser));
+    }
+
+    private static GenerationDemo Demo(int order, string fileName) => new()
+    {
+        OriginalFileName = fileName,
+        StoredPath = fileName,
+        Sha256 = new string((char)('a' + order), 64),
+        UploadOrder = order,
+        AnalysisStatus = DemoAnalysisStatus.Succeeded,
+        TickRate = 64
+    };
 
     private static GenerationHighlight Highlight(
         string id,
